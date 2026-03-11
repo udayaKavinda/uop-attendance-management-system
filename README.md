@@ -39,25 +39,34 @@ The application implements an attendance flow where a student logs in, verifies 
 3. **MongoDB**
    Ensure you have a MongoDB instance running locally or point `MONGO_URI` to your database.
 
-4. **Environment**
-   You can set `REACT_APP_API_BASE` in `.env` if the API is hosted elsewhere.
-### Google login
+4. **Environment (single `.env` in project root)**  
+   Create a `.env` file in the project root. The server and Create React App both read from it. Example:
 
-To enable the Google sign‑in option the backend needs a Google OAuth client ID and secret. Create credentials in the Google Cloud Console (OAuth 2.0 Client IDs, type Web application).
+   ```env
+   REACT_APP_API_BASE=http://localhost:5000
+   FRONTEND_URL=http://localhost:3000
+   MONGO_URI=mongodb://localhost:27017/attendance
+   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=your-client-secret
+   ```
 
-You can provide the values in several ways:
+   Get Google OAuth values from Google Cloud Console → Credentials → OAuth 2.0 Client (Web application). Without them, `/auth/google` will not work. Optional: `SESSION_SECRET` (random string). For ngrok, `FRONTEND_URL` is used for WebAuthn automatically.
 
-* **Environment variables** (in your shell):
-  ```bash
-  export GOOGLE_CLIENT_ID="<your-client-id>"
-  export GOOGLE_CLIENT_SECRET="<your-client-secret>"
-  ```
-* **.env file** – simply copy `.env.example` to `.env` in the project root and fill in your secrets. The server uses `dotenv` to load it automatically.
+5. **Expose frontend through ngrok**  
+   To get a public URL for the React app (e.g. for mobile testing):
 
-Other useful variables such as `MONGO_URI` may also be defined there.
+   - Install [ngrok](https://ngrok.com/download) and sign in.
+   - Start the app: `npm run dev`.
+   - In another terminal: `npm run tunnel` (or `ngrok http 3000`) to get a frontend URL.
+   - For **Google sign-in to work with ngrok**, you must also expose the backend. In a **third** terminal run: `ngrok http 5000`. You will have two ngrok URLs (e.g. one for 3000, one for 5000).
+   - In `.env` set:
+     - `FRONTEND_URL=https://YOUR-FRONTEND-NGROK-URL` (the tunnel to port 3000)
+     - `REACT_APP_API_BASE=https://YOUR-BACKEND-NGROK-URL` (the tunnel to port 5000)
+   - In **Google Cloud Console** → your OAuth 2.0 Client → add:
+     - **Authorized JavaScript origins:** `https://YOUR-FRONTEND-NGROK-URL` and `https://YOUR-BACKEND-NGROK-URL`
+     - **Authorized redirect URIs:** `https://YOUR-BACKEND-NGROK-URL/auth/google/callback`
+   - Restart `npm run dev` after changing `.env`. Then open the **frontend** ngrok URL in the browser; sign-in will redirect to the backend ngrok URL and back correctly.
 
-The `/auth/google` route will redirect users to Google's login page; upon success they are redirected back to
-`/login/success` which stores the student identifier and proceeds with the normal attendance flow.
 ## Flow overview
 
 1. Student taps **Sign in with Google**; no manual email/ID entry is required.

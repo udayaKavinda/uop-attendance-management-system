@@ -27,8 +27,10 @@ export default function Login() {
           className="login-btn"
           style={{ background: '#4285f4', color: '#fff', display: 'block' }}
           onClick={() => {
-            const url = `${process.env.REACT_APP_API_BASE || ''}/auth/google`;
-            window.location.href = url;
+            // Backend handles Google OAuth; must redirect to API origin (e.g. :5000), not React (:3000)
+            const base = process.env.REACT_APP_API_BASE
+              || (window.location.port === '3000' ? 'http://localhost:5000' : '');
+            window.location.href = `${base}/auth/google`;
           }}
         >
           Tap to sign in with Google
