@@ -30,6 +30,44 @@ const rpID = process.env.WEBAUTHN_RP_ID || (() => {
 })();
 const rpName = process.env.WEBAUTHN_RP_NAME || 'UOP Attendance';
 
+// UVM: reject PIN/passcode and presence-only. Only accept fingerprint or Face ID.
+// If the browser does not report UVM in the WebAuthn response, we reject to avoid any bypass.
+const USER_VERIFY_PRESENCE_ONLY = 0x01;
+const USER_VERIFY_FINGERPRINT = 0x02;
+const USER_VERIFY_FACEPRINT = 0x08;
+const USER_VERIFY_PASSCODE = 0x04;
+
+function rejectIfNotBiometric(assertionOrCredential) {
+  const uvm = assertionOrCredential?.clientExtensionResults?.uvm;
+  if (!uvm || !Array.isArray(uvm) || uvm.length === 0) {
+    return 'Biometric verification is required (fingerprint or Face ID only). This browser did not report the verification method.';
+  }
+
+  for (const entry of uvm) {
+    const methodField = Array.isArray(entry) ? entry[0] : entry?.userVerificationMethod ?? entry;
+    const m = typeof methodField === 'number' ? methodField : parseInt(methodField, 10);
+    if (Number.isNaN(m)) {
+      return 'Biometric verification is required (fingerprint or Face ID only). Verification method could not be determined.';
+    }
+
+    // Reject passcode/PIN or presence-only fallbacks.
+    if ((m & USER_VERIFY_PASSCODE) === USER_VERIFY_PASSCODE) {
+      return 'Biometric verification (fingerprint or Face ID) is required. PIN/passcode is not allowed.';
+    }
+    if ((m & USER_VERIFY_PRESENCE_ONLY) === USER_VERIFY_PRESENCE_ONLY) {
+      return 'Biometric verification (fingerprint or Face ID) is required. Presence-only verification is not allowed.';
+    }
+
+    // Accept only fingerprint or face.
+    const ok = (m & USER_VERIFY_FINGERPRINT) === USER_VERIFY_FINGERPRINT || (m & USER_VERIFY_FACEPRINT) === USER_VERIFY_FACEPRINT;
+    if (!ok) {
+      return 'Only fingerprint or Face ID is allowed for biometric verification.';
+    }
+  }
+
+  return null;
+}
+
 // In-memory challenge store (keyed by studentId); use Redis in production
 const webauthnChallenges = new Map();
 function setChallenge(studentId, data) {
@@ -139,15 +177,17 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// 2. device verification (webauthn is verified via /api/webauthn/*; this records the method)
+// 2. device verification – only WebAuthn (fingerprint/Face ID) accepted; no bypass
 app.post('/api/verify-device', (req, res) => {
   const { method } = req.body;
-  if (method === 'webauthn') {
-    // Real verification is done in WebAuthn auth/register-verify; this just records choice
-    return res.json({ success: true, method: 'webauthn' });
+  if (method !== 'webauthn') {
+    return res.status(403).json({
+      success: false,
+      error: 'Biometric verification (fingerprint or Face ID) is required. Photo fallback is not allowed.',
+    });
   }
-  // Photo fallback: TODO implement photo verification
-  res.json({ success: true, method: req.body.method || 'photo' });
+  // Real verification is done in WebAuthn auth/register-verify; this records that they passed
+  res.json({ success: true, method: 'webauthn' });
 });
 
 // --- WebAuthn (biometric) routes ---
@@ -164,7 +204,7 @@ app.get('/api/webauthn/options', async (req, res) => {
     const isRegistration = credentials.length === 0;
 
     if (isRegistration) {
-      // Only allow platform biometrics (fingerprint or face), not security keys
+      // Only allow platform biometrics (fingerprint or face), not security keys; request UVM to detect PIN
       const userIdBuffer = Buffer.from(studentId, 'utf8');
       const options = await generateRegistrationOptions({
         rpName,
@@ -179,6 +219,7 @@ app.get('/api/webauthn/options', async (req, res) => {
           userVerification: 'required',   // fingerprint or face required
           authenticatorAttachment: 'platform',  // device built-in only (no USB keys)
         },
+        extensions: { uvm: true },  // request UVM so we can reject PIN-only at auth
       });
       setChallenge(studentId, { type: 'registration', challenge: options.challenge, options });
       return res.json({ type: 'registration', options });
@@ -192,6 +233,7 @@ app.get('/api/webauthn/options', async (req, res) => {
       rpID,
       allowCredentials: allowCredentials.length ? allowCredentials : undefined,
       userVerification: 'required',  // require fingerprint or face at sign-in
+      extensions: { uvm: true },     // so we can reject PIN-only verification
     });
     setChallenge(studentId, { type: 'authentication', challenge: options.challenge });
     return res.json({ type: 'authentication', options });
@@ -217,6 +259,8 @@ app.post('/api/webauthn/register-verify', async (req, res) => {
     if (!verification.verified || !verification.registrationInfo) {
       return res.status(400).json({ verified: false, error: 'Verification failed' });
     }
+    const uvmReject = rejectIfNotBiometric(credential);
+    if (uvmReject) return res.status(403).json({ verified: false, error: uvmReject });
     const { credential: regCred, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
     const student = await Student.findById(studentId);
     if (!student) return res.status(404).json({ error: 'Student not found' });
@@ -264,6 +308,11 @@ app.post('/api/webauthn/auth-verify', async (req, res) => {
       },
     });
     if (!verification.verified) return res.status(400).json({ verified: false });
+
+    // Reject if verification was done with PIN/passcode only (UVM extension)
+    const uvmReject = rejectIfNotBiometric(assertion);
+    if (uvmReject) return res.status(403).json({ verified: false, error: uvmReject });
+
     const { newCounter } = verification.authenticationInfo;
     const idx = student.webAuthnCredentials.findIndex((c) => c.id === assertion.id);
     if (idx >= 0) student.webAuthnCredentials[idx].counter = newCounter;

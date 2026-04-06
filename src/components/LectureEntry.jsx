@@ -23,7 +23,7 @@ export default function LectureEntry() {
           });
           if (verify.success) {
             const student = JSON.parse(localStorage.getItem('student') || '{}');
-            const method = student.deviceMethod === 'webauthn' ? 'webauthn' : 'photo';
+            const method = 'webauthn'; // only path to this screen is after biometric verification
             const record = await recordAttendance({
               studentId: student.studentId,
               lectureCode: code,
