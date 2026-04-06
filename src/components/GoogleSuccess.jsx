@@ -14,7 +14,7 @@ export default function GoogleSuccess() {
     if (studentId) {
       // store and continue
       localStorage.setItem('student', JSON.stringify({ studentId }));
-      navigate('/verify-device');
+      navigate('/lecture');
     } else {
       navigate('/');
     }

@@ -1,7 +1,7 @@
 # UOP Attendance Management System
 
 This repository contains a React frontend and a simple Node/Express backend with MongoDB.
-The application implements an attendance flow where a student logs in, verifies their device (WebAuthn or photo fallback), enters a rotating lecture code, and has their location checked before the attendance is recorded.
+The application implements an attendance flow where a student signs in with Google, enters a lecture code, and has their location checked before the attendance is recorded.
 
 ## Project structure
 
@@ -50,7 +50,7 @@ The application implements an attendance flow where a student logs in, verifies 
    GOOGLE_CLIENT_SECRET=your-client-secret
    ```
 
-   Get Google OAuth values from Google Cloud Console → Credentials → OAuth 2.0 Client (Web application). Without them, `/auth/google` will not work. Optional: `SESSION_SECRET` (random string). For ngrok, `FRONTEND_URL` is used for WebAuthn automatically.
+   Get Google OAuth values from Google Cloud Console → Credentials → OAuth 2.0 Client (Web application). Without them, `/auth/google` will not work. Optional: `SESSION_SECRET` (random string).
 
 5. **Expose frontend through ngrok**  
    To get a public URL for the React app (e.g. for mobile testing):
@@ -71,10 +71,9 @@ The application implements an attendance flow where a student logs in, verifies 
 
 1. Student taps **Sign in with Google**; no manual email/ID entry is required.
 2. Backend identifies or creates the corresponding student account using the Google profile.
-3. Device verification occurs via WebAuthn or a live photo fallback.
-4. Upon successful verification, the student enters an 8-digit lecture code.
-5. Backend validates the code and checks geolocation (geo‑fencing).
-6. If everything passes, attendance is recorded in MongoDB with the method used.
+3. The student enters a lecture code.
+4. Backend validates the code and checks geolocation (geo‑fencing) (placeholder logic until implemented).
+5. If everything passes, attendance is recorded in MongoDB.
 
 > **Note:** Google OAuth client ID/secret must be set (see "Google login" section below). Without them the `/auth/google` route will log a warning and not function.
 

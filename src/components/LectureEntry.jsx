@@ -11,22 +11,22 @@ export default function LectureEntry() {
     e.preventDefault();
     setError(null);
 
-    // attempt geolocation
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const { latitude, longitude } = pos.coords;
         try {
+          const trimmed = code.trim();
           const verify = await verifyLecture({
-            lectureCode: code,
+            lectureCode: trimmed,
             lat: latitude,
             lng: longitude,
           });
           if (verify.success) {
             const student = JSON.parse(localStorage.getItem('student') || '{}');
-            const method = 'webauthn'; // only path to this screen is after biometric verification
+            const method = 'google';
             const record = await recordAttendance({
               studentId: student.studentId,
-              lectureCode: code,
+              lectureCode: trimmed,
               method,
               lat: latitude,
               lng: longitude,
@@ -45,7 +45,7 @@ export default function LectureEntry() {
       },
       (err) => {
         setError('Unable to get location: ' + err.message);
-      }
+      },
     );
   };
 

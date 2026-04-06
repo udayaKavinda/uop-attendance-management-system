@@ -7,78 +7,10 @@ const cors = require('cors');
 const session = require('express-session');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const {
-  generateRegistrationOptions,
-  verifyRegistrationResponse,
-  generateAuthenticationOptions,
-  verifyAuthenticationResponse,
-} = require('@simplewebauthn/server');
 
-// load models (will create below)
 const Student = require('./models/Student');
 const Attendance = require('./models/Attendance');
-
-// WebAuthn RP config: origin and rpID (for ngrok, set FRONTEND_URL to ngrok URL; rpID derived from it if not set)
-const origin = process.env.WEBAUTHN_ORIGIN || process.env.FRONTEND_URL || 'http://localhost:3000';
-const rpID = process.env.WEBAUTHN_RP_ID || (() => {
-  try {
-    const u = new URL(origin);
-    return u.hostname;
-  } catch {
-    return 'localhost';
-  }
-})();
-const rpName = process.env.WEBAUTHN_RP_NAME || 'UOP Attendance';
-
-// UVM: reject PIN/passcode and presence-only. Only accept fingerprint or Face ID.
-// If the browser does not report UVM in the WebAuthn response, we reject to avoid any bypass.
-const USER_VERIFY_PRESENCE_ONLY = 0x01;
-const USER_VERIFY_FINGERPRINT = 0x02;
-const USER_VERIFY_FACEPRINT = 0x08;
-const USER_VERIFY_PASSCODE = 0x04;
-
-function rejectIfNotBiometric(assertionOrCredential) {
-  const uvm = assertionOrCredential?.clientExtensionResults?.uvm;
-  if (!uvm || !Array.isArray(uvm) || uvm.length === 0) {
-    return 'Biometric verification is required (fingerprint or Face ID only). This browser did not report the verification method.';
-  }
-
-  for (const entry of uvm) {
-    const methodField = Array.isArray(entry) ? entry[0] : entry?.userVerificationMethod ?? entry;
-    const m = typeof methodField === 'number' ? methodField : parseInt(methodField, 10);
-    if (Number.isNaN(m)) {
-      return 'Biometric verification is required (fingerprint or Face ID only). Verification method could not be determined.';
-    }
-
-    // Reject passcode/PIN or presence-only fallbacks.
-    if ((m & USER_VERIFY_PASSCODE) === USER_VERIFY_PASSCODE) {
-      return 'Biometric verification (fingerprint or Face ID) is required. PIN/passcode is not allowed.';
-    }
-    if ((m & USER_VERIFY_PRESENCE_ONLY) === USER_VERIFY_PRESENCE_ONLY) {
-      return 'Biometric verification (fingerprint or Face ID) is required. Presence-only verification is not allowed.';
-    }
-
-    // Accept only fingerprint or face.
-    const ok = (m & USER_VERIFY_FINGERPRINT) === USER_VERIFY_FINGERPRINT || (m & USER_VERIFY_FACEPRINT) === USER_VERIFY_FACEPRINT;
-    if (!ok) {
-      return 'Only fingerprint or Face ID is allowed for biometric verification.';
-    }
-  }
-
-  return null;
-}
-
-// In-memory challenge store (keyed by studentId); use Redis in production
-const webauthnChallenges = new Map();
-function setChallenge(studentId, data) {
-  webauthnChallenges.set(studentId, data);
-  setTimeout(() => webauthnChallenges.delete(studentId), 5 * 60 * 1000);
-}
-function getChallenge(studentId) {
-  const data = webauthnChallenges.get(studentId);
-  webauthnChallenges.delete(studentId);
-  return data;
-}
+const lectureCode = require('./lib/lectureCode');
 
 const app = express();
 app.use(cors());
@@ -114,7 +46,6 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
     });
   });
 } else {
-  // With ngrok, backend has a public URL; Google needs the full callback URL
   const backendBase = process.env.REACT_APP_API_BASE || process.env.BACKEND_PUBLIC_URL || '';
   const callbackURL = backendBase
     ? `${backendBase.replace(/\/$/, '')}/auth/google/callback`
@@ -132,7 +63,7 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
       if (!student) {
         student = await Student.create({
           email,
-          studentId: profile.id, // in a real app you'd generate or map properly
+          studentId: profile.id,
         });
       }
       return done(null, student);
@@ -141,7 +72,6 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
     }
   }));
 
-  // authentication routes
   app.get('/auth/google', passport.authenticate('google', { scope: ['email'] }));
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
   app.get(
@@ -154,18 +84,13 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
   );
 }
 
-// connect to MongoDB
 mongoose
   .connect(process.env.MONGO_URI || 'mongodb://localhost:27017/attendance')
   .then(() => console.log('🗄  MongoDB connected'))
   .catch((err) => console.error('Mongo connection error', err));
 
-// --- routes ---
-
-// 1. login: accept email or student id and return student profile
 app.post('/api/login', async (req, res) => {
-  const { identifier } = req.body; // email or studentId
-  // TODO: look up student and return basic info
+  const { identifier } = req.body;
   try {
     const student = await Student.findOne({
       $or: [{ email: identifier }, { studentId: identifier }],
@@ -177,173 +102,42 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// 2. device verification – only WebAuthn (fingerprint/Face ID) accepted; no bypass
-app.post('/api/verify-device', (req, res) => {
-  const { method } = req.body;
-  if (method !== 'webauthn') {
-    return res.status(403).json({
-      success: false,
-      error: 'Biometric verification (fingerprint or Face ID) is required. Photo fallback is not allowed.',
-    });
-  }
-  // Real verification is done in WebAuthn auth/register-verify; this records that they passed
-  res.json({ success: true, method: 'webauthn' });
-});
-
-// --- WebAuthn (biometric) routes ---
-
-// Get options: registration (if no credentials) or authentication
-app.get('/api/webauthn/options', async (req, res) => {
-  const studentId = req.query.studentId;
-  if (!studentId) return res.status(400).json({ error: 'studentId required' });
+/** Current rotating lecture code (refreshes every 30s). Use for projector / testing. */
+app.get('/api/lecture-code', (req, res) => {
   try {
-    const student = await Student.findById(studentId);
-    if (!student) return res.status(404).json({ error: 'Student not found' });
-
-    const credentials = student.webAuthnCredentials || [];
-    const isRegistration = credentials.length === 0;
-
-    if (isRegistration) {
-      // Only allow platform biometrics (fingerprint or face), not security keys; request UVM to detect PIN
-      const userIdBuffer = Buffer.from(studentId, 'utf8');
-      const options = await generateRegistrationOptions({
-        rpName,
-        rpID,
-        userID: new Uint8Array(userIdBuffer),
-        userName: student.email,
-        userDisplayName: student.email,
-        attestationType: 'none',
-        supportedAlgorithmIDs: [-7, -257],
-        authenticatorSelection: {
-          residentKey: 'required',
-          userVerification: 'required',   // fingerprint or face required
-          authenticatorAttachment: 'platform',  // device built-in only (no USB keys)
-        },
-        extensions: { uvm: true },  // request UVM so we can reject PIN-only at auth
-      });
-      setChallenge(studentId, { type: 'registration', challenge: options.challenge, options });
-      return res.json({ type: 'registration', options });
-    }
-
-    const allowCredentials = credentials.map((c) => ({
-      id: c.id,
-      transports: c.transports,
-    }));
-    const options = await generateAuthenticationOptions({
-      rpID,
-      allowCredentials: allowCredentials.length ? allowCredentials : undefined,
-      userVerification: 'required',  // require fingerprint or face at sign-in
-      extensions: { uvm: true },     // so we can reject PIN-only verification
-    });
-    setChallenge(studentId, { type: 'authentication', challenge: options.challenge });
-    return res.json({ type: 'authentication', options });
+    res.json(lectureCode.getCurrent());
   } catch (err) {
-    console.error('WebAuthn options error', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Verify registration response and store credential
-app.post('/api/webauthn/register-verify', async (req, res) => {
-  const { studentId, credential } = req.body;
-  if (!studentId || !credential) return res.status(400).json({ error: 'studentId and credential required' });
-  const stored = getChallenge(studentId);
-  if (!stored || stored.type !== 'registration') return res.status(400).json({ error: 'No registration in progress or expired' });
-  try {
-    const verification = await verifyRegistrationResponse({
-      response: credential,
-      expectedChallenge: stored.challenge,
-      expectedOrigin: origin,
-      expectedRPID: rpID,
-    });
-    if (!verification.verified || !verification.registrationInfo) {
-      return res.status(400).json({ verified: false, error: 'Verification failed' });
-    }
-    const uvmReject = rejectIfNotBiometric(credential);
-    if (uvmReject) return res.status(403).json({ verified: false, error: uvmReject });
-    const { credential: regCred, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
-    const student = await Student.findById(studentId);
-    if (!student) return res.status(404).json({ error: 'Student not found' });
-    const webauthnUserID = stored.options.user.id; // base64url from options
-    student.webAuthnCredentials = student.webAuthnCredentials || [];
-    student.webAuthnCredentials.push({
-      id: regCred.id,
-      publicKey: Buffer.from(regCred.publicKey),
-      counter: regCred.counter,
-      transports: regCred.transports,
-      deviceType: credentialDeviceType,
-      backedUp: credentialBackedUp,
-      webauthnUserID,
-    });
-    await student.save();
-    return res.json({ verified: true });
-  } catch (err) {
-    console.error('WebAuthn register-verify error', err);
-    res.status(400).json({ verified: false, error: err.message });
-  }
-});
-
-// Verify authentication response
-app.post('/api/webauthn/auth-verify', async (req, res) => {
-  const { studentId, assertion } = req.body;
-  if (!studentId || !assertion) return res.status(400).json({ error: 'studentId and assertion required' });
-  const stored = getChallenge(studentId);
-  if (!stored || stored.type !== 'authentication') return res.status(400).json({ error: 'No authentication in progress or expired' });
-  try {
-    const student = await Student.findById(studentId);
-    if (!student) return res.status(404).json({ error: 'Student not found' });
-    const cred = (student.webAuthnCredentials || []).find((c) => c.id === assertion.id);
-    if (!cred) return res.status(400).json({ verified: false, error: 'Credential not found' });
-    const publicKey = cred.publicKey instanceof Buffer ? new Uint8Array(cred.publicKey) : cred.publicKey;
-    const verification = await verifyAuthenticationResponse({
-      response: assertion,
-      expectedChallenge: stored.challenge,
-      expectedOrigin: origin,
-      expectedRPID: rpID,
-      credential: {
-        id: cred.id,
-        publicKey,
-        counter: cred.counter,
-        transports: cred.transports,
-      },
-    });
-    if (!verification.verified) return res.status(400).json({ verified: false });
-
-    // Reject if verification was done with PIN/passcode only (UVM extension)
-    const uvmReject = rejectIfNotBiometric(assertion);
-    if (uvmReject) return res.status(403).json({ verified: false, error: uvmReject });
-
-    const { newCounter } = verification.authenticationInfo;
-    const idx = student.webAuthnCredentials.findIndex((c) => c.id === assertion.id);
-    if (idx >= 0) student.webAuthnCredentials[idx].counter = newCounter;
-    await student.save();
-    return res.json({ verified: true });
-  } catch (err) {
-    console.error('WebAuthn auth-verify error', err);
-    res.status(400).json({ verified: false, error: err.message });
-  }
-});
-
-// 3. lecture code & geofencing
 app.post('/api/verify-lecture', (req, res) => {
-  const { lectureCode, lat, lng } = req.body;
-  // TODO: check code validity and location
-  const valid = true; // placeholder
-  const inside = true; // placeholder
-  if (!valid) return res.status(400).json({ error: 'Invalid code' });
+  const { lectureCode: submitted, lat, lng } = req.body;
+  if (!lectureCode.hasValidLocation(lat, lng)) {
+    return res.status(400).json({ error: 'Valid latitude and longitude are required' });
+  }
+  if (!lectureCode.isValidCode(submitted)) {
+    return res.status(400).json({ error: 'Invalid or expired lecture code' });
+  }
+  const inside = true;
   if (!inside) return res.status(400).json({ error: 'Out of bounds' });
   res.json({ success: true });
 });
 
-// 4. record attendance
 app.post('/api/record-attendance', async (req, res) => {
-  const { studentId, lectureCode, method, lat, lng } = req.body;
+  const { studentId, lectureCode: submitted, method, lat, lng } = req.body;
+  if (!lectureCode.hasValidLocation(lat, lng)) {
+    return res.status(400).json({ error: 'Valid latitude and longitude are required' });
+  }
+  if (!lectureCode.isValidCode(submitted)) {
+    return res.status(400).json({ error: 'Invalid or expired lecture code' });
+  }
   try {
     const attendance = new Attendance({
       student: studentId,
-      lectureCode,
+      lectureCode: String(submitted).replace(/\s/g, ''),
       method,
-      location: { lat, lng },
+      location: { lat: Number(lat), lng: Number(lng) },
     });
     await attendance.save();
     res.json({ success: true, attendance });
@@ -353,4 +147,7 @@ app.post('/api/record-attendance', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server listening on ${PORT}`));
+app.listen(PORT, () => {
+  lectureCode.startRotationTimer();
+  console.log(`🚀 Server listening on ${PORT}`);
+});
