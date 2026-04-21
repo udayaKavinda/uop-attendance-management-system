@@ -4,6 +4,8 @@ import { useLocation } from 'react-router-dom';
 export default function Login() {
   const location = useLocation();
   const [error, setError] = useState(null);
+  const [logoMissing, setLogoMissing] = useState(false);
+  const [bannerMissing, setBannerMissing] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -19,22 +21,52 @@ export default function Login() {
 
   // plain Google sign-in only
   return (
-    <div className="container">
-      <div className="card">
-        <h2>Sign in with Google</h2>
-        {error && <p className="error" style={{ color: 'red' }}>{error}</p>}
-        <button
-          className="login-btn"
-          style={{ background: '#4285f4', color: '#fff', display: 'block' }}
-          onClick={() => {
-            // Backend handles Google OAuth; must redirect to API origin (e.g. :5000), not React (:3000)
-            const base = process.env.REACT_APP_API_BASE
-              || (window.location.port === '3000' ? 'http://localhost:5000' : '');
-            window.location.href = `${base}/auth/google`;
-          }}
-        >
-          Tap to sign in with Google
-        </button>
+    <div className="app-shell">
+      <div className="auth-card">
+        <div className="hero-image-wrap">
+          {!bannerMissing && (
+            <img
+              src="/uop-campus.jpg"
+              alt="University of Peradeniya campus"
+              className="hero-image"
+              onError={() => setBannerMissing(true)}
+            />
+          )}
+          <div className="hero-overlay" />
+          <div className="hero-fallback">University of Peradeniya</div>
+        </div>
+        <div className="card-content">
+          <div className="brand-row">
+            {!logoMissing ? (
+              <img
+                src="/uop-logo.png"
+                alt="University of Peradeniya logo"
+                className="brand-logo"
+                onError={() => setLogoMissing(true)}
+              />
+            ) : (
+              <span className="brand-fallback">UOP</span>
+            )}
+            <div>
+              <p className="brand-title">University of Peradeniya</p>
+              <p className="brand-subtitle">Attendance Management System</p>
+            </div>
+          </div>
+          <h2 className="card-title">Sign in with Google</h2>
+          <p className="card-subtitle">Use your university Google account to continue.</p>
+          {error && <p className="error">{error}</p>}
+          <button
+            className="primary-btn"
+            onClick={() => {
+              // Backend handles Google OAuth; must redirect to API origin (e.g. :5000), not React (:3000)
+              const base = process.env.REACT_APP_API_BASE
+                || (window.location.port === '3000' ? 'http://localhost:5000' : '');
+              window.location.href = `${base}/auth/google`;
+            }}
+          >
+            Continue with Google
+          </button>
+        </div>
       </div>
     </div>
   );

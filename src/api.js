@@ -15,6 +15,11 @@ export async function login(identifier) {
   return resp.json();
 }
 
+export async function getMe(studentId) {
+  const resp = await fetch(`${apiBase()}/api/me?studentId=${encodeURIComponent(studentId || '')}`);
+  return resp.json();
+}
+
 export async function verifyLecture(payload) {
   const resp = await fetch(`${apiBase()}/api/verify-lecture`, {
     method: 'POST',
@@ -33,8 +38,36 @@ export async function recordAttendance(payload) {
   return resp.json();
 }
 
+export async function getAttendanceStatus(studentId, courseCode) {
+  const resp = await fetch(
+    `${apiBase()}/api/attendance-status?studentId=${encodeURIComponent(studentId || '')}&courseCode=${encodeURIComponent(courseCode || '')}`,
+  );
+  return resp.json();
+}
+
 /** Current rotating code + countdown (same value the server validates). */
-export async function getLectureCode() {
-  const resp = await fetch(`${apiBase()}/api/lecture-code`);
+export async function getLectureCode(courseCode) {
+  const resp = await fetch(
+    `${apiBase()}/api/lecture-code?courseCode=${encodeURIComponent(courseCode || '')}`,
+  );
+  return resp.json();
+}
+
+export async function getAdminCourseConfigs(studentId) {
+  const resp = await fetch(`${apiBase()}/api/admin/course-configs`, {
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function saveAdminCourseConfig(studentId, courseCode, payload) {
+  const resp = await fetch(`${apiBase()}/api/admin/course-configs/${encodeURIComponent(courseCode)}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Student-Id': studentId || '',
+    },
+    body: JSON.stringify(payload),
+  });
   return resp.json();
 }

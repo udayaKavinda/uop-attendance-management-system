@@ -23,9 +23,6 @@ The application implements an attendance flow where a student signs in with Goog
 1. **Install dependencies**
    ```bash
    npm install
-   cd server && npm install express mongoose cors
-   # optionally install dev tooling like nodemon or concurrently
-   npm install --save-dev concurrently
    ```
 
 2. **Start both frontend and backend**
@@ -40,11 +37,14 @@ The application implements an attendance flow where a student signs in with Goog
    Ensure you have a MongoDB instance running locally or point `MONGO_URI` to your database.
 
 4. **Environment (single `.env` in project root)**  
-   Create a `.env` file in the project root. The server and Create React App both read from it. Example:
+   Create a `.env` file in the project root. The server and Create React App both read from it.  
+   For **one-domain reverse proxy** (`https://app.domain.com` for both frontend and backend paths), use:
 
    ```env
-   REACT_APP_API_BASE=http://localhost:5000
-   FRONTEND_URL=http://localhost:3000
+   # same public origin for frontend and backend routes (/api, /auth)
+   REACT_APP_API_BASE=
+   APP_BASE_URL=https://app.domain.com
+   FRONTEND_URL=https://app.domain.com
    MONGO_URI=mongodb://localhost:27017/attendance
    GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
    GOOGLE_CLIENT_SECRET=your-client-secret
@@ -52,32 +52,30 @@ The application implements an attendance flow where a student signs in with Goog
 
    Get Google OAuth values from Google Cloud Console → Credentials → OAuth 2.0 Client (Web application). Without them, `/auth/google` will not work. Optional: `SESSION_SECRET` (random string).
 
-5. **Expose frontend through ngrok**  
-   To get a public URL for the React app (e.g. for mobile testing):
+5. **Reverse proxy (one domain)**
+   Configure your proxy so a single domain serves both apps:
 
-   - Install [ngrok](https://ngrok.com/download) and sign in.
-   - Start the app: `npm run dev`.
-   - In another terminal: `npm run tunnel` (or `ngrok http 3000`) to get a frontend URL.
-   - For **Google sign-in to work with ngrok**, you must also expose the backend. In a **third** terminal run: `ngrok http 5000`. You will have two ngrok URLs (e.g. one for 3000, one for 5000).
-   - In `.env` set:
-     - `FRONTEND_URL=https://YOUR-FRONTEND-NGROK-URL` (the tunnel to port 3000)
-     - `REACT_APP_API_BASE=https://YOUR-BACKEND-NGROK-URL` (the tunnel to port 5000)
-   - In **Google Cloud Console** → your OAuth 2.0 Client → add:
-     - **Authorized JavaScript origins:** `https://YOUR-FRONTEND-NGROK-URL` and `https://YOUR-BACKEND-NGROK-URL`
-     - **Authorized redirect URIs:** `https://YOUR-BACKEND-NGROK-URL/auth/google/callback`
-   - Restart `npm run dev` after changing `.env`. Then open the **frontend** ngrok URL in the browser; sign-in will redirect to the backend ngrok URL and back correctly.
+   - `https://app.domain.com/` -> frontend (`localhost:3000`)
+   - `https://app.domain.com/api/*` -> backend (`localhost:5000`)
+   - `https://app.domain.com/auth/*` -> backend (`localhost:5000`)
+
+   A ready template is provided at `deploy/nginx-app-domain.conf`.
+
+   In **Google Cloud Console** → OAuth 2.0 Client:
+   - **Authorized JavaScript origins:** `https://app.domain.com`
+   - **Authorized redirect URIs:** `https://app.domain.com/auth/google/callback`
 
 ## Flow overview
 
 1. Student taps **Sign in with Google**; no manual email/ID entry is required.
 2. Backend identifies or creates the corresponding student account using the Google profile.
 3. The student enters a lecture code.
-4. Backend validates the code and checks geolocation (geo‑fencing) (placeholder logic until implemented).
-5. If everything passes, attendance is recorded in MongoDB.
+4. Backend validates code, course schedule window, and geolocation (geo‑fencing).
+5. If everything passes, attendance is recorded in MongoDB (with duplicate protection for the active code window).
 
-> **Note:** Google OAuth client ID/secret must be set (see "Google login" section below). Without them the `/auth/google` route will log a warning and not function.
+> **Note:** Google OAuth client ID/secret must be set in `.env`. Without them the `/auth/google` route will not function.
 
-The stubbed backend in `server/index.js` contains placeholder routes you can flesh out as you build the real logic.
+Admin endpoints are available for course configuration (day/time/geofence polygon) and protected via admin role checks.
 
 ---
 
