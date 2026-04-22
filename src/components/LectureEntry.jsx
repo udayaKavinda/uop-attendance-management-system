@@ -1,24 +1,81 @@
 import React, { useEffect, useState } from 'react';
-import { verifyLecture, recordAttendance, getAttendanceStatus } from '../api';
-
-const COURSE_CODES = ['EE669', 'EM2020', 'EM503', 'EM526', 'EM1050', 'EM527', 'EM524'];
-const MAX_COURSE_ITEMS = 10;
-const VISIBLE_COURSE_CODES = COURSE_CODES.slice(0, MAX_COURSE_ITEMS);
+import {
+  verifyLecture,
+  recordAttendance,
+  getAttendanceStatus,
+  getRunningCourses,
+} from '../api';
 
 export default function LectureEntry() {
   const [code, setCode] = useState('');
-  const [courseCode, setCourseCode] = useState('');
+  const [courseId, setCourseId] = useState('');
+  const [courses, setCourses] = useState([]);
+  const [courseQuery, setCourseQuery] = useState('');
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [recorded, setRecorded] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [logoMissing, setLogoMissing] = useState(false);
+  const courseLabel = (item) => `${item.code} - ${item.name}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer = null;
+    async function loadCourses() {
+      const resp = await getRunningCourses();
+      if (cancelled) return;
+      if (resp.error) {
+        setError(resp.error);
+      } else {
+        const next = resp.items || [];
+        setCourses(next);
+        setCourseId((prev) => {
+          const kept = prev && next.find((c) => c._id === prev);
+          if (kept) {
+            setCourseQuery(courseLabel(kept));
+            return prev;
+          }
+          if (next[0]) {
+            setCourseQuery(courseLabel(next[0]));
+            return next[0]._id;
+          }
+          setCourseQuery('');
+          return '';
+        });
+      }
+      timer = setTimeout(loadCourses, 10000);
+    }
+    loadCourses();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  const visibleCourses = courses.filter((item) => {
+    const q = courseQuery.trim().toLowerCase();
+    if (!q) return true;
+    return `${item.code} ${item.name}`.toLowerCase().includes(q);
+  });
+
+  useEffect(() => {
+    const typed = courseQuery.trim().toLowerCase();
+    if (!typed) {
+      setCourseId('');
+      return;
+    }
+    const match = courses.find((item) => {
+      const label = courseLabel(item).toLowerCase();
+      return label === typed || item.code.toLowerCase() === typed;
+    });
+    setCourseId(match ? match._id : '');
+  }, [courseQuery, courses]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function syncStatus() {
-      if (!courseCode) {
+      if (!courseId) {
         setRecorded(false);
         setCode('');
         return;
@@ -33,7 +90,7 @@ export default function LectureEntry() {
       setCheckingStatus(true);
       setError(null);
       try {
-        const status = await getAttendanceStatus(student.studentId, courseCode);
+        const status = await getAttendanceStatus(student.studentId, courseId);
         if (cancelled) return;
         if (status.error) {
           setError(status.error);
@@ -55,14 +112,14 @@ export default function LectureEntry() {
     return () => {
       cancelled = true;
     };
-  }, [courseCode]);
+  }, [courseId]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (submitting) return;
     setError(null);
-    if (!VISIBLE_COURSE_CODES.includes(courseCode)) {
-      setError('Please choose a valid course code from the list.');
+    if (!courseId) {
+      setError('Please choose a course from the list.');
       return;
     }
     setSubmitting(true);
@@ -73,7 +130,7 @@ export default function LectureEntry() {
         try {
           const trimmed = code.trim();
           const verify = await verifyLecture({
-            courseCode,
+            courseId,
             lectureCode: trimmed,
             lat: latitude,
             lng: longitude,
@@ -83,7 +140,7 @@ export default function LectureEntry() {
             const method = 'google';
             const record = await recordAttendance({
               studentId: student.studentId,
-              courseCode,
+              courseId,
               lectureCode: trimmed,
               method,
               lat: latitude,
@@ -144,20 +201,20 @@ export default function LectureEntry() {
               <p className="card-subtitle">Your attendance is recorded successfully.</p>
             </div>
           )}
-          <label className="field-label" htmlFor="courseCode">Course Code</label>
+          <label className="field-label" htmlFor="courseSearch">Course</label>
           <input
-            id="courseCode"
+            id="courseSearch"
             className="input"
             type="text"
-            list="courseCodeOptions"
-            placeholder="Search or select a course code"
-            value={courseCode}
-            onChange={(e) => setCourseCode(e.target.value.toUpperCase().trim())}
+            list="runningCourseOptions"
+            placeholder="Search/select running course"
+            value={courseQuery}
+            onChange={(e) => setCourseQuery(e.target.value)}
             required
           />
-          <datalist id="courseCodeOptions">
-            {VISIBLE_COURSE_CODES.map((item) => (
-              <option key={item} value={item}>{item}</option>
+          <datalist id="runningCourseOptions">
+            {visibleCourses.map((item) => (
+              <option key={item._id} value={courseLabel(item)} />
             ))}
           </datalist>
           {!recorded && (

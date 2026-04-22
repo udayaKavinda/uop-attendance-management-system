@@ -1,4 +1,3 @@
-// load environment variables from .env file if present
 require('dotenv').config();
 
 const express = require('express');
@@ -10,10 +9,10 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 
 const Student = require('./models/Student');
 const Attendance = require('./models/Attendance');
-const CourseConfig = require('./models/CourseConfig');
+const Course = require('./models/Course');
+const LectureSession = require('./models/LectureSession');
 const lectureCode = require('./lib/lectureCode');
 
-const ALLOWED_COURSE_CODES = ['EE669', 'EM2020', 'EM503', 'EM526', 'EM1050', 'EM527', 'EM524'];
 const DAY_INDEX = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
 function toMinutes(hhmm) {
@@ -37,30 +36,101 @@ function isPointInsidePolygon(lat, lng, polygon) {
   return inside;
 }
 
-async function resolveCourseConfig(courseCode) {
-  const normalizedCourseCode = lectureCode.normalizeCourseCode(courseCode);
-  if (!ALLOWED_COURSE_CODES.includes(normalizedCourseCode)) {
-    return { error: 'Invalid course code' };
-  }
-  let config = await CourseConfig.findOne({ courseCode: normalizedCourseCode });
-  if (!config) {
-    config = await CourseConfig.create({ courseCode: normalizedCourseCode });
-  }
-  return { config, normalizedCourseCode };
-}
-
-function checkScheduleWindow(config) {
+function checkScheduleWindow(sessionConfig) {
   const now = new Date();
   const day = DAY_INDEX[now.getDay()];
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const start = toMinutes(config.startTime);
-  const end = toMinutes(config.endTime);
+  const start = toMinutes(sessionConfig.startTime);
+  const end = toMinutes(sessionConfig.endTime);
   if (start === null || end === null) return { ok: false, reason: 'Invalid schedule config' };
-  if (day !== config.lectureDay) return { ok: false, reason: `Attendance allowed only on ${config.lectureDay}` };
+  if (day !== sessionConfig.lectureDay) return { ok: false, reason: `Attendance allowed only on ${sessionConfig.lectureDay}` };
   if (currentMinutes < start || currentMinutes > end) {
     return { ok: false, reason: 'Attendance allowed only within the configured lecture time' };
   }
   return { ok: true };
+}
+
+function hasScheduleOverlap(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+function isPointInsideAnyPolygon(lat, lng, polygons = []) {
+  if (!Array.isArray(polygons) || polygons.length === 0) return false;
+  return polygons.some((polygon) => isPointInsidePolygon(lat, lng, polygon));
+}
+
+function sessionCodeKey(sessionId) {
+  return `session:${sessionId}`;
+}
+
+function currentOccurrenceKey(now = new Date()) {
+  return now.toISOString().slice(0, 10);
+}
+
+async function syncSessionCodeMode(sessionItem, now = new Date()) {
+  const occurrence = currentOccurrenceKey(now);
+  const codeKey = sessionCodeKey(sessionItem._id);
+  if (sessionItem.rotationOccurrenceKey !== occurrence) {
+    sessionItem.rotationOccurrenceKey = occurrence;
+    lectureCode.resetCode(codeKey);
+    await sessionItem.save();
+  }
+  if (sessionItem.rotationEnabled && !sessionItem.rotationPaused) {
+    lectureCode.resumeCode(codeKey);
+  } else {
+    lectureCode.pauseCode(codeKey);
+  }
+}
+
+function isSessionRunningNow(sessionItem, now = new Date()) {
+  if (!sessionItem || !sessionItem.active || sessionItem.deleted) return false;
+  const day = DAY_INDEX[now.getDay()];
+  if (sessionItem.lectureDay !== day) return false;
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const start = toMinutes(sessionItem.startTime);
+  const end = toMinutes(sessionItem.endTime);
+  if (start === null || end === null) return false;
+  return currentMinutes >= start && currentMinutes <= end;
+}
+
+function isNonRecurringExpired(sessionItem, now = new Date()) {
+  if (!sessionItem || sessionItem.recurring) return false;
+  const day = DAY_INDEX[now.getDay()];
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const end = toMinutes(sessionItem.endTime);
+  if (end === null) return false;
+  return day === sessionItem.lectureDay && currentMinutes > end;
+}
+
+async function deactivateExpiredNonRecurringSessions(filter = {}) {
+  const candidates = await LectureSession.find({ ...filter, active: true, recurring: false, deleted: false });
+  const expiredIds = candidates.filter((s) => isNonRecurringExpired(s)).map((s) => s._id);
+  if (expiredIds.length === 0) return;
+  await LectureSession.updateMany({ _id: { $in: expiredIds } }, { $set: { active: false } });
+  expiredIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
+}
+
+async function resolveActiveSessionForCourse(courseId) {
+  const course = await Course.findById(courseId);
+  if (!course || !course.active) return { error: 'Invalid course' };
+  await deactivateExpiredNonRecurringSessions({ course: course._id });
+  const now = new Date();
+  const day = DAY_INDEX[now.getDay()];
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const sessions = await LectureSession.find({
+    course: course._id,
+    active: true,
+    deleted: false,
+    lectureDay: day,
+  });
+  const active = sessions.find((s) => {
+    const start = toMinutes(s.startTime);
+    const end = toMinutes(s.endTime);
+    return start !== null && end !== null && currentMinutes >= start && currentMinutes <= end;
+  });
+  if (!active) return { error: 'No active lecture session for this course now' };
+  await syncSessionCodeMode(active, now);
+  return { course, session: active };
 }
 
 async function requireAdminByStudentId(studentId) {
@@ -192,98 +262,387 @@ app.get('/api/me', async (req, res) => {
   }
 });
 
-app.get('/api/admin/course-configs', async (req, res) => {
+app.get('/api/courses', async (req, res) => {
   try {
-    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
-    const existing = await CourseConfig.find({ courseCode: { $in: ALLOWED_COURSE_CODES } });
-    const map = new Map(existing.map((cfg) => [cfg.courseCode, cfg]));
-    const full = ALLOWED_COURSE_CODES.map((courseCode) => map.get(courseCode) || ({
-      courseCode,
-      lectureDay: 'MON',
-      startTime: '08:00',
-      endTime: '10:00',
-      recurring: true,
-      polygon: [],
-    }));
-    return res.json({ items: full });
+    const items = await Course.find({ active: true }).sort({ code: 1 });
+    return res.json({
+      items: items.map((c) => ({
+        _id: c._id,
+        code: c.code,
+        name: c.name,
+      })),
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 });
 
-app.put('/api/admin/course-configs/:courseCode', async (req, res) => {
+app.get('/api/courses/running', async (req, res) => {
+  try {
+    await deactivateExpiredNonRecurringSessions();
+    const now = new Date();
+    const day = DAY_INDEX[now.getDay()];
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+    const sessions = await LectureSession.find({
+      active: true,
+      deleted: false,
+      lectureDay: day,
+    }).populate('course', 'code name active');
+
+    const runningCourses = new Map();
+    sessions.forEach((s) => {
+      if (!s.course?.active) return;
+      const start = toMinutes(s.startTime);
+      const end = toMinutes(s.endTime);
+      if (start === null || end === null) return;
+      if (currentMinutes < start || currentMinutes > end) return;
+      runningCourses.set(String(s.course._id), {
+        _id: s.course._id,
+        code: s.course.code,
+        name: s.course.name,
+      });
+    });
+
+    return res.json({ items: Array.from(runningCourses.values()).sort((a, b) => String(a.code).localeCompare(String(b.code))) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/courses', async (req, res) => {
   try {
     const auth = await requireAdminByStudentId(req.headers['x-student-id']);
     if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const items = await Course.find({}).sort({ code: 1 });
+    return res.json({ items });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
-    const { config, normalizedCourseCode, error } = await resolveCourseConfig(req.params.courseCode);
-    if (error) return res.status(400).json({ error });
+app.post('/api/admin/courses', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const code = lectureCode.normalizeCourseCode(req.body.code);
+    const name = String(req.body.name || '').trim();
+    if (!code || !name) return res.status(400).json({ error: 'name and code are required' });
+    const existing = await Course.findOne({ code });
+    if (existing) return res.status(400).json({ error: 'Course code already exists' });
+    const course = await Course.create({ name, code, active: true });
+    return res.json({ success: true, course });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
+app.delete('/api/admin/courses/:courseId', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const course = await Course.findById(req.params.courseId);
+    if (!course) return res.status(404).json({ error: 'Course not found' });
+    const sessionIds = await LectureSession.find({ course: course._id }).distinct('_id');
+    await Attendance.deleteMany({ course: course._id });
+    await LectureSession.deleteMany({ course: course._id });
+    await Course.deleteOne({ _id: course._id });
+    sessionIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/courses/:courseId/disable', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const course = await Course.findById(req.params.courseId);
+    if (!course) return res.status(404).json({ error: 'Course not found' });
+    course.active = false;
+    await course.save();
+    await LectureSession.updateMany({ course: course._id }, { $set: { active: false } });
+    const sessionIds = await LectureSession.find({ course: course._id }).distinct('_id');
+    sessionIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
+    return res.json({ success: true, course });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/courses/:courseId/enable', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const course = await Course.findById(req.params.courseId);
+    if (!course) return res.status(404).json({ error: 'Course not found' });
+    course.active = true;
+    await course.save();
+    return res.json({ success: true, course });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/courses/:courseId/sessions', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    await deactivateExpiredNonRecurringSessions({ course: req.params.courseId });
+    const items = await LectureSession.find({ course: req.params.courseId, deleted: false }).sort({ lectureDay: 1, startTime: 1 });
+    return res.json({ items });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const course = await Course.findById(req.params.courseId);
+    if (!course || !course.active) return res.status(404).json({ error: 'Course not found' });
     const {
-      lectureDay, startTime, endTime, recurring, polygon,
+      name, lectureDay, startTime, endTime, recurring, rotationEnabled, polygons,
     } = req.body || {};
-    const allowedDays = ['MON', 'TUE', 'WED', 'THU', 'FRI'];
+    const allowedDays = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
     if (!allowedDays.includes(String(lectureDay || '').toUpperCase())) {
-      return res.status(400).json({ error: 'lectureDay must be MON..FRI' });
+      return res.status(400).json({ error: 'lectureDay must be MON..SUN' });
     }
     const s = toMinutes(startTime);
     const e = toMinutes(endTime);
     if (s === null || e === null || s >= e) {
       return res.status(400).json({ error: 'Invalid startTime/endTime (HH:mm)' });
     }
-    const normalizedPolygon = Array.isArray(polygon)
-      ? polygon.map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) })).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+    const normalizedPolygons = Array.isArray(polygons)
+      ? polygons
+        .map((poly) => (Array.isArray(poly)
+          ? poly.map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }))
+            .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+          : []))
+        .filter((poly) => poly.length >= 3)
       : [];
-
-    config.courseCode = normalizedCourseCode;
-    config.lectureDay = String(lectureDay).toUpperCase();
-    config.startTime = startTime;
-    config.endTime = endTime;
-    config.recurring = Boolean(recurring);
-    config.polygon = normalizedPolygon;
-    await config.save();
-
-    return res.json({ success: true, config });
+    const sameDaySessions = await LectureSession.find({
+      course: course._id,
+      lectureDay: String(lectureDay).toUpperCase(),
+      deleted: false,
+    });
+    const overlap = sameDaySessions.find((item) => {
+      const itemStart = toMinutes(item.startTime);
+      const itemEnd = toMinutes(item.endTime);
+      return hasScheduleOverlap(s, e, itemStart, itemEnd);
+    });
+    if (overlap) {
+      return res.status(400).json({ error: 'This session overlaps with an existing session for the same course' });
+    }
+    const created = await LectureSession.create({
+      course: course._id,
+      name: String(name || '').trim(),
+      lectureDay: String(lectureDay).toUpperCase(),
+      startTime,
+      endTime,
+      recurring: Boolean(recurring),
+      rotationEnabled: Boolean(rotationEnabled),
+      rotationPaused: !Boolean(rotationEnabled),
+      rotationOccurrenceKey: '',
+      polygons: normalizedPolygons,
+      active: true,
+    });
+    return res.json({ success: true, session: created });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 });
 
-/** Current rotating lecture code (refreshes every 30s). Use for projector / testing. */
-app.get('/api/lecture-code', (req, res) => {
+app.delete('/api/admin/sessions/:sessionId', async (req, res) => {
   try {
-    const normalizedCourseCode = lectureCode.normalizeCourseCode(req.query.courseCode);
-    if (!ALLOWED_COURSE_CODES.includes(normalizedCourseCode)) {
-      return res.status(400).json({ error: 'Valid courseCode query parameter is required' });
-    }
-    res.json(lectureCode.getCurrent(normalizedCourseCode));
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    sessionItem.active = false;
+    sessionItem.deleted = true;
+    await sessionItem.save();
+    lectureCode.removeKey(sessionCodeKey(sessionItem._id));
+    return res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
-/**
- * Returns whether this student already marked attendance for the selected
- * course at any time (database-based status).
- */
+app.patch('/api/admin/sessions/:sessionId/activate', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false }).populate('course');
+    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    if (!sessionItem.course?.active) return res.status(400).json({ error: 'Course is disabled' });
+    sessionItem.active = true;
+    await sessionItem.save();
+    if (sessionItem.rotationEnabled) {
+      if (sessionItem.rotationPaused) lectureCode.pauseCode(sessionCodeKey(sessionItem._id));
+      else lectureCode.resumeCode(sessionCodeKey(sessionItem._id));
+    }
+    return res.json({ success: true, session: sessionItem });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/sessions/:sessionId/deactivate', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    sessionItem.active = false;
+    await sessionItem.save();
+    lectureCode.removeKey(sessionCodeKey(sessionItem._id));
+    return res.json({ success: true, session: sessionItem });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/sessions', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    await deactivateExpiredNonRecurringSessions();
+    const items = await LectureSession.find({ deleted: false })
+      .populate('course', 'code name active')
+      .sort({ updatedAt: -1 });
+    return res.json({ items });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/sessions/current-codes', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    await deactivateExpiredNonRecurringSessions();
+    const now = new Date();
+    const sessions = await LectureSession.find({ active: true, deleted: false })
+      .populate('course', 'code active');
+    const running = sessions.filter((s) => s.course?.active && isSessionRunningNow(s, now));
+    const items = [];
+    for (const s of running) {
+      const codeKey = sessionCodeKey(s._id);
+      await syncSessionCodeMode(s, now);
+
+      items.push({
+        sessionId: s._id,
+        courseCode: s.course.code,
+        rotationEnabled: Boolean(s.rotationEnabled),
+        rotationPaused: Boolean(s.rotationPaused),
+        ...lectureCode.getCurrent(codeKey),
+      });
+    }
+    return res.json({ items });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/sessions/:sessionId/rotation/start', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    sessionItem.rotationEnabled = true;
+    sessionItem.rotationPaused = false;
+    await sessionItem.save();
+    lectureCode.resumeCode(sessionCodeKey(sessionItem._id));
+    return res.json({ success: true, session: sessionItem });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/sessions/:sessionId/rotation/stop', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    sessionItem.rotationEnabled = true;
+    sessionItem.rotationPaused = true;
+    await sessionItem.save();
+    lectureCode.pauseCode(sessionCodeKey(sessionItem._id));
+    return res.json({ success: true, session: sessionItem });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/sessions/:sessionId/current-code', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (sessionItem && isNonRecurringExpired(sessionItem)) {
+      sessionItem.active = false;
+      await sessionItem.save();
+      lectureCode.removeKey(sessionCodeKey(sessionItem._id));
+    }
+    if (!sessionItem || !sessionItem.active) return res.status(404).json({ error: 'Session not found' });
+    return res.json({ sessionId: sessionItem._id, ...lectureCode.getCurrent(sessionCodeKey(sessionItem._id)) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/lecture-code', async (req, res) => {
+  try {
+    const { courseId } = req.query;
+    if (!courseId) return res.status(400).json({ error: 'courseId query parameter is required' });
+    const resolved = await resolveActiveSessionForCourse(courseId);
+    if (resolved.error) return res.status(400).json({ error: resolved.error });
+    return res.json({
+      courseId: resolved.course._id,
+      sessionId: resolved.session._id,
+      ...lectureCode.getCurrent(sessionCodeKey(resolved.session._id)),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/attendance-status', async (req, res) => {
   try {
     const studentId = String(req.query.studentId || '').trim();
-    const normalizedCourseCode = lectureCode.normalizeCourseCode(req.query.courseCode);
+    const courseId = String(req.query.courseId || '').trim();
     if (!studentId) return res.status(400).json({ error: 'studentId query parameter is required' });
-    if (!ALLOWED_COURSE_CODES.includes(normalizedCourseCode)) {
-      return res.status(400).json({ error: 'Valid courseCode query parameter is required' });
+    if (!courseId) return res.status(400).json({ error: 'courseId query parameter is required' });
+
+    const resolved = await resolveActiveSessionForCourse(courseId);
+    if (resolved.error) {
+      return res.json({
+        studentId,
+        courseId,
+        sessionId: null,
+        attended: false,
+        attendanceId: null,
+        attendedAt: null,
+      });
     }
 
+    const attendanceDate = new Date().toISOString().slice(0, 10);
     const attendance = await Attendance.findOne({
       student: studentId,
-      courseCode: normalizedCourseCode,
+      course: courseId,
+      session: resolved.session._id,
+      attendanceDate,
     }).sort({ timestamp: -1 });
 
     return res.json({
       studentId,
-      courseCode: normalizedCourseCode,
+      courseId,
+      sessionId: resolved.session._id,
       attended: Boolean(attendance),
       attendanceId: attendance?._id || null,
       attendedAt: attendance?.timestamp || null,
@@ -294,24 +653,22 @@ app.get('/api/attendance-status', async (req, res) => {
 });
 
 app.post('/api/verify-lecture', async (req, res) => {
-  const { lectureCode: submitted, courseCode, lat, lng } = req.body;
+  const { lectureCode: submitted, courseId, lat, lng } = req.body;
   try {
-    const resolved = await resolveCourseConfig(courseCode);
+    const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
-    const { normalizedCourseCode, config } = resolved;
-
     if (!lectureCode.hasValidLocation(lat, lng)) {
       return res.status(400).json({ error: 'Valid latitude and longitude are required' });
     }
-    if (!lectureCode.isValidCode(normalizedCourseCode, submitted)) {
+    if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
       return res.status(400).json({ error: 'Invalid or expired lecture code' });
     }
-    const schedule = checkScheduleWindow(config);
+    const schedule = checkScheduleWindow(resolved.session);
     if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    if (!isPointInsidePolygon(Number(lat), Number(lng), config.polygon || [])) {
+    if (!isPointInsideAnyPolygon(Number(lat), Number(lng), resolved.session.polygons || [])) {
       return res.status(400).json({ error: 'You are outside the allowed attendance area' });
     }
-    return res.json({ success: true });
+    return res.json({ success: true, sessionId: resolved.session._id });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -319,31 +676,29 @@ app.post('/api/verify-lecture', async (req, res) => {
 
 app.post('/api/record-attendance', async (req, res) => {
   const {
-    studentId, lectureCode: submitted, courseCode, method, lat, lng,
+    studentId, lectureCode: submitted, courseId, method, lat, lng,
   } = req.body;
   try {
-    const resolved = await resolveCourseConfig(courseCode);
+    const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
-    const { normalizedCourseCode, config } = resolved;
     if (!lectureCode.hasValidLocation(lat, lng)) {
       return res.status(400).json({ error: 'Valid latitude and longitude are required' });
     }
-    if (!lectureCode.isValidCode(normalizedCourseCode, submitted)) {
+    if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
       return res.status(400).json({ error: 'Invalid or expired lecture code' });
     }
-    const schedule = checkScheduleWindow(config);
+    const schedule = checkScheduleWindow(resolved.session);
     if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    if (!isPointInsidePolygon(Number(lat), Number(lng), config.polygon || [])) {
+    if (!isPointInsideAnyPolygon(Number(lat), Number(lng), resolved.session.polygons || [])) {
       return res.status(400).json({ error: 'You are outside the allowed attendance area' });
     }
 
     const normalizedCode = String(submitted).replace(/\s/g, '');
-    const duplicateCutoff = new Date(Date.now() - lectureCode.ROTATION_MS);
+    const attendanceDate = new Date().toISOString().slice(0, 10);
     const existing = await Attendance.findOne({
       student: studentId,
-      courseCode: normalizedCourseCode,
-      lectureCode: normalizedCode,
-      timestamp: { $gte: duplicateCutoff },
+      session: resolved.session._id,
+      attendanceDate,
     });
     if (existing) {
       return res.json({ success: true, attendance: existing, duplicate: true });
@@ -351,8 +706,11 @@ app.post('/api/record-attendance', async (req, res) => {
 
     const attendance = new Attendance({
       student: studentId,
-      courseCode: normalizedCourseCode,
+      course: resolved.course._id,
+      session: resolved.session._id,
+      courseCode: resolved.course.code,
       lectureCode: normalizedCode,
+      attendanceDate,
       method,
       location: { lat: Number(lat), lng: Number(lng) },
     });
@@ -363,8 +721,44 @@ app.post('/api/record-attendance', async (req, res) => {
   }
 });
 
+app.get('/api/admin/courses/:courseId/attendance-matrix', async (req, res) => {
+  try {
+    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
+    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const course = await Course.findById(req.params.courseId);
+    if (!course) return res.status(404).json({ error: 'Course not found' });
+
+    const sessionIds = await Attendance.distinct('session', { course: course._id });
+    const sessions = await LectureSession.find({ _id: { $in: sessionIds } }).sort({ lectureDay: 1, startTime: 1 });
+    const attendanceDocs = await Attendance.find({ course: course._id, session: { $in: sessionIds } })
+      .populate('student', 'studentId email');
+    const rowsMap = new Map();
+    attendanceDocs.forEach((doc) => {
+      const sid = String(doc.student?._id || '');
+      if (!sid) return;
+      if (!rowsMap.has(sid)) {
+        rowsMap.set(sid, {
+          studentId: doc.student.studentId,
+          email: doc.student.email,
+          attendance: {},
+        });
+      }
+      rowsMap.get(sid).attendance[String(doc.session)] = true;
+    });
+    return res.json({
+      course: { _id: course._id, code: course.code, name: course.name },
+      sessions: sessions.map((s) => ({
+        _id: s._id,
+        label: `${s.lectureDay} ${s.startTime}-${s.endTime}`,
+      })),
+      rows: Array.from(rowsMap.values()),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  lectureCode.startRotationTimer(ALLOWED_COURSE_CODES);
   console.log(`🚀 Server listening on ${PORT}`);
 });

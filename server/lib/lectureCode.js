@@ -2,7 +2,7 @@ const crypto = require('crypto');
 
 const ROTATION_MS = 30000;
 
-const courseState = new Map();
+const codeState = new Map();
 
 function generateCode() {
   return String(crypto.randomInt(10000000, 100000000));
@@ -12,62 +12,94 @@ function normalizeCourseCode(courseCode) {
   return String(courseCode || '').trim().toUpperCase();
 }
 
-function getOrCreateState(courseCode) {
-  const normalized = normalizeCourseCode(courseCode);
-  if (!courseState.has(normalized)) {
-    courseState.set(normalized, {
+function getOrCreateState(key) {
+  const normalized = String(key || '').trim();
+  if (!normalized) {
+    throw new Error('Code key is required');
+  }
+  if (!codeState.has(normalized)) {
+    codeState.set(normalized, {
       code: generateCode(),
       expiresAt: Date.now() + ROTATION_MS,
+      paused: false,
     });
   }
-  return { normalized, state: courseState.get(normalized) };
+  return { normalized, state: codeState.get(normalized) };
 }
 
-function rotateCourseCode(courseCode) {
-  const { normalized } = getOrCreateState(courseCode);
-  courseState.set(normalized, {
+function rotateCode(key) {
+  const { normalized } = getOrCreateState(key);
+  codeState.set(normalized, {
     code: generateCode(),
     expiresAt: Date.now() + ROTATION_MS,
+    paused: false,
   });
 }
 
-function ensureFreshCodeForDisplay(courseCode) {
-  const { normalized, state } = getOrCreateState(courseCode);
+function ensureFreshCodeForDisplay(key) {
+  const { normalized, state } = getOrCreateState(key);
+  if (state.paused) return;
   if (Date.now() >= state.expiresAt) {
-    rotateCourseCode(normalized);
+    rotateCode(normalized);
   }
 }
 
-function getCurrent(courseCode) {
-  const normalizedCourseCode = normalizeCourseCode(courseCode);
-  ensureFreshCodeForDisplay(normalizedCourseCode);
-  const state = courseState.get(normalizedCourseCode);
+function getCurrent(key) {
+  const normalized = String(key || '').trim();
+  ensureFreshCodeForDisplay(normalized);
+  const state = codeState.get(normalized);
   const secondsRemaining = Math.max(0, Math.ceil((state.expiresAt - Date.now()) / 1000));
   return {
-    courseCode: normalizedCourseCode,
+    key: normalized,
     code: state.code,
-    expiresAt: new Date(state.expiresAt).toISOString(),
-    secondsRemaining,
+    expiresAt: state.paused ? null : new Date(state.expiresAt).toISOString(),
+    secondsRemaining: state.paused ? null : secondsRemaining,
     rotationSeconds: ROTATION_MS / 1000,
+    paused: Boolean(state.paused),
   };
 }
 
 /**
- * Validates submitted code against course-specific active window.
+ * Validates submitted code against key-specific active window.
  */
-function isValidCode(courseCode, lectureCode) {
-  const normalizedCourseCode = normalizeCourseCode(courseCode);
-  const { state } = getOrCreateState(normalizedCourseCode);
+function isValidCode(key, lectureCode) {
+  const normalized = String(key || '').trim();
+  const { state } = getOrCreateState(normalized);
   const submitted = String(lectureCode ?? '').replace(/\s/g, '');
-  if (Date.now() >= state.expiresAt) return false;
+  if (!state.paused && Date.now() >= state.expiresAt) return false;
   return submitted === state.code;
 }
 
-function startRotationTimer(allowedCourseCodes = []) {
-  allowedCourseCodes.forEach((courseCode) => rotateCourseCode(courseCode));
-  setInterval(() => {
-    allowedCourseCodes.forEach((courseCode) => rotateCourseCode(courseCode));
-  }, ROTATION_MS);
+function resetCode(key) {
+  rotateCode(key);
+}
+
+function pauseCode(key) {
+  const normalized = String(key || '').trim();
+  const { state } = getOrCreateState(normalized);
+  if (state.paused) return;
+  codeState.set(normalized, {
+    code: state.code,
+    expiresAt: state.expiresAt,
+    paused: true,
+  });
+}
+
+function resumeCode(key) {
+  const normalized = String(key || '').trim();
+  const { state } = getOrCreateState(normalized);
+  if (!state.paused) return;
+  codeState.set(normalized, {
+    code: state.code,
+    expiresAt: Date.now() + ROTATION_MS,
+    paused: false,
+  });
+}
+
+function removeKey(key) {
+  const normalized = String(key || '').trim();
+  if (!normalized) return;
+  codeState.delete(normalized);
 }
 
 function hasValidLocation(lat, lng) {
@@ -81,6 +113,9 @@ module.exports = {
   normalizeCourseCode,
   getCurrent,
   isValidCode,
-  startRotationTimer,
+  resetCode,
+  pauseCode,
+  resumeCode,
+  removeKey,
   hasValidLocation,
 };

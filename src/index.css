@@ -206,6 +206,238 @@ body {
   max-width: 980px;
 }
 
+.admin-pro {
+  background: linear-gradient(180deg, #ffffff, #fbfcff);
+}
+
+.admin-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  background: #f3f4f6;
+  border-radius: 12px;
+  padding: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.tab-btn {
+  border: 0;
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  font-weight: 700;
+  color: #4b5563;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  background: #fff;
+  color: var(--uop-maroon);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+}
+
+.tab-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.course-add-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.6rem;
+}
+
+.course-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.course-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 0.8rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  background: #fff;
+}
+
+.course-item.enabled {
+  background: #ecfdf3;
+  border-color: #86efac;
+}
+
+.course-item.selected {
+  border-color: #9e77ed;
+  box-shadow: 0 0 0 3px rgba(158, 119, 237, 0.12);
+}
+
+.course-item.disabled {
+  opacity: 0.6;
+  background: #f3f4f6;
+}
+
+.course-code {
+  margin: 0;
+  font-weight: 800;
+}
+
+.course-name {
+  margin: 0.2rem 0 0;
+  color: #6b7280;
+}
+
+.course-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.pill-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.4rem 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  background: #e5e7eb;
+  color: #1f2937;
+}
+
+.pill-btn.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.pill-btn.warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.pill-btn.danger {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.matrix-wrap {
+  overflow: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+.matrix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.matrix-table th,
+.matrix-table td {
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0.55rem;
+  text-align: center;
+}
+
+.matrix-table th:first-child,
+.matrix-table td:first-child {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: #fff;
+}
+
+.polygon-tools {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tool-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.session-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.session-item {
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
+  padding: 0.8rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.session-item.state-active {
+  background: #ecfdf3;
+  border-color: #86efac;
+}
+
+.session-item.state-inactive {
+  background: #f9fafb;
+  border-color: #d1d5db;
+}
+
+.session-item.state-course-disabled {
+  opacity: 0.65;
+}
+
+.session-item.state-running {
+  animation: runningPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes runningPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(22, 101, 52, 0.08);
+    transform: translateY(0);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(22, 101, 52, 0.18);
+    transform: translateY(-1px);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(22, 101, 52, 0.08);
+    transform: translateY(0);
+  }
+}
+
+.session-main {
+  margin: 0;
+  font-weight: 700;
+}
+
+.session-sub {
+  margin: 0.2rem 0 0;
+  color: #6b7280;
+  font-size: 0.88rem;
+}
+
+.live-code-row {
+  margin-top: 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.icon-btn {
+  border: 1px solid #86efac;
+  background: #ecfdf3;
+  color: #166534;
+  border-radius: 999px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0;
+}
+
 .admin-grid {
   margin-top: 1rem;
   display: grid;
@@ -222,6 +454,14 @@ body {
 
 @media (max-width: 760px) {
   .admin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .course-add-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-tabs {
     grid-template-columns: 1fr;
   }
 }

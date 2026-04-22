@@ -40,7 +40,7 @@ export async function recordAttendance(payload) {
 
 export async function getAttendanceStatus(studentId, courseCode) {
   const resp = await fetch(
-    `${apiBase()}/api/attendance-status?studentId=${encodeURIComponent(studentId || '')}&courseCode=${encodeURIComponent(courseCode || '')}`,
+    `${apiBase()}/api/attendance-status?studentId=${encodeURIComponent(studentId || '')}&courseId=${encodeURIComponent(courseCode || '')}`,
   );
   return resp.json();
 }
@@ -48,26 +48,147 @@ export async function getAttendanceStatus(studentId, courseCode) {
 /** Current rotating code + countdown (same value the server validates). */
 export async function getLectureCode(courseCode) {
   const resp = await fetch(
-    `${apiBase()}/api/lecture-code?courseCode=${encodeURIComponent(courseCode || '')}`,
+    `${apiBase()}/api/lecture-code?courseId=${encodeURIComponent(courseCode || '')}`,
   );
   return resp.json();
 }
 
-export async function getAdminCourseConfigs(studentId) {
-  const resp = await fetch(`${apiBase()}/api/admin/course-configs`, {
+export async function getCourses() {
+  const resp = await fetch(`${apiBase()}/api/courses`);
+  return resp.json();
+}
+
+export async function getRunningCourses() {
+  const resp = await fetch(`${apiBase()}/api/courses/running`);
+  return resp.json();
+}
+
+export async function getAdminCourses(studentId) {
+  const resp = await fetch(`${apiBase()}/api/admin/courses`, {
     headers: { 'X-Student-Id': studentId || '' },
   });
   return resp.json();
 }
 
-export async function saveAdminCourseConfig(studentId, courseCode, payload) {
-  const resp = await fetch(`${apiBase()}/api/admin/course-configs/${encodeURIComponent(courseCode)}`, {
-    method: 'PUT',
+export async function createAdminCourse(studentId, payload) {
+  const resp = await fetch(`${apiBase()}/api/admin/courses`, {
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Student-Id': studentId || '',
     },
     body: JSON.stringify(payload),
+  });
+  return resp.json();
+}
+
+export async function deleteAdminCourse(studentId, courseId) {
+  const resp = await fetch(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}`, {
+    method: 'DELETE',
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function disableAdminCourse(studentId, courseId) {
+  const resp = await fetch(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/disable`, {
+    method: 'PATCH',
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function enableAdminCourse(studentId, courseId) {
+  const resp = await fetch(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/enable`, {
+    method: 'PATCH',
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function getAdminSessions(studentId, courseId) {
+  const resp = await fetch(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/sessions`, {
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function createAdminSession(studentId, courseId, payload) {
+  const resp = await fetch(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/sessions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Student-Id': studentId || '',
+    },
+    body: JSON.stringify(payload),
+  });
+  return resp.json();
+}
+
+export async function deleteAdminSession(studentId, sessionId) {
+  const resp = await fetch(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function activateAdminSession(studentId, sessionId) {
+  const resp = await fetch(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/activate`, {
+    method: 'PATCH',
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function deactivateAdminSession(studentId, sessionId) {
+  const resp = await fetch(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/deactivate`, {
+    method: 'PATCH',
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function getAdminAllSessions(studentId) {
+  const resp = await fetch(`${apiBase()}/api/admin/sessions`, {
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function getAdminCurrentSessionCodes(studentId) {
+  const resp = await fetch(`${apiBase()}/api/admin/sessions/current-codes`, {
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function startAdminSessionRotation(studentId, sessionId) {
+  const resp = await fetch(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/rotation/start`, {
+    method: 'PATCH',
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function stopAdminSessionRotation(studentId, sessionId) {
+  const resp = await fetch(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/rotation/stop`, {
+    method: 'PATCH',
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function getAdminSessionCode(studentId, sessionId) {
+  const resp = await fetch(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/current-code`, {
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function getAdminAttendanceMatrix(studentId, courseId) {
+  const resp = await fetch(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/attendance-matrix`, {
+    headers: { 'X-Student-Id': studentId || '' },
   });
   return resp.json();
 }
