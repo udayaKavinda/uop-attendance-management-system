@@ -4,6 +4,7 @@ const courseSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   code: { type: String, required: true, trim: true, uppercase: true },
   batch: { type: String, required: true, trim: true, default: '' },
+  lecturer: { type: mongoose.Schema.Types.ObjectId, ref: 'Person', required: true, index: true },
   active: { type: Boolean, default: true, index: true },
 }, { timestamps: true });
 

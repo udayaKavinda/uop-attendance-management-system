@@ -1,6 +1,19 @@
 import React from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 
+function staffSubtitle() {
+  try {
+    const raw = localStorage.getItem('student');
+    if (!raw) return 'University of Peradeniya';
+    const { role } = JSON.parse(raw);
+    if (role === 'admin') return 'University of Peradeniya · Administrator';
+    if (role === 'lecturer') return 'University of Peradeniya · Lecturer';
+    return 'University of Peradeniya';
+  } catch {
+    return 'University of Peradeniya';
+  }
+}
+
 export default function AdminLayout() {
   const { pathname } = useLocation();
   const matrixMatch = pathname.match(/\/admin\/courses\/([^/]+)\/matrix$/);
@@ -13,7 +26,7 @@ export default function AdminLayout() {
           <img src="/logo.png" alt="" className="admin-chrome__logo" />
           <div>
             <p className="admin-chrome__title">Attendance administration</p>
-            <p className="admin-chrome__sub">University of Peradeniya</p>
+            <p className="admin-chrome__sub">{staffSubtitle()}</p>
           </div>
         </div>
         <nav className="admin-chrome__nav" aria-label="Admin">

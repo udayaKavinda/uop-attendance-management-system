@@ -82,6 +82,74 @@ export async function createAdminCourse(studentId, payload) {
   return resp.json();
 }
 
+export async function patchCourseAssignLecturer(studentId, courseId, lecturerId) {
+  const resp = await fetch(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/assign-lecturer`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Student-Id': studentId || '',
+    },
+    body: JSON.stringify({ lecturerId }),
+  });
+  return resp.json();
+}
+
+export async function getAdminLecturers(studentId, q) {
+  const qs = q ? `?q=${encodeURIComponent(q)}` : '';
+  const url = `${apiBase()}/api/admin/lecturers${qs}`;
+  const resp = await fetch(url, {
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function createAdminLecturer(studentId, payload) {
+  const resp = await fetch(`${apiBase()}/api/admin/lecturers`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Student-Id': studentId || '',
+    },
+    body: JSON.stringify(payload),
+  });
+  return resp.json();
+}
+
+export async function deleteAdminLecturer(studentId, lecturerId) {
+  const resp = await fetch(`${apiBase()}/api/admin/lecturers/${encodeURIComponent(lecturerId)}`, {
+    method: 'DELETE',
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function getPolygonPresets(studentId) {
+  const resp = await fetch(`${apiBase()}/api/admin/polygon-presets`, {
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
+export async function createPolygonPreset(studentId, payload) {
+  const resp = await fetch(`${apiBase()}/api/admin/polygon-presets`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Student-Id': studentId || '',
+    },
+    body: JSON.stringify(payload),
+  });
+  return resp.json();
+}
+
+export async function deletePolygonPreset(studentId, presetId) {
+  const resp = await fetch(`${apiBase()}/api/admin/polygon-presets/${encodeURIComponent(presetId)}`, {
+    method: 'DELETE',
+    headers: { 'X-Student-Id': studentId || '' },
+  });
+  return resp.json();
+}
+
 export async function deleteAdminCourse(studentId, courseId) {
   const resp = await fetch(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}`, {
     method: 'DELETE',

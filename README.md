@@ -12,7 +12,7 @@ The application implements an attendance flow where a student signs in with Goog
 │  ├─ api.js         # helper for backend calls
 │  └─ ...
 ├─ server/           # Node/Express backend
-│  ├─ models/        # mongoose schemas
+│  ├─ models/        # mongoose schemas (Person → collection `people`)
 │  └─ index.js       # express server and routes
 ├─ package.json
 └─ README.md
@@ -69,31 +69,30 @@ The application implements an attendance flow where a student signs in with Goog
 
 ### 1) Authentication
 
-- Students/admins sign in with Google (`/auth/google`).
-- Backend creates or resolves a `Student` record and redirects to frontend with `studentId`.
-- Role-based routing sends admin users to `/admin` and students to `/lecture`.
+- Users sign in with Google (`/auth/google`).
+- Backend creates or resolves a `Student` record and redirects to the frontend with `studentId`.
+- **Roles:** `student`, `lecturer`, or `admin`. All accounts live in the MongoDB **`people`** collection (`Person` model). Lecturers are `Person` documents with `role: 'lecturer'` (managed in the console). Google sign-in matches **email** to an active lecturer row. The `admin` role is never downgraded by that sync.
+- Routing: **admin** and **lecturer** go to `/admin` (staff console); **student** goes to `/lecture`.
 
-### 2) Admin workflow
+### 2) Staff console (`/admin`)
 
-The admin dashboard has three tabs:
+**Lecturers** see **Courses**, **Create session**, and **Sessions** for **their own courses** only.
 
-- **Admin Services**
-  - Add, disable/enable, and delete courses. Each course has **code**, **batch** (required), and **name**; **code + batch** must be unique together.
-  - Enabled courses are highlighted in green; disabled courses are shown in gray at the bottom.
+**Administrators** see the same three tabs plus **Lecturers** (directory: name, email, telephone; search; add/remove) and **Presets** (saved polygon rings for reuse when creating sessions). Admins assign each **course owner** when creating a course or via the owner dropdown on each course row.
+
+- **Courses**
+  - Add, disable/enable, and delete courses. Each course has **code**, **batch** (required), **name**, and an owning **lecturer**; **code + batch** must be unique together.
   - Deleting a course requires typing **code and batch** (space-separated, as prompted) and deletes related sessions and attendance.
-  - Click a course to open its attendance table on a separate page (`/admin/courses/:courseId/matrix`).
-- **Create Session**
-  - Create session with course, day, start/end time, recurring flag, and geofence polygons (drawn from map).
-  - Set **Enable code rotation?** (`No` by default).
-  - Overlapping sessions for the same course/day are blocked even if older sessions are deactivated (unless deleted).
+  - Click a course to open its attendance table (`/admin/courses/:courseId/matrix`).
+- **Create session**
+  - Session: course, day, start/end time, recurring flag, geofence polygons (draw on the map and/or merge optional **presets**).
+  - **Enable code rotation?** (`No` by default). Overlapping sessions for the same course/day are blocked unless the older session is deleted.
 - **Sessions**
-  - Search and view sessions sorted by nearest current time.
-  - Activate/deactivate/delete sessions (session delete keeps attendance history).
-  - Currently running cards pulse visually.
-  - Live code is shown for currently running sessions (rotating or paused/static).
-  - Rotation control icon on each running card:
-    - `⟳` starts/resumes rotation
-    - `⏸` pauses/freezes current code
+  - Search, activate/deactivate/delete; live codes for running sessions; rotation start/pause controls.
+- **Lecturers** (admin only)
+  - Maintain lecturer accounts; removal turns that Google user back into a **student** until they are added again.
+- **Presets** (admin only)
+  - List, draw, save, and delete shared polygon presets on the **Presets** tab (not from Create session).
 
 ### 3) Session/code behavior
 
@@ -127,7 +126,7 @@ The admin dashboard has three tabs:
 - `GET /auth/google` - start Google OAuth flow
 - `GET /auth/google/callback` - OAuth callback/redirect handler
 - `POST /api/login` - legacy identifier-based login lookup
-- `GET /api/me?studentId=...` - get current user profile/role
+- `GET /api/me?studentId=...` - profile: `studentId` (Mongo `_id` in `people`), `email`, `role`, `lecturerId` (same as `studentId` when `role` is `lecturer`, else null)
 
 ### Student-facing attendance
 
@@ -136,34 +135,49 @@ The admin dashboard has three tabs:
 - `POST /api/verify-lecture` - verify submitted code + location against active session
 - `POST /api/record-attendance` - record attendance after validation
 
-### Admin courses
+### Staff / admin API
 
-All admin endpoints require header: `X-Student-Id: <adminStudentId>`
+Header on all `/api/admin/*` routes: `X-Student-Id: <studentId>` (the logged-in user’s Mongo `_id`).
 
-- `GET /api/admin/courses` - list all courses (enabled + disabled)
-- `POST /api/admin/courses` - create course (body: `code`, `batch` required, `name`; unique compound `code` + `batch`)
-- `PATCH /api/admin/courses/:courseId/disable` - disable course
-- `PATCH /api/admin/courses/:courseId/enable` - enable course
-- `DELETE /api/admin/courses/:courseId` - delete course (cascade delete related sessions + attendance)
+- **Lecturer** access is allowed only for resources belonging to their courses (except where noted as admin-only).
+- **Admin** has full access.
 
-### Admin sessions
+### Courses (staff)
 
-- `GET /api/admin/sessions` - list all non-deleted sessions
-- `GET /api/admin/courses/:courseId/sessions` - list sessions for specific course
+- `GET /api/admin/courses` - list courses (**lecturer:** own courses only; **admin:** all)
+- `POST /api/admin/courses` - create course (`code`, `batch`, `name`; **admin** must send `lecturerId`; lecturer’s own profile is applied automatically)
+- `PATCH /api/admin/courses/:courseId/disable` | `.../enable` - staff if they own the course (or admin)
+- `PATCH /api/admin/courses/:courseId/assign-lecturer` - **admin only** (body: `lecturerId`)
+- `DELETE /api/admin/courses/:courseId` - staff if they own the course (or admin); cascade sessions + attendance
+
+### Lecturers & presets (admin only)
+
+- `GET /api/admin/lecturers?q=` - search lecturers by name, email, or phone
+- `POST /api/admin/lecturers` - create (`name`, `email`, `phone`)
+- `PATCH /api/admin/lecturers/:id` - update fields
+- `DELETE /api/admin/lecturers/:id` - revoke lecturer on that **Person** (`role` → `student`, `deleted` → true); same document stays in `people`
+- `GET /api/admin/polygon-presets` - list presets (**staff:** lecturers may read for merge-on-create)
+- `POST` / `PATCH` / `DELETE /api/admin/polygon-presets/...` - **admin only** (preset CRUD)
+
+### Sessions (staff)
+
+- `GET /api/admin/sessions` - list non-deleted sessions (**lecturer:** sessions for their courses only)
+- `GET /api/admin/courses/:courseId/sessions` - list sessions for a course (if staff may access that course)
 - `POST /api/admin/courses/:courseId/sessions` - create session
 - `PATCH /api/admin/sessions/:sessionId/activate` - activate session
 - `PATCH /api/admin/sessions/:sessionId/deactivate` - deactivate session
 - `DELETE /api/admin/sessions/:sessionId` - soft-delete session (attendance retained)
 
-### Admin rotation controls/live code
+### Rotation / live code (staff)
 
-- `GET /api/admin/sessions/current-codes` - live codes for currently running sessions
-- `PATCH /api/admin/sessions/:sessionId/rotation/start` - start/resume rotation for session
-- `PATCH /api/admin/sessions/:sessionId/rotation/stop` - pause/freeze current code for session
+- `GET /api/admin/sessions/current-codes` - live codes for running sessions (**lecturer:** their courses only)
+- `GET /api/admin/sessions/:sessionId/current-code` - current code for one session (if staff may access that session)
+- `PATCH /api/admin/sessions/:sessionId/rotation/start` - start/resume rotation
+- `PATCH /api/admin/sessions/:sessionId/rotation/stop` - pause/freeze current code
 
-### Reporting
+### Reporting (staff)
 
-- `GET /api/admin/courses/:courseId/attendance-matrix` - per-course attendance table (rows: student ID from email local-part; columns: earliest attendance date without year + session hours without minutes)
+- `GET /api/admin/courses/:courseId/attendance-matrix` - attendance table (allowed if staff may access the course)
 
 ---
 

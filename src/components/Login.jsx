@@ -13,6 +13,8 @@ export default function Login() {
       const code = params.get('error');
       if (code === 'auth') {
         setError('Google authentication failed. Please try again.');
+      } else if (code === 'profile') {
+        setError('Could not load your profile from the server. Check that the API is reachable, then sign in again.');
       } else {
         setError('Login error: ' + code);
       }

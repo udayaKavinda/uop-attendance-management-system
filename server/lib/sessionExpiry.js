@@ -48,4 +48,5 @@ function startNonRecurringExpiryJob() {
 module.exports = {
   deactivateExpiredNonRecurringSessions,
   startNonRecurringExpiryJob,
+  isNonRecurringExpired,
 };

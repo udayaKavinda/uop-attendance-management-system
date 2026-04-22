@@ -30,16 +30,21 @@ function roleOfCurrentUser() {
   }
 }
 
+function isStaffRole() {
+  const r = roleOfCurrentUser();
+  return r === 'admin' || r === 'lecturer';
+}
+
 function RequireAuth() {
   return isLoggedIn() ? <Outlet /> : <Navigate to="/" replace />;
 }
 
 function RequireStudent() {
-  return roleOfCurrentUser() !== 'admin' ? <Outlet /> : <Navigate to="/admin" replace />;
+  return !isStaffRole() ? <Outlet /> : <Navigate to="/admin" replace />;
 }
 
-function RequireAdmin() {
-  return roleOfCurrentUser() === 'admin' ? <Outlet /> : <Navigate to="/lecture" replace />;
+function RequireStaff() {
+  return isStaffRole() ? <Outlet /> : <Navigate to="/lecture" replace />;
 }
 
 function App() {
@@ -58,7 +63,7 @@ function App() {
             </Route>
           </Route>
 
-          <Route element={<RequireAdmin />}>
+          <Route element={<RequireStaff />}>
             <Route path="/admin" element={<AdminLayout />}>
               <Route index element={<AdminDashboard />} />
               <Route path="courses/:courseId/matrix" element={<AttendanceTablePage />} />
