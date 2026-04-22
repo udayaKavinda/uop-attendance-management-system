@@ -5,7 +5,7 @@ export default function Login() {
   const location = useLocation();
   const [error, setError] = useState(null);
   const [logoMissing, setLogoMissing] = useState(false);
-  const [bannerMissing, setBannerMissing] = useState(false);
+  const [lockupMissing, setLockupMissing] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -19,54 +19,52 @@ export default function Login() {
     }
   }, [location.search]);
 
-  // plain Google sign-in only
   return (
-    <div className="app-shell">
-      <div className="auth-card">
-        <div className="hero-image-wrap">
-          {!bannerMissing && (
+    <div className="marketing-card page-fade">
+      <div className="login-hero">
+        {!lockupMissing && (
+          <img
+            src="/brand-lockup.png"
+            alt="University of Peradeniya"
+            className="login-hero-lockup"
+            onError={() => setLockupMissing(true)}
+          />
+        )}
+        {lockupMissing && (
+          <p className="card-subtitle" style={{ margin: 0, textAlign: 'center' }}>University of Peradeniya</p>
+        )}
+      </div>
+      <div className="card-content">
+        <div className="brand-row">
+          {!logoMissing ? (
             <img
-              src="/uop-campus.jpg"
-              alt="University of Peradeniya campus"
-              className="hero-image"
-              onError={() => setBannerMissing(true)}
+              src="/logo.png"
+              alt="University of Peradeniya logo"
+              className="brand-logo"
+              onError={() => setLogoMissing(true)}
             />
+          ) : (
+            <span className="brand-fallback">UOP</span>
           )}
-          <div className="hero-overlay" />
-          <div className="hero-fallback">University of Peradeniya</div>
-        </div>
-        <div className="card-content">
-          <div className="brand-row">
-            {!logoMissing ? (
-              <img
-                src="/uop-logo.png"
-                alt="University of Peradeniya logo"
-                className="brand-logo"
-                onError={() => setLogoMissing(true)}
-              />
-            ) : (
-              <span className="brand-fallback">UOP</span>
-            )}
-            <div>
-              <p className="brand-title">University of Peradeniya</p>
-              <p className="brand-subtitle">Attendance Management System</p>
-            </div>
+          <div>
+            <p className="brand-title">Sign in</p>
+            <p className="brand-subtitle">Attendance Management System</p>
           </div>
-          <h2 className="card-title">Sign in with Google</h2>
-          <p className="card-subtitle">Use your university Google account to continue.</p>
-          {error && <p className="error">{error}</p>}
-          <button
-            className="primary-btn"
-            onClick={() => {
-              // Backend handles Google OAuth; must redirect to API origin (e.g. :5000), not React (:3000)
-              const base = process.env.REACT_APP_API_BASE
-                || (window.location.port === '3000' ? 'http://localhost:5000' : '');
-              window.location.href = `${base}/auth/google`;
-            }}
-          >
-            Continue with Google
-          </button>
         </div>
+        <h2 className="card-title">Continue with Google</h2>
+        <p className="card-subtitle">Use your university Google account.</p>
+        {error && <p className="error">{error}</p>}
+        <button
+          type="button"
+          className="primary-btn"
+          onClick={() => {
+            const base = process.env.REACT_APP_API_BASE
+              || (window.location.port === '3000' ? 'http://localhost:5000' : '');
+            window.location.href = `${base}/auth/google`;
+          }}
+        >
+          Continue with Google
+        </button>
       </div>
     </div>
   );

@@ -12,6 +12,7 @@ const Attendance = require('./models/Attendance');
 const Course = require('./models/Course');
 const LectureSession = require('./models/LectureSession');
 const lectureCode = require('./lib/lectureCode');
+const { startNonRecurringExpiryJob } = require('./lib/sessionExpiry');
 
 const DAY_INDEX = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
@@ -19,6 +20,36 @@ function toMinutes(hhmm) {
   const [h, m] = String(hhmm || '').split(':').map((v) => parseInt(v, 10));
   if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
   return h * 60 + m;
+}
+
+/** First segment of email before @; otherwise fallback (e.g. stored studentId). */
+function studentDisplayIdFromEmail(email, fallbackStudentId) {
+  if (!email || typeof email !== 'string') return String(fallbackStudentId || '').trim();
+  const at = email.indexOf('@');
+  if (at <= 0) return String(fallbackStudentId || email).trim();
+  return email.slice(0, at).trim();
+}
+
+/** Whole hour from "HH:mm" (minutes dropped for column labels). */
+function hourOnlyFromHHMM(hhmm) {
+  const [h] = String(hhmm || '').split(':');
+  const n = parseInt(h, 10);
+  return Number.isFinite(n) ? String(n) : '';
+}
+
+/** Column header: "Apr 22 8-10" (no year) when we have an attendance date; else "MON 8-10". */
+function formatAttendanceTableColumnLabel(session, minAttendanceDateYmd) {
+  const sh = hourOnlyFromHHMM(session.startTime);
+  const eh = hourOnlyFromHHMM(session.endTime);
+  const hourRange = sh && eh ? `${sh}-${eh}` : `${String(session.startTime || '').replace(/:00$/, '')}-${String(session.endTime || '').replace(/:00$/, '')}`;
+  if (minAttendanceDateYmd && /^\d{4}-\d{2}-\d{2}$/.test(minAttendanceDateYmd)) {
+    const d = new Date(`${minAttendanceDateYmd}T12:00:00`);
+    if (!Number.isNaN(d.getTime())) {
+      const md = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return `${md} ${hourRange}`.trim();
+    }
+  }
+  return `${session.lectureDay} ${hourRange}`.trim();
 }
 
 function isPointInsidePolygon(lat, lng, polygon) {
@@ -93,27 +124,9 @@ function isSessionRunningNow(sessionItem, now = new Date()) {
   return currentMinutes >= start && currentMinutes <= end;
 }
 
-function isNonRecurringExpired(sessionItem, now = new Date()) {
-  if (!sessionItem || sessionItem.recurring) return false;
-  const day = DAY_INDEX[now.getDay()];
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const end = toMinutes(sessionItem.endTime);
-  if (end === null) return false;
-  return day === sessionItem.lectureDay && currentMinutes > end;
-}
-
-async function deactivateExpiredNonRecurringSessions(filter = {}) {
-  const candidates = await LectureSession.find({ ...filter, active: true, recurring: false, deleted: false });
-  const expiredIds = candidates.filter((s) => isNonRecurringExpired(s)).map((s) => s._id);
-  if (expiredIds.length === 0) return;
-  await LectureSession.updateMany({ _id: { $in: expiredIds } }, { $set: { active: false } });
-  expiredIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
-}
-
 async function resolveActiveSessionForCourse(courseId) {
   const course = await Course.findById(courseId);
   if (!course || !course.active) return { error: 'Invalid course' };
-  await deactivateExpiredNonRecurringSessions({ course: course._id });
   const now = new Date();
   const day = DAY_INDEX[now.getDay()];
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -230,7 +243,24 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
 
 mongoose
   .connect(process.env.MONGO_URI || 'mongodb://localhost:27017/attendance')
-  .then(() => console.log('🗄  MongoDB connected'))
+  .then(async () => {
+    console.log('🗄  MongoDB connected');
+    try {
+      const r = await LectureSession.updateMany({}, { $unset: { name: 1 } });
+      if (r.modifiedCount > 0) {
+        console.log(`Removed deprecated session "name" field from ${r.modifiedCount} document(s)`);
+      }
+    } catch (e) {
+      console.warn('LectureSession name cleanup:', e.message);
+    }
+    try {
+      await Course.updateMany({ $or: [{ batch: { $exists: false } }, { batch: null }] }, { $set: { batch: '' } });
+      await Course.syncIndexes();
+    } catch (e) {
+      console.warn('Course batch / index sync:', e.message);
+    }
+    startNonRecurringExpiryJob();
+  })
   .catch((err) => console.error('Mongo connection error', err));
 
 app.post('/api/login', async (req, res) => {
@@ -264,11 +294,12 @@ app.get('/api/me', async (req, res) => {
 
 app.get('/api/courses', async (req, res) => {
   try {
-    const items = await Course.find({ active: true }).sort({ code: 1 });
+    const items = await Course.find({ active: true }).sort({ code: 1, batch: 1 });
     return res.json({
       items: items.map((c) => ({
         _id: c._id,
         code: c.code,
+        batch: c.batch,
         name: c.name,
       })),
     });
@@ -279,7 +310,6 @@ app.get('/api/courses', async (req, res) => {
 
 app.get('/api/courses/running', async (req, res) => {
   try {
-    await deactivateExpiredNonRecurringSessions();
     const now = new Date();
     const day = DAY_INDEX[now.getDay()];
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -288,7 +318,7 @@ app.get('/api/courses/running', async (req, res) => {
       active: true,
       deleted: false,
       lectureDay: day,
-    }).populate('course', 'code name active');
+    }).populate('course', 'code name active batch');
 
     const runningCourses = new Map();
     sessions.forEach((s) => {
@@ -300,11 +330,18 @@ app.get('/api/courses/running', async (req, res) => {
       runningCourses.set(String(s.course._id), {
         _id: s.course._id,
         code: s.course.code,
+        batch: s.course.batch,
         name: s.course.name,
       });
     });
 
-    return res.json({ items: Array.from(runningCourses.values()).sort((a, b) => String(a.code).localeCompare(String(b.code))) });
+    return res.json({
+      items: Array.from(runningCourses.values()).sort((a, b) => {
+        const c = String(a.code).localeCompare(String(b.code));
+        if (c !== 0) return c;
+        return String(a.batch || '').localeCompare(String(b.batch || ''));
+      }),
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -314,7 +351,7 @@ app.get('/api/admin/courses', async (req, res) => {
   try {
     const auth = await requireAdminByStudentId(req.headers['x-student-id']);
     if (!auth.ok) return res.status(403).json({ error: auth.message });
-    const items = await Course.find({}).sort({ code: 1 });
+    const items = await Course.find({}).sort({ code: 1, batch: 1 });
     return res.json({ items });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -327,12 +364,17 @@ app.post('/api/admin/courses', async (req, res) => {
     if (!auth.ok) return res.status(403).json({ error: auth.message });
     const code = lectureCode.normalizeCourseCode(req.body.code);
     const name = String(req.body.name || '').trim();
+    const batch = String(req.body.batch ?? '').trim();
     if (!code || !name) return res.status(400).json({ error: 'name and code are required' });
-    const existing = await Course.findOne({ code });
-    if (existing) return res.status(400).json({ error: 'Course code already exists' });
-    const course = await Course.create({ name, code, active: true });
+    if (!batch) return res.status(400).json({ error: 'batch is required' });
+    const existing = await Course.findOne({ code, batch });
+    if (existing) return res.status(400).json({ error: 'A course with this code and batch already exists' });
+    const course = await Course.create({ name, code, batch, active: true });
     return res.json({ success: true, course });
   } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(400).json({ error: 'A course with this code and batch already exists' });
+    }
     return res.status(500).json({ error: err.message });
   }
 });
@@ -389,7 +431,6 @@ app.get('/api/admin/courses/:courseId/sessions', async (req, res) => {
   try {
     const auth = await requireAdminByStudentId(req.headers['x-student-id']);
     if (!auth.ok) return res.status(403).json({ error: auth.message });
-    await deactivateExpiredNonRecurringSessions({ course: req.params.courseId });
     const items = await LectureSession.find({ course: req.params.courseId, deleted: false }).sort({ lectureDay: 1, startTime: 1 });
     return res.json({ items });
   } catch (err) {
@@ -404,7 +445,7 @@ app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
     const course = await Course.findById(req.params.courseId);
     if (!course || !course.active) return res.status(404).json({ error: 'Course not found' });
     const {
-      name, lectureDay, startTime, endTime, recurring, rotationEnabled, polygons,
+      lectureDay, startTime, endTime, recurring, rotationEnabled, polygons,
     } = req.body || {};
     const allowedDays = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
     if (!allowedDays.includes(String(lectureDay || '').toUpperCase())) {
@@ -438,7 +479,6 @@ app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
     }
     const created = await LectureSession.create({
       course: course._id,
-      name: String(name || '').trim(),
       lectureDay: String(lectureDay).toUpperCase(),
       startTime,
       endTime,
@@ -509,9 +549,8 @@ app.get('/api/admin/sessions', async (req, res) => {
   try {
     const auth = await requireAdminByStudentId(req.headers['x-student-id']);
     if (!auth.ok) return res.status(403).json({ error: auth.message });
-    await deactivateExpiredNonRecurringSessions();
     const items = await LectureSession.find({ deleted: false })
-      .populate('course', 'code name active')
+      .populate('course', 'code name active batch')
       .sort({ updatedAt: -1 });
     return res.json({ items });
   } catch (err) {
@@ -523,10 +562,9 @@ app.get('/api/admin/sessions/current-codes', async (req, res) => {
   try {
     const auth = await requireAdminByStudentId(req.headers['x-student-id']);
     if (!auth.ok) return res.status(403).json({ error: auth.message });
-    await deactivateExpiredNonRecurringSessions();
     const now = new Date();
     const sessions = await LectureSession.find({ active: true, deleted: false })
-      .populate('course', 'code active');
+      .populate('course', 'code active batch');
     const running = sessions.filter((s) => s.course?.active && isSessionRunningNow(s, now));
     const items = [];
     for (const s of running) {
@@ -732,13 +770,21 @@ app.get('/api/admin/courses/:courseId/attendance-matrix', async (req, res) => {
     const sessions = await LectureSession.find({ _id: { $in: sessionIds } }).sort({ lectureDay: 1, startTime: 1 });
     const attendanceDocs = await Attendance.find({ course: course._id, session: { $in: sessionIds } })
       .populate('student', 'studentId email');
+    const sessionMinDate = new Map();
+    attendanceDocs.forEach((doc) => {
+      const sessKey = String(doc.session);
+      const ymd = doc.attendanceDate;
+      if (!ymd) return;
+      const prev = sessionMinDate.get(sessKey);
+      if (!prev || ymd < prev) sessionMinDate.set(sessKey, ymd);
+    });
     const rowsMap = new Map();
     attendanceDocs.forEach((doc) => {
       const sid = String(doc.student?._id || '');
       if (!sid) return;
       if (!rowsMap.has(sid)) {
         rowsMap.set(sid, {
-          studentId: doc.student.studentId,
+          studentId: studentDisplayIdFromEmail(doc.student?.email, doc.student?.studentId),
           email: doc.student.email,
           attendance: {},
         });
@@ -746,10 +792,10 @@ app.get('/api/admin/courses/:courseId/attendance-matrix', async (req, res) => {
       rowsMap.get(sid).attendance[String(doc.session)] = true;
     });
     return res.json({
-      course: { _id: course._id, code: course.code, name: course.name },
+      course: { _id: course._id, code: course.code, batch: course.batch, name: course.name },
       sessions: sessions.map((s) => ({
         _id: s._id,
-        label: `${s.lectureDay} ${s.startTime}-${s.endTime}`,
+        label: formatAttendanceTableColumnLabel(s, sessionMinDate.get(String(s._id))),
       })),
       rows: Array.from(rowsMap.values()),
     });

@@ -50,7 +50,7 @@ The application implements an attendance flow where a student signs in with Goog
    GOOGLE_CLIENT_SECRET=your-client-secret
    ```
 
-   Get Google OAuth values from Google Cloud Console → Credentials → OAuth 2.0 Client (Web application). Without them, `/auth/google` will not work. Optional: `SESSION_SECRET` (random string).
+   Get Google OAuth values from Google Cloud Console → Credentials → OAuth 2.0 Client (Web application). Without them, `/auth/google` will not work. Optional: `SESSION_SECRET` (random string). Optional: `SESSION_EXPIRE_JOB_MS` (milliseconds between non-recurring expiry sweeps; default `60000`, minimum `10000`).
 
 5. **Reverse proxy (one domain)**
    Configure your proxy so a single domain serves both apps:
@@ -65,17 +65,105 @@ The application implements an attendance flow where a student signs in with Goog
    - **Authorized JavaScript origins:** `https://app.domain.com`
    - **Authorized redirect URIs:** `https://app.domain.com/auth/google/callback`
 
-## Flow overview
+## Current workflow overview
 
-1. Student taps **Sign in with Google**; no manual email/ID entry is required.
-2. Backend identifies or creates the corresponding student account using the Google profile.
-3. The student enters a lecture code.
-4. Backend validates code, course schedule window, and geolocation (geo‑fencing).
-5. If everything passes, attendance is recorded in MongoDB (with duplicate protection for the active code window).
+### 1) Authentication
 
-> **Note:** Google OAuth client ID/secret must be set in `.env`. Without them the `/auth/google` route will not function.
+- Students/admins sign in with Google (`/auth/google`).
+- Backend creates or resolves a `Student` record and redirects to frontend with `studentId`.
+- Role-based routing sends admin users to `/admin` and students to `/lecture`.
 
-Admin endpoints are available for course configuration (day/time/geofence polygon) and protected via admin role checks.
+### 2) Admin workflow
+
+The admin dashboard has three tabs:
+
+- **Admin Services**
+  - Add, disable/enable, and delete courses. Each course has **code**, **batch** (required), and **name**; **code + batch** must be unique together.
+  - Enabled courses are highlighted in green; disabled courses are shown in gray at the bottom.
+  - Deleting a course requires typing **code and batch** (space-separated, as prompted) and deletes related sessions and attendance.
+  - Click a course to open its attendance table on a separate page (`/admin/courses/:courseId/matrix`).
+- **Create Session**
+  - Create session with course, day, start/end time, recurring flag, and geofence polygons (drawn from map).
+  - Set **Enable code rotation?** (`No` by default).
+  - Overlapping sessions for the same course/day are blocked even if older sessions are deactivated (unless deleted).
+- **Sessions**
+  - Search and view sessions sorted by nearest current time.
+  - Activate/deactivate/delete sessions (session delete keeps attendance history).
+  - Currently running cards pulse visually.
+  - Live code is shown for currently running sessions (rotating or paused/static).
+  - Rotation control icon on each running card:
+    - `⟳` starts/resumes rotation
+    - `⏸` pauses/freezes current code
+
+### 3) Session/code behavior
+
+- Each session keeps persistent rotation configuration/state.
+- If rotation is disabled, running session still shows a static (paused) code.
+- Rotation can be started at runtime from session card.
+- For each new session occurrence/day, a fresh code is reseeded (code is not reused from prior occurrence).
+- Non-recurring sessions auto-deactivate after end time (background job on the API server; not tied to incoming HTTP requests).
+- If you run **multiple** API instances, either use one scheduler externally or accept duplicate sweeps (idempotent updates); a DB leader lock is not implemented here.
+
+### 4) Student attendance workflow
+
+- Student lecture page shows only courses that currently have running sessions.
+- Course selection is a single searchable/selectable field and running courses refresh automatically every 10 seconds.
+- Student enters code and submits with location.
+- Backend validates:
+  - course has active running session
+  - submitted code matches current/paused code mode
+  - current time within session window
+  - location inside any configured polygon
+- If valid, attendance is recorded.
+- Duplicate protection is per `student + session + date`.
+- Attendance status is session-aware, so after a session ends the UI resets for the next session of the same course.
+
+> **Note:** Google OAuth client ID/secret must be set in `.env`. Without them `/auth/google` will not work.
+
+## API endpoints reference
+
+### Authentication
+
+- `GET /auth/google` - start Google OAuth flow
+- `GET /auth/google/callback` - OAuth callback/redirect handler
+- `POST /api/login` - legacy identifier-based login lookup
+- `GET /api/me?studentId=...` - get current user profile/role
+
+### Student-facing attendance
+
+- `GET /api/courses/running` - list courses that currently have a running session
+- `GET /api/attendance-status?studentId=...&courseId=...` - attendance status for current active session of selected course
+- `POST /api/verify-lecture` - verify submitted code + location against active session
+- `POST /api/record-attendance` - record attendance after validation
+
+### Admin courses
+
+All admin endpoints require header: `X-Student-Id: <adminStudentId>`
+
+- `GET /api/admin/courses` - list all courses (enabled + disabled)
+- `POST /api/admin/courses` - create course (body: `code`, `batch` required, `name`; unique compound `code` + `batch`)
+- `PATCH /api/admin/courses/:courseId/disable` - disable course
+- `PATCH /api/admin/courses/:courseId/enable` - enable course
+- `DELETE /api/admin/courses/:courseId` - delete course (cascade delete related sessions + attendance)
+
+### Admin sessions
+
+- `GET /api/admin/sessions` - list all non-deleted sessions
+- `GET /api/admin/courses/:courseId/sessions` - list sessions for specific course
+- `POST /api/admin/courses/:courseId/sessions` - create session
+- `PATCH /api/admin/sessions/:sessionId/activate` - activate session
+- `PATCH /api/admin/sessions/:sessionId/deactivate` - deactivate session
+- `DELETE /api/admin/sessions/:sessionId` - soft-delete session (attendance retained)
+
+### Admin rotation controls/live code
+
+- `GET /api/admin/sessions/current-codes` - live codes for currently running sessions
+- `PATCH /api/admin/sessions/:sessionId/rotation/start` - start/resume rotation for session
+- `PATCH /api/admin/sessions/:sessionId/rotation/stop` - pause/freeze current code for session
+
+### Reporting
+
+- `GET /api/admin/courses/:courseId/attendance-matrix` - per-course attendance table (rows: student ID from email local-part; columns: earliest attendance date without year + session hours without minutes)
 
 ---
 

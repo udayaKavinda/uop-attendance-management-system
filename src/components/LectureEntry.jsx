@@ -15,8 +15,7 @@ export default function LectureEntry() {
   const [submitting, setSubmitting] = useState(false);
   const [recorded, setRecorded] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
-  const [logoMissing, setLogoMissing] = useState(false);
-  const courseLabel = (item) => `${item.code} - ${item.name}`;
+  const courseLabel = (item) => `${item.code} — ${item.name}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -168,74 +167,72 @@ export default function LectureEntry() {
     );
   };
 
+  const noRunning = courses.length === 0 && !error;
+
   return (
-    <div className="app-shell">
-      <form className="auth-card" onSubmit={handleSubmit}>
-        <div className="card-content">
-          <div className="brand-row">
-            {!logoMissing ? (
-              <img
-                src="/uop-logo.png"
-                alt="University of Peradeniya logo"
-                className="brand-logo"
-                onError={() => setLogoMissing(true)}
-              />
-            ) : (
-              <span className="brand-fallback">UOP</span>
-            )}
-            <div>
-              <p className="brand-title">University of Peradeniya</p>
-              <p className="brand-subtitle">Attendance Management System</p>
-            </div>
+    <form className="student-panel page-fade" onSubmit={handleSubmit}>
+      <div className="card-content">
+        {!recorded && (
+          <>
+            <h2 className="card-title">Lecture attendance</h2>
+            <p className="card-subtitle">Select a running course, enter the code shown in class, and allow location when prompted.</p>
+          </>
+        )}
+        {error && <p className="error">{error}</p>}
+        {recorded && (
+          <div className="status-wrap">
+            <div className="success-icon">✓</div>
+            <h2 className="card-title">Attendance recorded</h2>
+            <p className="card-subtitle">Your attendance was saved for this session.</p>
           </div>
-          {!recorded && (
-            <>
-              <h2 className="card-title">Enter Lecture Code</h2>
-              <p className="card-subtitle">Location access is required to mark attendance.</p>
-            </>
-          )}
-          {error && <p className="error">{error}</p>}
-          {recorded && (
-            <div className="status-wrap">
-              <h2 className="card-title">Attendance Recorded</h2>
-              <p className="card-subtitle">Your attendance is recorded successfully.</p>
-            </div>
-          )}
-          <label className="field-label" htmlFor="courseSearch">Course</label>
-          <input
-            id="courseSearch"
-            className="input"
-            type="text"
-            list="runningCourseOptions"
-            placeholder="Search/select running course"
-            value={courseQuery}
-            onChange={(e) => setCourseQuery(e.target.value)}
-            required
-          />
-          <datalist id="runningCourseOptions">
-            {visibleCourses.map((item) => (
-              <option key={item._id} value={courseLabel(item)} />
-            ))}
-          </datalist>
-          {!recorded && (
-            <>
-              <label className="field-label" htmlFor="lectureCode" style={{ marginTop: '0.8rem' }}>Lecture Code</label>
-              <input
-                id="lectureCode"
-                className="input"
-                type="text"
-                placeholder="8-digit lecture code"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                required
-              />
-              <button className="primary-btn" type="submit" disabled={submitting || checkingStatus}>
-                {submitting ? 'Submitting...' : 'Submit'}
-              </button>
-            </>
-          )}
-        </div>
-      </form>
-    </div>
+        )}
+
+        {noRunning ? (
+          <div className="student-empty">
+            <div className="student-empty__icon" aria-hidden>📅</div>
+            <p className="student-empty__title">No lectures running right now</p>
+            <p className="student-empty__text">
+              When a session is active for your course, it will appear here automatically. This list refreshes every few seconds.
+            </p>
+          </div>
+        ) : (
+          <>
+            <label className="field-label" htmlFor="courseSearch">Course</label>
+            <input
+              id="courseSearch"
+              className="input"
+              type="text"
+              list="runningCourseOptions"
+              placeholder="Search or pick a running course"
+              value={courseQuery}
+              onChange={(e) => setCourseQuery(e.target.value)}
+              required
+            />
+            <datalist id="runningCourseOptions">
+              {visibleCourses.map((item) => (
+                <option key={item._id} value={courseLabel(item)} />
+              ))}
+            </datalist>
+            {!recorded && (
+              <>
+                <label className="field-label" htmlFor="lectureCode" style={{ marginTop: '0.85rem' }}>Lecture code</label>
+                <input
+                  id="lectureCode"
+                  className="input"
+                  type="text"
+                  placeholder="Code from lecturer"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  required
+                />
+                <button className="primary-btn" type="submit" disabled={submitting || checkingStatus}>
+                  {submitting ? 'Submitting…' : 'Submit attendance'}
+                </button>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </form>
   );
 }

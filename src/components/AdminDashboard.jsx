@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Polygon, useMapEvents } from 'react-leaflet';
 import {
   getAdminCourses,
@@ -7,7 +8,6 @@ import {
   disableAdminCourse,
   enableAdminCourse,
   createAdminSession,
-  getAdminAttendanceMatrix,
   getAdminAllSessions,
   activateAdminSession,
   deactivateAdminSession,
@@ -42,15 +42,15 @@ function sessionDistanceMinutes(session) {
 }
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('services');
   const [courses, setCourses] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [selectedCourseId, setSelectedCourseId] = useState('');
   const [sessionSearch, setSessionSearch] = useState('');
-  const [matrix, setMatrix] = useState(null);
   const [newCourseName, setNewCourseName] = useState('');
   const [newCourseCode, setNewCourseCode] = useState('');
-  const [sessionName, setSessionName] = useState('');
+  const [newCourseBatch, setNewCourseBatch] = useState('');
   const [lectureDay, setLectureDay] = useState('MON');
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('10:00');
@@ -63,6 +63,7 @@ export default function AdminDashboard() {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [toast, setToast] = useState('');
 
   const student = useMemo(() => JSON.parse(localStorage.getItem('student') || '{}'), []);
   const studentId = student?.studentId || '';
@@ -78,8 +79,8 @@ export default function AdminDashboard() {
     const disabled = all.filter((c) => !c.active);
     const ordered = [...enabled, ...disabled];
     setCourses(ordered);
-    if (!selectedCourseId && enabled[0]) setSelectedCourseId(String(enabled[0]._id));
-  }, [selectedCourseId, studentId]);
+    setSelectedCourseId((prev) => (prev ? prev : (enabled[0] ? String(enabled[0]._id) : '')));
+  }, [studentId]);
 
   const loadSessions = useCallback(async () => {
     const resp = await getAdminAllSessions(studentId);
@@ -88,16 +89,6 @@ export default function AdminDashboard() {
       return;
     }
     setSessions(resp.items || []);
-  }, [studentId]);
-
-  const loadMatrix = useCallback(async (courseId) => {
-    if (!courseId) {
-      setMatrix(null);
-      return;
-    }
-    const resp = await getAdminAttendanceMatrix(studentId, courseId);
-    if (resp.error) setError(resp.error);
-    else setMatrix(resp);
   }, [studentId]);
 
   useEffect(() => {
@@ -111,18 +102,12 @@ export default function AdminDashboard() {
     return () => { cancelled = true; };
   }, [loadCourses, loadSessions]);
 
-  useEffect(() => {
-    loadMatrix(selectedCourseId);
-  }, [loadMatrix, selectedCourseId]);
-
-  const selectedCourse = courses.find((c) => String(c._id) === String(selectedCourseId));
-
   const sortedFilteredSessions = useMemo(() => {
     const q = sessionSearch.trim().toLowerCase();
     return [...sessions]
       .filter((s) => s.course?.active)
       .filter((s) => {
-        const label = `${s.course?.code || ''} ${s.startTime || ''} ${s.endTime || ''} ${s.recurring ? 'recurring' : 'one-time'} ${s.name || ''}`.toLowerCase();
+        const label = `${s.course?.code || ''} ${s.startTime || ''} ${s.endTime || ''} ${s.recurring ? 'recurring' : 'one-time'}`.toLowerCase();
         return !q || label.includes(q);
       })
       .sort((a, b) => sessionDistanceMinutes(a) - sessionDistanceMinutes(b));
@@ -151,15 +136,33 @@ export default function AdminDashboard() {
     };
   }, [activeTab, studentId]);
 
+  useEffect(() => {
+    if (!message) return undefined;
+    setToast(message);
+    const t = setTimeout(() => setToast(''), 4200);
+    return () => clearTimeout(t);
+  }, [message]);
+
   const onCreateCourse = async () => {
     setWorking(true);
     setError('');
     setMessage('');
-    const resp = await createAdminCourse(studentId, { code: newCourseCode.trim(), name: newCourseName.trim() });
+    const batch = newCourseBatch.trim();
+    if (!batch) {
+      setError('Batch is required.');
+      setWorking(false);
+      return;
+    }
+    const resp = await createAdminCourse(studentId, {
+      code: newCourseCode.trim(),
+      batch,
+      name: newCourseName.trim(),
+    });
     if (resp.error) setError(resp.error);
     else {
       setMessage('Course added.');
       setNewCourseCode('');
+      setNewCourseBatch('');
       setNewCourseName('');
       await loadCourses();
     }
@@ -192,9 +195,10 @@ export default function AdminDashboard() {
 
   const onDeleteCourse = async (courseId) => {
     const targetCourse = courses.find((c) => String(c._id) === String(courseId));
-    const typed = window.prompt(`Type course code "${targetCourse?.code || ''}" to confirm delete:`);
-    if (!typed || typed.trim().toUpperCase() !== String(targetCourse?.code || '').toUpperCase()) {
-      setError('Course delete cancelled: course code did not match.');
+    const expect = `${targetCourse?.code || ''} ${targetCourse?.batch ?? ''}`.trim();
+    const typed = window.prompt(`Type code and batch separated by a space to confirm delete (e.g. "${expect}"):`);
+    if (!typed || typed.trim().toUpperCase() !== expect.toUpperCase()) {
+      setError('Course delete cancelled: code and batch did not match.');
       return;
     }
     setWorking(true);
@@ -239,7 +243,6 @@ export default function AdminDashboard() {
     setWorking(true);
     setError('');
     const resp = await createAdminSession(studentId, selectedCourseId, {
-      name: sessionName.trim(),
       lectureDay,
       startTime,
       endTime,
@@ -250,7 +253,6 @@ export default function AdminDashboard() {
     if (resp.error) setError(resp.error);
     else {
       setMessage('Session created.');
-      setSessionName('');
       setLectureDay('MON');
       setStartTime('08:00');
       setEndTime('10:00');
@@ -259,7 +261,6 @@ export default function AdminDashboard() {
       setPolygons([[]]);
       setActivePolygonIndex(0);
       await loadSessions();
-      await loadMatrix(selectedCourseId);
     }
     setWorking(false);
   };
@@ -297,7 +298,7 @@ export default function AdminDashboard() {
     if (resp.error) setError(resp.error);
     else {
       setMessage('Session deleted.');
-      await Promise.all([loadSessions(), loadMatrix(selectedCourseId)]);
+      await loadSessions();
     }
     setWorking(false);
   };
@@ -326,43 +327,65 @@ export default function AdminDashboard() {
     setWorking(false);
   };
 
-  if (loading) return <div className="app-shell"><div className="auth-card"><div className="card-content">Loading admin dashboard...</div></div></div>;
+  if (loading) {
+    return (
+      <div className="admin-surface page-fade">
+        <div className="admin-surface__inner" style={{ padding: '2.25rem', textAlign: 'center' }}>
+          <p className="section-desc" style={{ margin: 0 }}>Loading dashboard…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="app-shell">
-      <div className="auth-card admin-card admin-pro">
-        <div className="card-content">
-          <h2 className="card-title">Admin Services</h2>
-          {error && <p className="error">{error}</p>}
-          {message && <p className="card-subtitle">{message}</p>}
+    <>
+      {toast ? <div className="admin-flash" role="status">{toast}</div> : null}
+      <div className="admin-surface page-fade">
+        <div className="admin-surface__inner">
+          {error ? <p className="error">{error}</p> : null}
 
-          <div className="admin-tabs">
-            <button type="button" className={`tab-btn ${activeTab === 'services' ? 'active' : ''}`} onClick={() => setActiveTab('services')}>Admin Services</button>
-            <button type="button" className={`tab-btn ${activeTab === 'create' ? 'active' : ''}`} onClick={() => setActiveTab('create')}>Create Session</button>
-            <button type="button" className={`tab-btn ${activeTab === 'sessions' ? 'active' : ''}`} onClick={() => setActiveTab('sessions')}>Sessions</button>
+          <div className="admin-tabs-wrap">
+            <div className="admin-tabs">
+              <button type="button" className={`tab-btn ${activeTab === 'services' ? 'active' : ''}`} onClick={() => setActiveTab('services')}>Courses</button>
+              <button type="button" className={`tab-btn ${activeTab === 'create' ? 'active' : ''}`} onClick={() => setActiveTab('create')}>Create session</button>
+              <button type="button" className={`tab-btn ${activeTab === 'sessions' ? 'active' : ''}`} onClick={() => setActiveTab('sessions')}>Sessions</button>
+            </div>
           </div>
 
           {activeTab === 'services' && (
             <div className="tab-panel">
-              <div className="course-add-grid">
-                <input className="input" placeholder="Course code" value={newCourseCode} onChange={(e) => setNewCourseCode(e.target.value.toUpperCase())} />
+              <header className="section-head">
+                <p className="section-kicker">Catalog</p>
+                <h2 className="section-title">Courses &amp; attendance table</h2>
+                <p className="section-desc">Add or manage courses. Open a course to view the attendance table (student × sessions) in a dedicated report.</p>
+              </header>
+              <div className="course-add-stack">
+                <div className="course-add-grid">
+                  <input className="input" placeholder="Course code" value={newCourseCode} onChange={(e) => setNewCourseCode(e.target.value.toUpperCase())} />
+                  <input className="input" placeholder="Batch (required)" value={newCourseBatch} onChange={(e) => setNewCourseBatch(e.target.value)} />
+                  <button className="primary-btn" type="button" onClick={onCreateCourse} disabled={working}>Add course</button>
+                </div>
                 <input className="input" placeholder="Course name" value={newCourseName} onChange={(e) => setNewCourseName(e.target.value)} />
-                <button className="primary-btn" type="button" onClick={onCreateCourse} disabled={working}>Add Course</button>
               </div>
 
               <div className="course-list">
                 {courses.map((c) => (
                   <div
                     key={c._id}
-                    className={`course-item ${c.active ? 'enabled' : 'disabled'} ${String(selectedCourseId) === String(c._id) ? 'selected' : ''}`}
-                    onClick={() => setSelectedCourseId(String(c._id))}
+                    className={`course-item ${c.active ? 'enabled' : 'disabled'}`}
+                    onClick={() => navigate(`/admin/courses/${c._id}/matrix`)}
                     role="button"
                     tabIndex={0}
-                    onKeyDown={(e) => { if (e.key === 'Enter') setSelectedCourseId(String(c._id)); }}
+                    title="Open attendance table"
+                    onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/admin/courses/${c._id}/matrix`); }}
                   >
-                    <div>
-                      <p className="course-code">{c.code}</p>
-                      <p className="course-name">{c.name}</p>
+                    <div className="course-item__left">
+                      <div className="course-item__meta">
+                        <p className="course-code">{c.code}{c.batch ? ` · ${c.batch}` : ''}</p>
+                        <p className="course-name">{c.name}</p>
+                        <p className="course-item__hint">Open attendance table</p>
+                      </div>
+                      <span className="course-item__chevron" aria-hidden>›</span>
                     </div>
                     <div className="course-actions">
                       {c.active ? (
@@ -376,88 +399,101 @@ export default function AdminDashboard() {
                 ))}
               </div>
 
-              <h3 className="card-title" style={{ marginTop: 14 }}>Attendance Matrix {selectedCourse ? `- ${selectedCourse.code}` : ''}</h3>
-              {matrix && matrix.sessions?.length > 0 ? (
-                <div className="matrix-wrap">
-                  <table className="matrix-table">
-                    <thead>
-                      <tr>
-                        <th>Student ID</th>
-                        {matrix.sessions.map((s) => <th key={s._id}>{s.label}</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {matrix.rows.map((row) => (
-                        <tr key={`${row.studentId}-${row.email}`}>
-                          <td>{row.studentId}</td>
-                          {matrix.sessions.map((s) => <td key={`${row.studentId}-${s._id}`}>{row.attendance?.[s._id] ? 'P' : '-'}</td>)}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : <p className="card-subtitle">Select a course to view attendance matrix.</p>}
             </div>
           )}
 
           {activeTab === 'create' && (
             <div className="tab-panel">
-              <label className="field-label" htmlFor="sessionCourseSelect">Course</label>
-              <select id="sessionCourseSelect" className="input" value={selectedCourseId} onChange={(e) => setSelectedCourseId(e.target.value)}>
-                <option value="">Select course</option>
-                {courses.filter((c) => c.active).map((c) => <option key={c._id} value={c._id}>{c.code} - {c.name}</option>)}
-              </select>
-              <div className="admin-grid">
-                <input className="input" placeholder="Session name (optional)" value={sessionName} onChange={(e) => setSessionName(e.target.value)} />
-                <select className="input" value={lectureDay} onChange={(e) => setLectureDay(e.target.value)}>
-                  {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
-                </select>
-                <input className="input" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
-                <input className="input" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
-              </div>
-              <label className="field-label" htmlFor="recurringSelect">Recurring Session</label>
-              <select id="recurringSelect" className="input" value={recurring ? 'yes' : 'no'} onChange={(e) => setRecurring(e.target.value === 'yes')}>
-                <option value="yes">Yes</option>
-                <option value="no">No</option>
-              </select>
-              <label className="field-label" htmlFor="rotationSelect">Enable code rotation?</label>
-              <select id="rotationSelect" className="input" value={rotationEnabled ? 'yes' : 'no'} onChange={(e) => setRotationEnabled(e.target.value === 'yes')}>
-                <option value="no">No</option>
-                <option value="yes">Yes</option>
-              </select>
+              <header className="section-head">
+                <p className="section-kicker">Scheduling</p>
+                <h2 className="section-title">Create lecture session</h2>
+                <p className="section-desc">Choose course, weekly slot, recurrence, and draw one or more attendance geofences on the map.</p>
+              </header>
 
-              <div className="polygon-tools">
-                <label className="field-label">Map Polygons</label>
-                <select className="input" value={activePolygonIndex} onChange={(e) => setActivePolygonIndex(parseInt(e.target.value, 10))}>
-                  {polygons.map((_, idx) => <option key={`poly-${idx}`} value={idx}>Polygon {idx + 1}</option>)}
+              <div className="form-section">
+                <p className="form-section__label">Course</p>
+                <select id="sessionCourseSelect" className="input" value={selectedCourseId} onChange={(e) => setSelectedCourseId(e.target.value)}>
+                  <option value="">Select course</option>
+                  {courses.filter((c) => c.active).map((c) => (
+                    <option key={c._id} value={c._id}>{c.code}{c.batch ? ` (${c.batch})` : ''} — {c.name}</option>
+                  ))}
                 </select>
-                <div className="tool-row">
-                  <button type="button" className="pill-btn" onClick={addNewPolygon}>New Polygon</button>
-                  <button type="button" className="pill-btn warning" onClick={undoPoint}>Undo Point</button>
-                  <button type="button" className="pill-btn danger" onClick={clearCurrentPolygon}>Clear Polygon</button>
+              </div>
+
+              <div className="form-section">
+                <p className="form-section__label">Time window</p>
+                <div className="admin-grid admin-grid--schedule">
+                  <div>
+                    <label className="field-label" htmlFor="daySelect">Day</label>
+                    <select id="daySelect" className="input" value={lectureDay} onChange={(e) => setLectureDay(e.target.value)}>
+                      {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="startTime">Start</label>
+                    <input id="startTime" className="input" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="endTime">End</label>
+                    <input id="endTime" className="input" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+                  </div>
                 </div>
               </div>
-              <div className="map-wrap">
-                <MapContainer center={MAP_CENTER} zoom={16} scrollWheelZoom style={{ height: 320, width: '100%' }}>
-                  <TileLayer
-                    attribution="&copy; OpenStreetMap contributors"
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  />
-                  <MapClickCapture onAddPoint={addPoint} />
-                  {polygons.map((poly, idx) => (poly.length >= 3 ? (
-                    <Polygon key={`drawn-poly-${idx}`} positions={poly.map((p) => [p.lat, p.lng])} pathOptions={{ color: idx === activePolygonIndex ? '#7a1414' : '#2563eb' }} />
-                  ) : null))}
-                </MapContainer>
+
+              <div className="form-section">
+                <p className="form-section__label">Options</p>
+                <label className="field-label" htmlFor="recurringSelect">Recurring session</label>
+                <select id="recurringSelect" className="input" value={recurring ? 'yes' : 'no'} onChange={(e) => setRecurring(e.target.value === 'yes')}>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+                <label className="field-label" htmlFor="rotationSelect" style={{ marginTop: '0.75rem' }}>Enable code rotation?</label>
+                <select id="rotationSelect" className="input" value={rotationEnabled ? 'yes' : 'no'} onChange={(e) => setRotationEnabled(e.target.value === 'yes')}>
+                  <option value="no">No</option>
+                  <option value="yes">Yes</option>
+                </select>
               </div>
-              <button className="primary-btn" type="button" onClick={onCreateSession} disabled={working || !selectedCourseId}>Create Session</button>
+
+              <div className="form-section">
+                <p className="form-section__label">Geofence</p>
+                <div className="polygon-tools">
+                  <label className="field-label">Map polygons</label>
+                  <select className="input" value={activePolygonIndex} onChange={(e) => setActivePolygonIndex(parseInt(e.target.value, 10))}>
+                    {polygons.map((_, idx) => <option key={`poly-${idx}`} value={idx}>Polygon {idx + 1}</option>)}
+                  </select>
+                  <div className="tool-row">
+                    <button type="button" className="pill-btn" onClick={addNewPolygon}>New Polygon</button>
+                    <button type="button" className="pill-btn warning" onClick={undoPoint}>Undo Point</button>
+                    <button type="button" className="pill-btn danger" onClick={clearCurrentPolygon}>Clear Polygon</button>
+                  </div>
+                </div>
+                <div className="map-wrap">
+                  <MapContainer center={MAP_CENTER} zoom={16} scrollWheelZoom style={{ height: 320, width: '100%' }}>
+                    <TileLayer
+                      attribution="&copy; OpenStreetMap contributors"
+                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    />
+                    <MapClickCapture onAddPoint={addPoint} />
+                    {polygons.map((poly, idx) => (poly.length >= 3 ? (
+                      <Polygon key={`drawn-poly-${idx}`} positions={poly.map((p) => [p.lat, p.lng])} pathOptions={{ color: idx === activePolygonIndex ? '#7b61ff' : '#2563eb' }} />
+                    ) : null))}
+                  </MapContainer>
+                </div>
+                <button className="primary-btn" type="button" onClick={onCreateSession} disabled={working || !selectedCourseId}>Create session</button>
+              </div>
             </div>
           )}
 
           {activeTab === 'sessions' && (
             <div className="tab-panel">
+              <header className="section-head">
+                <p className="section-kicker">Operations</p>
+                <h2 className="section-title">Session control</h2>
+                <p className="section-desc">Search sessions, toggle activation, manage rotation during live lectures, or soft-delete while keeping attendance history.</p>
+              </header>
               <input
                 className="input"
-                placeholder="Search by course, time, session type..."
+                placeholder="Search by course, time, or type…"
                 value={sessionSearch}
                 onChange={(e) => setSessionSearch(e.target.value)}
               />
@@ -465,8 +501,11 @@ export default function AdminDashboard() {
                 {sortedFilteredSessions.map((s) => (
                   <div key={s._id} className={`session-item ${s.active ? 'state-active' : 'state-inactive'} ${s.course?.active ? '' : 'state-course-disabled'} ${runningSessionCodes[String(s._id)] ? 'state-running' : ''}`}>
                     <div>
-                      <p className="session-main">{s.course?.code} - {s.lectureDay} {s.startTime}-{s.endTime}</p>
-                      <p className="session-sub">{s.recurring ? 'Recurring' : 'Non-recurring'} {s.name ? `| ${s.name}` : ''}</p>
+                      <div className="session-item__head">
+                        <p className="session-main">{s.course?.code} — {s.lectureDay} {s.startTime}–{s.endTime}</p>
+                        {runningSessionCodes[String(s._id)] ? <span className="session-live-badge">Live</span> : null}
+                      </div>
+                      <p className="session-sub">{s.recurring ? 'Recurring' : 'One-time'}</p>
                       {runningSessionCodes[String(s._id)] && (
                         <div className="live-code-row">
                           <button
@@ -477,8 +516,8 @@ export default function AdminDashboard() {
                           >
                             {runningSessionCodes[String(s._id)].rotationPaused ? '⟳' : '⏸'}
                           </button>
-                          <p className="session-sub" style={{ color: '#065f46', fontWeight: 700, margin: 0 }}>
-                            Live code: {runningSessionCodes[String(s._id)].code}
+                          <p className="session-sub" style={{ color: '#4c1d95', fontWeight: 700, margin: 0 }}>
+                            Code: {runningSessionCodes[String(s._id)].code}
                             {runningSessionCodes[String(s._id)].rotationPaused
                               ? ' (Paused)'
                               : ` (${runningSessionCodes[String(s._id)].secondsRemaining}s)`}
@@ -499,6 +538,7 @@ export default function AdminDashboard() {
           )}
         </div>
       </div>
-    </div>
+    </>
   );
 }
+

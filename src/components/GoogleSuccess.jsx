@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getMe } from '../api';
 
@@ -9,6 +9,7 @@ function useQuery() {
 export default function GoogleSuccess() {
   const navigate = useNavigate();
   const query = useQuery();
+  const [lockupOk, setLockupOk] = useState(true);
 
   useEffect(() => {
     async function completeLogin() {
@@ -30,7 +31,6 @@ export default function GoogleSuccess() {
         }));
         navigate(role === 'admin' ? '/admin' : '/lecture');
       } catch {
-        // Fallback: do not block login success page if profile endpoint is temporarily unreachable.
         localStorage.setItem('student', JSON.stringify({
           studentId,
           role: 'student',
@@ -43,12 +43,21 @@ export default function GoogleSuccess() {
   }, [query, navigate]);
 
   return (
-    <div className="app-shell">
-      <div className="auth-card">
-        <div className="card-content status-wrap">
-          <h2 className="card-title">Signing you in...</h2>
-          <p className="card-subtitle">Please wait while we complete Google authentication.</p>
-        </div>
+    <div className="marketing-card page-fade">
+      <div className="login-hero" style={{ minHeight: lockupOk ? 100 : 48 }}>
+        {lockupOk && (
+          <img
+            src="/brand-lockup.png"
+            alt=""
+            className="login-hero-lockup"
+            style={{ maxHeight: 56 }}
+            onError={() => setLockupOk(false)}
+          />
+        )}
+      </div>
+      <div className="card-content status-wrap">
+        <h2 className="card-title">Signing you in…</h2>
+        <p className="card-subtitle">Completing Google authentication.</p>
       </div>
     </div>
   );

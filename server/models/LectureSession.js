@@ -7,7 +7,6 @@ const pointSchema = new mongoose.Schema({
 
 const lectureSessionSchema = new mongoose.Schema({
   course: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true, index: true },
-  name: { type: String, default: '', trim: true },
   lectureDay: {
     type: String,
     enum: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'],

@@ -1,0 +1,36 @@
+import React from 'react';
+import { Link, Outlet, useLocation } from 'react-router-dom';
+
+export default function AdminLayout() {
+  const { pathname } = useLocation();
+  const matrixMatch = pathname.match(/\/admin\/courses\/([^/]+)\/matrix$/);
+  const isMatrix = Boolean(matrixMatch);
+
+  return (
+    <div className="layout-admin" data-layout="admin">
+      <header className="admin-chrome">
+        <div className="admin-chrome__left">
+          <img src="/logo.png" alt="" className="admin-chrome__logo" />
+          <div>
+            <p className="admin-chrome__title">Attendance administration</p>
+            <p className="admin-chrome__sub">University of Peradeniya</p>
+          </div>
+        </div>
+        <nav className="admin-chrome__nav" aria-label="Admin">
+          {isMatrix ? (
+            <>
+              <Link to="/admin" className="admin-chrome__link">Dashboard</Link>
+              <span className="admin-chrome__sep" aria-hidden>/</span>
+              <span className="admin-chrome__crumb">Attendance table</span>
+            </>
+          ) : (
+            <span className="admin-chrome__pill">Console</span>
+          )}
+        </nav>
+      </header>
+      <div className="layout-admin__body">
+        <Outlet />
+      </div>
+    </div>
+  );
+}

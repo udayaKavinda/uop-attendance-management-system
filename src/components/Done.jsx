@@ -10,7 +10,7 @@ export default function Done() {
           <div className="brand-row" style={{ justifyContent: 'center' }}>
             {!logoMissing ? (
               <img
-                src="/uop-logo.png"
+                src="/logo.png"
                 alt="University of Peradeniya logo"
                 className="brand-logo"
                 onError={() => setLogoMissing(true)}

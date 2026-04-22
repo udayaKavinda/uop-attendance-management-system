@@ -1,8 +1,12 @@
-import { Navigate, Routes, Route } from 'react-router-dom';
+import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import Login from './components/Login';
 import LectureEntry from './components/LectureEntry';
 import GoogleSuccess from './components/GoogleSuccess';
 import AdminDashboard from './components/AdminDashboard';
+import AttendanceTablePage from './components/AttendanceTablePage';
+import MarketingLayout from './layouts/MarketingLayout';
+import StudentLayout from './layouts/StudentLayout';
+import AdminLayout from './layouts/AdminLayout';
 
 function isLoggedIn() {
   try {
@@ -13,10 +17,6 @@ function isLoggedIn() {
   } catch {
     return false;
   }
-}
-
-function ProtectedRoute({ children }) {
-  return isLoggedIn() ? children : <Navigate to="/" replace />;
 }
 
 function roleOfCurrentUser() {
@@ -30,22 +30,41 @@ function roleOfCurrentUser() {
   }
 }
 
-function StudentRoute({ children }) {
-  return roleOfCurrentUser() === 'admin' ? <Navigate to="/admin" replace /> : children;
+function RequireAuth() {
+  return isLoggedIn() ? <Outlet /> : <Navigate to="/" replace />;
 }
 
-function AdminRoute({ children }) {
-  return roleOfCurrentUser() === 'admin' ? children : <Navigate to="/lecture" replace />;
+function RequireStudent() {
+  return roleOfCurrentUser() !== 'admin' ? <Outlet /> : <Navigate to="/admin" replace />;
+}
+
+function RequireAdmin() {
+  return roleOfCurrentUser() === 'admin' ? <Outlet /> : <Navigate to="/lecture" replace />;
 }
 
 function App() {
   return (
     <div className="App">
       <Routes>
-        <Route path="/" element={<Login />} />
-        <Route path="/login/success" element={<GoogleSuccess />} />
-        <Route path="/lecture" element={<ProtectedRoute><StudentRoute><LectureEntry /></StudentRoute></ProtectedRoute>} />
-        <Route path="/admin" element={<ProtectedRoute><AdminRoute><AdminDashboard /></AdminRoute></ProtectedRoute>} />
+        <Route element={<MarketingLayout />}>
+          <Route path="/" element={<Login />} />
+          <Route path="/login/success" element={<GoogleSuccess />} />
+        </Route>
+
+        <Route element={<RequireAuth />}>
+          <Route element={<RequireStudent />}>
+            <Route path="/lecture" element={<StudentLayout />}>
+              <Route index element={<LectureEntry />} />
+            </Route>
+          </Route>
+
+          <Route element={<RequireAdmin />}>
+            <Route path="/admin" element={<AdminLayout />}>
+              <Route index element={<AdminDashboard />} />
+              <Route path="courses/:courseId/matrix" element={<AttendanceTablePage />} />
+            </Route>
+          </Route>
+        </Route>
       </Routes>
     </div>
   );
