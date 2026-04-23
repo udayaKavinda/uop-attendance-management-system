@@ -574,7 +574,7 @@ export default function AdminDashboard() {
               <header className="section-head">
                 <p className="section-kicker">Catalog</p>
                 <h2 className="section-title">Courses &amp; attendance table</h2>
-                <p className="section-desc">Add or manage courses. Open a course to view the attendance table (student × sessions) in a dedicated report. Admins assign each course to a lecturer; lecturers only see their own courses.</p>
+                <p className="section-desc">Add or manage courses. Open a course to view the attendance table in a dedicated report.</p>
               </header>
               <div className="course-add-stack">
                 <div className="course-add-grid">
@@ -612,8 +612,7 @@ export default function AdminDashboard() {
                         <p className="course-code">{c.code}{c.batch ? ` · ${c.batch}` : ''}</p>
                         <p className="course-name">{c.name}</p>
                         <p className="course-item__hint">
-                          {c.lecturer?.name ? `Owner: ${c.lecturer.name} · ` : ''}
-                          Open attendance table
+                          {c.lecturer?.name ? `Owner: ${c.lecturer.name}` : ''}
                         </p>
                       </div>
                       <span className="course-item__chevron" aria-hidden>›</span>
@@ -653,8 +652,7 @@ export default function AdminDashboard() {
                 <p className="section-kicker">Scheduling</p>
                 <h2 className="section-title">Create lecture session</h2>
                 <p className="section-desc">
-                  Choose course, weekly slot, and recurrence. Draw geofences by clicking the map (same as before).
-                  Named polygon presets (for example a shared lab outline) are optional—skip them if you prefer your own shapes.
+                  You can create a session by choosing a course, selecting the weekly time slot and recurrence, then creating geofences by clicking on the map or using preset geofences for labs and lecture halls.
                 </p>
               </header>
 
@@ -695,7 +693,7 @@ export default function AdminDashboard() {
                   <option value="yes">Yes</option>
                   <option value="no">No</option>
                 </select>
-                <label className="field-label" htmlFor="rotationSelect" style={{ marginTop: '0.75rem' }}>Enable code rotation?</label>
+                <label className="field-label" htmlFor="rotationSelect" style={{ marginTop: '0.75rem' }}>Enable pin rotation</label>
                 <select id="rotationSelect" className="input" value={rotationEnabled ? 'yes' : 'no'} onChange={(e) => setRotationEnabled(e.target.value === 'yes')}>
                   <option value="no">No</option>
                   <option value="yes">Yes</option>
@@ -758,7 +756,7 @@ export default function AdminDashboard() {
               <header className="section-head">
                 <p className="section-kicker">Operations</p>
                 <h2 className="section-title">Session control</h2>
-                <p className="section-desc">Search sessions, toggle activation, manage rotation during live lectures, or soft-delete while keeping attendance history.</p>
+                <p className="section-desc">Search sessions, toggle activation, manage pin rotation during live lectures, or soft-delete while keeping attendance history.</p>
               </header>
               <input
                 className="input"

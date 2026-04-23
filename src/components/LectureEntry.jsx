@@ -175,7 +175,7 @@ export default function LectureEntry() {
         {!recorded && (
           <>
             <h2 className="card-title">Lecture attendance</h2>
-            <p className="card-subtitle">Select a running course, enter the code shown in class, and allow location when prompted.</p>
+              <p className="card-subtitle">Select a running course, enter the pin shown in class, and allow location when prompted.</p>
           </>
         )}
         {error && <p className="error">{error}</p>}

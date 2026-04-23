@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
+import SiteFooter from '../components/SiteFooter';
 
 function staffSubtitle() {
   try {
@@ -44,6 +45,7 @@ export default function AdminLayout() {
       <div className="layout-admin__body">
         <Outlet />
       </div>
+      <SiteFooter />
     </div>
   );
 }

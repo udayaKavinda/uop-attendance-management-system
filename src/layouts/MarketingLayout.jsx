@@ -1,5 +1,6 @@
 import React from 'react';
 import { Outlet } from 'react-router-dom';
+import SiteFooter from '../components/SiteFooter';
 
 export default function MarketingLayout() {
   return (
@@ -19,6 +20,7 @@ export default function MarketingLayout() {
           <Outlet />
         </main>
       </div>
+      <SiteFooter />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { Outlet } from 'react-router-dom';
+import SiteFooter from '../components/SiteFooter';
 
 export default function StudentLayout() {
   const student = useMemo(() => {
@@ -29,6 +30,7 @@ export default function StudentLayout() {
       <main className="layout-student__main">
         <Outlet />
       </main>
+      <SiteFooter />
     </div>
   );
 }
