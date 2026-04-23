@@ -12,6 +12,7 @@ const attendanceSchema = new mongoose.Schema({
   location: {
     lat: Number,
     lng: Number,
+    accuracy: Number,
   },
 });
 

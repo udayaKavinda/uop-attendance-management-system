@@ -32,9 +32,12 @@ body {
   font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   background-color: var(--app-bg);
   background-image:
-    radial-gradient(circle at 12% 18%, rgba(123, 97, 255, 0.07) 0%, transparent 42%),
-    radial-gradient(circle at 88% 8%, rgba(99, 102, 241, 0.08) 0%, transparent 38%),
-    radial-gradient(circle at 80% 72%, rgba(251, 191, 36, 0.06) 0%, transparent 36%);
+    linear-gradient(rgba(247, 248, 250, 0.55), rgba(247, 248, 250, 0.6)),
+    url('../assets/oB9QD.jpg');
+  background-size: cover;
+  background-position: center center;
+  background-attachment: fixed;
+  background-repeat: no-repeat;
   color: var(--app-ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -666,14 +669,25 @@ body {
   margin: 1.25rem auto 0;
   padding: 0.7rem 1rem 1.05rem;
   width: min(1120px, calc(100% - 1.5rem));
-  border-top: 1px solid var(--app-border);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  box-shadow: none;
   text-align: center;
+  filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.28));
 }
 
 .site-footer__text {
   margin: 0;
-  color: var(--app-muted);
+  color: #ffffff;
   font-size: 0.78rem;
+  font-weight: 700;
   line-height: 1.4;
   letter-spacing: 0.01em;
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.28),
+    0 2px 0 rgba(0, 0, 0, 0.3),
+    0 4px 10px rgba(0, 0, 0, 0.45);
+  transform: perspective(520px) translateZ(0.1px);
 }

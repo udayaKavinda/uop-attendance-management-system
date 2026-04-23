@@ -91,6 +91,65 @@ function isPointInsideAnyPolygon(lat, lng, polygons = []) {
   return polygons.some((polygon) => isPointInsidePolygon(lat, lng, polygon));
 }
 
+function latLngToXYMeters(lat, lng, originLat, originLng) {
+  const R = 6371000;
+  const x = (lng - originLng) * (Math.PI / 180) * R * Math.cos((originLat * Math.PI) / 180);
+  const y = (lat - originLat) * (Math.PI / 180) * R;
+  return { x, y };
+}
+
+function pointToSegmentDistanceMeters(pointLat, pointLng, a, b) {
+  const originLat = pointLat;
+  const originLng = pointLng;
+  const p = latLngToXYMeters(pointLat, pointLng, originLat, originLng);
+  const p1 = latLngToXYMeters(a.lat, a.lng, originLat, originLng);
+  const p2 = latLngToXYMeters(b.lat, b.lng, originLat, originLng);
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) {
+    const ddx = p.x - p1.x;
+    const ddy = p.y - p1.y;
+    return Math.sqrt(ddx * ddx + ddy * ddy);
+  }
+  let t = ((p.x - p1.x) * dx + (p.y - p1.y) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const projX = p1.x + t * dx;
+  const projY = p1.y + t * dy;
+  const ddx = p.x - projX;
+  const ddy = p.y - projY;
+  return Math.sqrt(ddx * ddx + ddy * ddy);
+}
+
+function minDistanceToAnyPolygonEdgeMeters(lat, lng, polygons = []) {
+  let min = Number.POSITIVE_INFINITY;
+  for (const polygon of polygons || []) {
+    if (!Array.isArray(polygon) || polygon.length < 2) continue;
+    for (let i = 0; i < polygon.length; i += 1) {
+      const a = polygon[i];
+      const b = polygon[(i + 1) % polygon.length];
+      const d = pointToSegmentDistanceMeters(lat, lng, a, b);
+      if (d < min) min = d;
+    }
+  }
+  return min;
+}
+
+function isWithinGeofenceWithAccuracy(lat, lng, accuracy, polygons = []) {
+  const inside = isPointInsideAnyPolygon(lat, lng, polygons);
+  const accuracyMeters = Number(accuracy);
+  // If no valid accuracy is provided, fallback to strict inside-polygon check.
+  if (!Number.isFinite(accuracyMeters) || accuracyMeters <= 0) return inside;
+
+  // If accuracy is above 20m, use strict inside-polygon decision only.
+  if (accuracyMeters > 20) return inside;
+
+  // If accuracy is 20m or below, allow edge-tolerance using the accuracy radius.
+  if (inside) return true;
+  const edgeDistance = minDistanceToAnyPolygonEdgeMeters(lat, lng, polygons);
+  return edgeDistance <= accuracyMeters;
+}
+
 function sessionCodeKey(sessionId) {
   return `session:${sessionId}`;
 }
@@ -897,30 +956,8 @@ app.get('/api/attendance-status', async (req, res) => {
 });
 
 app.post('/api/verify-lecture', async (req, res) => {
-  const { lectureCode: submitted, courseId, lat, lng } = req.body;
-  try {
-    const resolved = await resolveActiveSessionForCourse(courseId);
-    if (resolved.error) return res.status(400).json({ error: resolved.error });
-    if (!lectureCode.hasValidLocation(lat, lng)) {
-      return res.status(400).json({ error: 'Valid latitude and longitude are required' });
-    }
-    if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
-      return res.status(400).json({ error: 'Invalid or expired lecture code' });
-    }
-    const schedule = checkScheduleWindow(resolved.session);
-    if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    if (!isPointInsideAnyPolygon(Number(lat), Number(lng), resolved.session.polygons || [])) {
-      return res.status(400).json({ error: 'You are outside the allowed attendance area' });
-    }
-    return res.json({ success: true, sessionId: resolved.session._id });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/record-attendance', async (req, res) => {
   const {
-    studentId, lectureCode: submitted, courseId, method, lat, lng,
+    lectureCode: submitted, courseId, lat, lng, accuracy,
   } = req.body;
   try {
     const resolved = await resolveActiveSessionForCourse(courseId);
@@ -933,7 +970,31 @@ app.post('/api/record-attendance', async (req, res) => {
     }
     const schedule = checkScheduleWindow(resolved.session);
     if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    if (!isPointInsideAnyPolygon(Number(lat), Number(lng), resolved.session.polygons || [])) {
+    if (!isWithinGeofenceWithAccuracy(Number(lat), Number(lng), Number(accuracy), resolved.session.polygons || [])) {
+      return res.status(400).json({ error: 'You are outside the allowed attendance area' });
+    }
+    return res.json({ success: true, sessionId: resolved.session._id });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/record-attendance', async (req, res) => {
+  const {
+    studentId, lectureCode: submitted, courseId, method, lat, lng, accuracy,
+  } = req.body;
+  try {
+    const resolved = await resolveActiveSessionForCourse(courseId);
+    if (resolved.error) return res.status(400).json({ error: resolved.error });
+    if (!lectureCode.hasValidLocation(lat, lng)) {
+      return res.status(400).json({ error: 'Valid latitude and longitude are required' });
+    }
+    if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
+      return res.status(400).json({ error: 'Invalid or expired lecture code' });
+    }
+    const schedule = checkScheduleWindow(resolved.session);
+    if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
+    if (!isWithinGeofenceWithAccuracy(Number(lat), Number(lng), Number(accuracy), resolved.session.polygons || [])) {
       return res.status(400).json({ error: 'You are outside the allowed attendance area' });
     }
 
@@ -956,7 +1017,7 @@ app.post('/api/record-attendance', async (req, res) => {
       lectureCode: normalizedCode,
       attendanceDate,
       method,
-      location: { lat: Number(lat), lng: Number(lng) },
+      location: { lat: Number(lat), lng: Number(lng), accuracy: Number(accuracy) },
     });
     await attendance.save();
     res.json({ success: true, attendance });

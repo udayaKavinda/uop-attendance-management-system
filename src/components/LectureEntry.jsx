@@ -125,7 +125,7 @@ export default function LectureEntry() {
 
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
         try {
           const trimmed = code.trim();
           const verify = await verifyLecture({
@@ -133,6 +133,7 @@ export default function LectureEntry() {
             lectureCode: trimmed,
             lat: latitude,
             lng: longitude,
+            accuracy,
           });
           if (verify.success) {
             const student = JSON.parse(localStorage.getItem('student') || '{}');
@@ -144,6 +145,7 @@ export default function LectureEntry() {
               method,
               lat: latitude,
               lng: longitude,
+              accuracy,
             });
             if (record.success) {
               setRecorded(true);
