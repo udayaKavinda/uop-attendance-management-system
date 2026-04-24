@@ -259,13 +259,18 @@ function normalizePolygonsInput(polygons) {
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.set('trust proxy', 1);
 
 // session support required for Passport's req.login() after OAuth
 app.use(session({
   secret: process.env.SESSION_SECRET || 'attendance-dev-secret-change-in-production',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: process.env.NODE_ENV === 'production' },
+  proxy: true,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+  },
 }));
 app.use(passport.initialize());
 app.use(passport.session());

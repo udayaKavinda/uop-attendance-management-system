@@ -61,7 +61,8 @@ export default function Login() {
           className="primary-btn"
           onClick={() => {
             const base = process.env.REACT_APP_API_BASE
-              || (window.location.port === '3000' ? 'http://localhost:5000' : '');
+              || (window.location.port === '3000' ? 'http://localhost:5000' : '')
+              || '';
             window.location.href = `${base}/auth/google`;
           }}
         >
