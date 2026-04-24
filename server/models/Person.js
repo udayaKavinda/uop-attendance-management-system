@@ -13,7 +13,6 @@ const personSchema = new mongoose.Schema({
   deleted: { type: Boolean, default: false },
 }, { timestamps: true, collection: 'people' });
 
-personSchema.index({ email: 1 });
 personSchema.index({ role: 1, deleted: 1 });
 
 module.exports = mongoose.model('Person', personSchema);
