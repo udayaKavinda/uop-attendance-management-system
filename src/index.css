@@ -651,6 +651,26 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
+/* Create session: Leaflet uses z-index ~400+; keep preset popover above the map */
+.preset-dropdown-anchor {
+  position: relative;
+  z-index: 10000;
+}
+
+.preset-dropdown-host {
+  position: relative;
+  max-width: 520px;
+}
+
+.preset-dropdown-panel {
+  z-index: 1;
+}
+
+.map-wrap--below-preset-dropdown {
+  position: relative;
+  z-index: 0;
+}
+
 @media (max-width: 760px) {
   .admin-grid {
     grid-template-columns: 1fr;

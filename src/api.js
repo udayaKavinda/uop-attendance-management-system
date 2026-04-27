@@ -123,10 +123,20 @@ export async function deleteAdminLecturer(studentId, lecturerId) {
 }
 
 export async function getPolygonPresets(studentId) {
-  const resp = await fetch(`${apiBase()}/api/admin/polygon-presets`, {
-    headers: { 'X-Student-Id': studentId || '' },
-  });
-  return resp.json();
+  try {
+    const resp = await fetch(`${apiBase()}/api/admin/polygon-presets`, {
+      headers: { 'X-Student-Id': studentId || '' },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      return { error: data.error || `Request failed (${resp.status})`, items: [] };
+    }
+    const raw = data.items ?? data.data;
+    const items = Array.isArray(raw) ? raw : (Array.isArray(data) ? data : []);
+    return { items };
+  } catch (err) {
+    return { error: err?.message || 'Failed to fetch polygon presets', items: [] };
+  }
 }
 
 export async function createPolygonPreset(studentId, payload) {

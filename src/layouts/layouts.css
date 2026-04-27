@@ -323,7 +323,8 @@
   border: 1px solid var(--app-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
-  overflow: hidden;
+  /* allow absolute dropdowns (e.g. polygon presets) to show above the Leaflet map */
+  overflow: visible;
 }
 
 .admin-surface__inner {

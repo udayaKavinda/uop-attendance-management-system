@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback, useEffect, useMemo, useRef, useState,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Polygon, useMapEvents } from 'react-leaflet';
 import {
@@ -63,8 +65,7 @@ export default function AdminDashboard() {
   const [endTime, setEndTime] = useState('10:00');
   const [recurring, setRecurring] = useState(true);
   const [rotationEnabled, setRotationEnabled] = useState(false);
-  const [polygons, setPolygons] = useState([[]]);
-  const [activePolygonIndex, setActivePolygonIndex] = useState(0);
+  const [selectedPresetIds, setSelectedPresetIds] = useState([]);
   const [runningSessionCodes, setRunningSessionCodes] = useState({});
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
@@ -78,10 +79,13 @@ export default function AdminDashboard() {
   const [newLecturerPhone, setNewLecturerPhone] = useState('');
   const [newCourseLecturerId, setNewCourseLecturerId] = useState('');
   const [polygonPresets, setPolygonPresets] = useState([]);
-  const [presetPickerId, setPresetPickerId] = useState('');
   const [presetTabName, setPresetTabName] = useState('');
   const [presetDrawPolygons, setPresetDrawPolygons] = useState([[]]);
   const [presetDrawActiveIdx, setPresetDrawActiveIdx] = useState(0);
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false);
+  const [presetPickerLoading, setPresetPickerLoading] = useState(false);
+  const [presetPickerError, setPresetPickerError] = useState('');
+  const presetDropdownRef = useRef(null);
 
   const student = useMemo(() => JSON.parse(localStorage.getItem('student') || '{}'), []);
   const studentId = student?.studentId || '';
@@ -287,31 +291,57 @@ export default function AdminDashboard() {
     setWorking(false);
   };
 
-  const addPoint = (point) => {
-    setPolygons((prev) => prev.map((poly, idx) => (idx === activePolygonIndex ? [...poly, point] : poly)));
+  const selectedPresetPolygons = useMemo(() => {
+    if (!Array.isArray(selectedPresetIds) || selectedPresetIds.length === 0) return [];
+    const selected = polygonPresets.filter((p) => selectedPresetIds.includes(String(p._id)));
+    return selected
+      .flatMap((preset) => (preset.polygons || []))
+      .map((poly) => poly
+        .map((pt) => ({ lat: Number(pt.lat), lng: Number(pt.lng) }))
+        .filter((pt) => Number.isFinite(pt.lat) && Number.isFinite(pt.lng)))
+      .filter((poly) => poly.length >= 3);
+  }, [polygonPresets, selectedPresetIds]);
+
+  const togglePresetSelection = (presetId) => {
+    const id = String(presetId);
+    setSelectedPresetIds((prev) => (prev.includes(id)
+      ? prev.filter((x) => x !== id)
+      : [...prev, id]));
   };
 
-  const undoPoint = () => {
-    setPolygons((prev) => prev.map((poly, idx) => (idx === activePolygonIndex ? poly.slice(0, -1) : poly)));
-  };
+  useEffect(() => {
+    if (!presetMenuOpen) return undefined;
+    function handlePointerDown(event) {
+      const el = presetDropdownRef.current;
+      if (el && !el.contains(event.target)) {
+        setPresetMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [presetMenuOpen]);
 
-  const clearCurrentPolygon = () => {
-    setPolygons((prev) => prev.map((poly, idx) => (idx === activePolygonIndex ? [] : poly)));
-  };
-
-  const addNewPolygon = () => {
-    setPolygons((prev) => {
-      const next = [...prev, []];
-      setActivePolygonIndex(next.length - 1);
-      return next;
-    });
-  };
-
-  /** Discard every ring (e.g. after merging a preset you do not want) and draw from scratch on the map. */
-  const resetAllPolygons = () => {
-    setPolygons([[]]);
-    setActivePolygonIndex(0);
-    setError('');
+  const onTogglePresetMenu = async () => {
+    const nextOpen = !presetMenuOpen;
+    setPresetMenuOpen(nextOpen);
+    if (nextOpen) {
+      setPresetPickerError('');
+      setPresetPickerLoading(true);
+      try {
+        const resp = await getPolygonPresets(studentId);
+        if (resp.error) {
+          setPresetPickerError(String(resp.error));
+        } else {
+          setPolygonPresets(resp.items || []);
+        }
+      } catch (err) {
+        setPresetPickerError(err?.message || 'Failed to load presets');
+      } finally {
+        setPresetPickerLoading(false);
+      }
+    } else {
+      setPresetPickerError('');
+    }
   };
 
   const onCreateSession = async () => {
@@ -319,9 +349,12 @@ export default function AdminDashboard() {
       setError('Select a course first.');
       return;
     }
-    const normalizedPolygons = polygons.filter((p) => p.length >= 3);
-    if (normalizedPolygons.length === 0) {
-      setError('Draw at least one polygon with 3 or more points.');
+    if (selectedPresetIds.length === 0) {
+      setError('Select at least one polygon preset.');
+      return;
+    }
+    if (selectedPresetPolygons.length === 0) {
+      setError('Selected preset(s) do not contain valid polygons.');
       return;
     }
     setWorking(true);
@@ -332,7 +365,7 @@ export default function AdminDashboard() {
       endTime,
       recurring,
       rotationEnabled,
-      polygons: normalizedPolygons,
+      polygons: selectedPresetPolygons,
     });
     if (resp.error) setError(resp.error);
     else {
@@ -342,8 +375,7 @@ export default function AdminDashboard() {
       setEndTime('10:00');
       setRecurring(true);
       setRotationEnabled(false);
-      setPolygons([[]]);
-      setActivePolygonIndex(0);
+      setSelectedPresetIds([]);
       await loadSessions();
     }
     setWorking(false);
@@ -421,29 +453,6 @@ export default function AdminDashboard() {
       await loadCourses();
     }
     setWorking(false);
-  };
-
-  const mergePresetPolygons = () => {
-    const preset = polygonPresets.find((p) => String(p._id) === presetPickerId);
-    if (!preset || !Array.isArray(preset.polygons) || preset.polygons.length === 0) {
-      setError('Choose a preset that includes at least one polygon.');
-      return;
-    }
-    setError('');
-    const rings = preset.polygons.map((poly) => poly.map((pt) => ({ lat: Number(pt.lat), lng: Number(pt.lng) }))
-      .filter((pt) => Number.isFinite(pt.lat) && Number.isFinite(pt.lng)));
-    const validRings = rings.filter((r) => r.length >= 3);
-    if (validRings.length === 0) {
-      setError('That preset has no valid polygons.');
-      return;
-    }
-    setPolygons((prev) => {
-      const kept = prev.filter((p) => p.length > 0);
-      const next = [...kept, ...validRings];
-      const idx = Math.max(0, next.length - 1);
-      setActivePolygonIndex(idx);
-      return next.length ? next : [[]];
-    });
   };
 
   const onCreateLecturer = async () => {
@@ -660,7 +669,7 @@ export default function AdminDashboard() {
                 <p className="section-kicker">Scheduling</p>
                 <h2 className="section-title">Create lecture session</h2>
                 <p className="section-desc">
-                  You can create a session by choosing a course, selecting the weekly time slot and recurrence, then creating geofences by clicking on the map or using preset geofences for labs and lecture halls.
+                  You can create a session by choosing a course, selecting the weekly time slot and recurrence, then selecting one or more preset geofences for labs and lecture halls.
                 </p>
               </header>
 
@@ -711,46 +720,108 @@ export default function AdminDashboard() {
               <div className="form-section">
                 <p className="form-section__label">Geofence</p>
                 <p className="section-desc" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-                  Click the map to place corners for the selected polygon. You do not have to use a preset—draw your own area whenever you like.
+                  Select one or more polygon presets. Selected preset polygons are shown automatically on the map.
                 </p>
-                {polygonPresets.length > 0 ? (
-                  <div className="polygon-tools" style={{ marginBottom: '0.75rem' }}>
-                    <label className="field-label" htmlFor="presetPick">Optional polygon preset</label>
-                    <p className="section-desc" style={{ marginTop: '0.25rem', marginBottom: '0.5rem', fontSize: '0.9em' }}>
-                      Merge a saved outline as a starting point, or ignore this and draw only on the map.
-                    </p>
-                    <div className="tool-row" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
-                      <select id="presetPick" className="input" style={{ flex: '1 1 200px' }} value={presetPickerId} onChange={(e) => setPresetPickerId(e.target.value)}>
-                        <option value="">Select preset…</option>
-                        {polygonPresets.map((pr) => (
-                          <option key={pr._id} value={pr._id}>{pr.name}</option>
-                        ))}
-                      </select>
-                      <button type="button" className="pill-btn" onClick={mergePresetPolygons}>Merge preset into map</button>
+                <div className="polygon-tools preset-dropdown-anchor" style={{ marginBottom: '0.75rem' }}>
+                  <label className="field-label" htmlFor="presetPickerBtn">Polygon presets</label>
+                  <p className="section-desc" style={{ marginTop: '0.25rem', marginBottom: '0.5rem', fontSize: '0.9em' }}>
+                    Open the dropdown and click the + icon to add a preset to the map.
+                  </p>
+                  <div className="preset-dropdown-host" ref={presetDropdownRef}>
+                    <div className="tool-row" style={{ marginBottom: 6 }}>
+                      <button
+                        id="presetPickerBtn"
+                        type="button"
+                        className="input"
+                        style={{ flex: '1 1 auto', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+                        onClick={onTogglePresetMenu}
+                      >
+                        <span>{selectedPresetIds.length > 0 ? `${selectedPresetIds.length} preset(s) selected` : 'Choose preset(s)…'}</span>
+                        <span aria-hidden>{presetMenuOpen ? '▲' : '▼'}</span>
+                      </button>
                     </div>
-                  </div>
-                ) : null}
-                <div className="polygon-tools">
-                  <label className="field-label">Draw on map (manual polygons)</label>
-                  <select className="input" value={activePolygonIndex} onChange={(e) => setActivePolygonIndex(parseInt(e.target.value, 10))}>
-                    {polygons.map((_, idx) => <option key={`poly-${idx}`} value={idx}>Polygon {idx + 1}</option>)}
-                  </select>
-                  <div className="tool-row">
-                    <button type="button" className="pill-btn" onClick={addNewPolygon}>New Polygon</button>
-                    <button type="button" className="pill-btn warning" onClick={undoPoint}>Undo Point</button>
-                    <button type="button" className="pill-btn danger" onClick={clearCurrentPolygon}>Clear Polygon</button>
-                    <button type="button" className="pill-btn" onClick={resetAllPolygons} title="Remove every ring and start drawing from scratch">Reset all polygons</button>
+                    {presetMenuOpen ? (
+                      <div
+                        className="preset-dropdown-panel"
+                        style={{
+                          position: 'absolute',
+                          top: 'calc(100% + 6px)',
+                          left: 0,
+                          right: 0,
+                          maxWidth: 520,
+                          background: '#fff',
+                          border: '1px solid #dbe3f0',
+                          borderRadius: 10,
+                          boxShadow: '0 10px 24px rgba(15, 23, 42, 0.12)',
+                          maxHeight: 260,
+                          overflowY: 'auto',
+                          padding: 6,
+                        }}
+                      >
+                        {presetPickerLoading ? (
+                          <p style={{ margin: 0, padding: 10, color: '#64748b' }}>Loading presets…</p>
+                        ) : null}
+                        {!presetPickerLoading && presetPickerError ? (
+                          <p style={{ margin: 0, padding: 10, color: '#b91c1c', fontSize: 13, lineHeight: 1.45 }}>
+                            <strong>Could not load presets</strong>
+                            <br />
+                            {presetPickerError}
+                            <br />
+                            <span style={{ color: '#64748b' }}>If you use a tunnel, try again when the connection is stable. The admin Presets tab uses the same API.</span>
+                          </p>
+                        ) : null}
+                        {!presetPickerLoading && !presetPickerError && polygonPresets.length === 0 ? (
+                          <p style={{ margin: 0, padding: 10, color: '#64748b' }}>No polygon presets in the system yet. Ask an admin to add them under the Presets tab.</p>
+                        ) : null}
+                        {!presetPickerLoading && !presetPickerError && polygonPresets.length > 0 ? polygonPresets.map((pr) => {
+                          const isSelected = selectedPresetIds.includes(String(pr._id));
+                          return (
+                            <div
+                              key={pr._id}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                                padding: '8px 10px',
+                                borderRadius: 8,
+                                marginBottom: 4,
+                                background: isSelected ? '#dcfce7' : '#f8fafc',
+                                border: isSelected ? '1px solid #22c55e' : '1px solid transparent',
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <p style={{ margin: 0, fontWeight: 700, color: isSelected ? '#166534' : '#0f172a' }}>{pr.name}</p>
+                              </div>
+                              <button
+                                type="button"
+                                className="pill-btn"
+                                title={isSelected ? 'Remove from map' : 'Add to map'}
+                                onClick={() => togglePresetSelection(pr._id)}
+                                style={{
+                                  minWidth: 36,
+                                  padding: '0.35rem 0.5rem',
+                                  background: isSelected ? '#16a34a' : '#2563eb',
+                                  color: '#fff',
+                                }}
+                              >
+                                {isSelected ? '✓' : '+'}
+                              </button>
+                            </div>
+                          );
+                        }) : null}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
-                <div className="map-wrap">
+                <div className="map-wrap map-wrap--below-preset-dropdown">
                   <MapContainer center={MAP_CENTER} zoom={16} scrollWheelZoom style={{ height: 320, width: '100%' }}>
                     <TileLayer
                       attribution="&copy; OpenStreetMap contributors"
                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                     />
-                    <MapClickCapture onAddPoint={addPoint} />
-                    {polygons.map((poly, idx) => (poly.length >= 3 ? (
-                      <Polygon key={`drawn-poly-${idx}`} positions={poly.map((p) => [p.lat, p.lng])} pathOptions={{ color: idx === activePolygonIndex ? '#7b61ff' : '#2563eb' }} />
+                    {selectedPresetPolygons.map((poly, idx) => (poly.length >= 3 ? (
+                      <Polygon key={`selected-preset-poly-${idx}`} positions={poly.map((p) => [p.lat, p.lng])} pathOptions={{ color: idx % 2 === 0 ? '#2563eb' : '#7b61ff' }} />
                     ) : null))}
                   </MapContainer>
                 </div>
