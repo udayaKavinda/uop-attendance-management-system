@@ -175,16 +175,24 @@ export default function AdminDashboard() {
     let timer = null;
     async function refreshRunningCodes() {
       if (activeTab !== 'sessions') return;
-      const resp = await getAdminCurrentSessionCodes(studentId);
-      if (cancelled) return;
-      if (!resp.error) {
-        const next = {};
-        (resp.items || []).forEach((item) => {
-          next[String(item.sessionId)] = item;
-        });
-        setRunningSessionCodes(next);
+      try {
+        const resp = await getAdminCurrentSessionCodes(studentId);
+        if (cancelled) return;
+        if (!resp.error) {
+          const next = {};
+          (resp.items || []).forEach((item) => {
+            next[String(item.sessionId)] = item;
+          });
+          setRunningSessionCodes(next);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          // Temporary network/tunnel issues should not crash the whole admin screen.
+          setError((prev) => (prev ? prev : 'Live pin updates are temporarily unavailable. Retrying...'));
+        }
+      } finally {
+        if (!cancelled) timer = setTimeout(refreshRunningCodes, 1000);
       }
-      timer = setTimeout(refreshRunningCodes, 1000);
     }
     refreshRunningCodes();
     return () => {

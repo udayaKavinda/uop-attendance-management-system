@@ -224,10 +224,14 @@ export async function getAdminAllSessions(studentId) {
 }
 
 export async function getAdminCurrentSessionCodes(studentId) {
-  const resp = await fetch(`${apiBase()}/api/admin/sessions/current-codes`, {
-    headers: { 'X-Student-Id': studentId || '' },
-  });
-  return resp.json();
+  try {
+    const resp = await fetch(`${apiBase()}/api/admin/sessions/current-codes`, {
+      headers: { 'X-Student-Id': studentId || '' },
+    });
+    return await resp.json();
+  } catch (err) {
+    return { error: err?.message || 'Failed to fetch running session codes' };
+  }
 }
 
 export async function startAdminSessionRotation(studentId, sessionId) {
