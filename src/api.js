@@ -50,6 +50,14 @@ export async function logoutSession() {
   return safeFetchJson(`${apiBase()}/api/logout`, { method: 'POST' });
 }
 
+export async function verifyLecturePin(payload) {
+  return safeFetchJson(`${apiBase()}/api/verify-lecture-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function verifyLecture(payload) {
   return safeFetchJson(`${apiBase()}/api/verify-lecture`, {
     method: 'POST',

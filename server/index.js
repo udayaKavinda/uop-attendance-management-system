@@ -1049,6 +1049,29 @@ app.post('/api/verify-lecture', async (req, res) => {
   }
 });
 
+/** PIN + schedule only (student). Starts multi-sample GPS flow on the client when PIN is valid. */
+app.post('/api/verify-lecture-pin', async (req, res) => {
+  const { lectureCode: submitted, courseId } = req.body;
+  try {
+    const auth = await sessionStudentAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const resolved = await resolveActiveSessionForCourse(courseId);
+    if (resolved.error) return res.status(400).json({ error: resolved.error });
+    if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
+      return res.status(400).json({ error: 'Invalid or expired lecture code' });
+    }
+    const schedule = checkScheduleWindow(resolved.session);
+    if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
+    return res.json({
+      success: true,
+      sessionId: resolved.session._id,
+      courseId: resolved.course._id,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/record-attendance', async (req, res) => {
   const {
     lectureCode: submitted, courseId, method, lat, lng, accuracy,

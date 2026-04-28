@@ -6,12 +6,15 @@ import React, {
   useState,
 } from 'react';
 import {
-  verifyLecture,
+  verifyLecturePin,
   recordAttendance,
   getAttendanceStatus,
   getRunningCourses,
 } from '../api';
 import { readStoredStudent } from '../utils/safeStorage';
+
+const LOCATION_PHASE_MS = 180_000;
+const LOCATION_SAMPLE_MS = 5_000;
 
 function runningCourseLabel(item) {
   return `${item.code} — ${item.name}`;
@@ -28,9 +31,87 @@ export default function LectureEntry() {
   const [submitting, setSubmitting] = useState(false);
   const [recorded, setRecorded] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
+  const [locationPhase, setLocationPhase] = useState('idle');
   const blurCloseTimer = useRef(null);
   const comboboxRef = useRef(null);
   const listboxId = 'running-course-listbox';
+  const locationPhaseRef = useRef({ active: false, courseId: '', code: '' });
+  const locationIntervalRef = useRef(null);
+  const locationDeadlineRef = useRef(null);
+
+  const stopLocationPhase = useCallback((opts = {}) => {
+    const { silent } = opts;
+    locationPhaseRef.current = { active: false, courseId: '', code: '' };
+    if (locationIntervalRef.current) {
+      clearInterval(locationIntervalRef.current);
+      locationIntervalRef.current = null;
+    }
+    if (locationDeadlineRef.current) {
+      clearTimeout(locationDeadlineRef.current);
+      locationDeadlineRef.current = null;
+    }
+    setLocationPhase((prev) => {
+      if (prev === 'idle' && silent) return prev;
+      return 'idle';
+    });
+  }, []);
+
+  const startLocationPhase = useCallback(
+    (phaseCourseId, lectureCode) => {
+      stopLocationPhase({ silent: true });
+      locationPhaseRef.current = {
+        active: true,
+        courseId: phaseCourseId,
+        code: lectureCode,
+      };
+      setLocationPhase('checking');
+
+      const runSample = () => {
+        if (!locationPhaseRef.current.active) return;
+        navigator.geolocation.getCurrentPosition(
+          async (pos) => {
+            if (!locationPhaseRef.current.active) return;
+            const { courseId: cid, code } = locationPhaseRef.current;
+            const { latitude, longitude, accuracy } = pos.coords;
+            try {
+              const record = await recordAttendance({
+                courseId: cid,
+                lectureCode: code,
+                method: 'google',
+                lat: latitude,
+                lng: longitude,
+                accuracy,
+              });
+              if (!locationPhaseRef.current.active) return;
+              if (record.success || record.duplicate) {
+                stopLocationPhase();
+                setRecorded(true);
+                setCode('');
+                setError(null);
+              }
+            } catch {
+              /* keep sampling until deadline */
+            }
+          },
+          () => {
+            /* GPS denied or timeout; next interval retries */
+          },
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 },
+        );
+      };
+
+      runSample();
+      locationIntervalRef.current = setInterval(runSample, LOCATION_SAMPLE_MS);
+      locationDeadlineRef.current = setTimeout(() => {
+        if (!locationPhaseRef.current.active) return;
+        stopLocationPhase();
+        setError(
+          'Could not verify your location inside the allowed area in time. Try again when you are on campus.',
+        );
+      }, LOCATION_PHASE_MS);
+    },
+    [stopLocationPhase],
+  );
 
   const clearBlurTimer = () => {
     if (blurCloseTimer.current) {
@@ -175,6 +256,22 @@ export default function LectureEntry() {
     });
   }, [courseMenuOpen, filteredCourses.length]);
 
+  useEffect(() => {
+    if (recorded && locationPhaseRef.current.active) {
+      stopLocationPhase({ silent: true });
+    }
+  }, [recorded, stopLocationPhase]);
+
+  useEffect(() => {
+    if (!locationPhaseRef.current.active) return;
+    if (locationPhaseRef.current.courseId !== courseId) {
+      stopLocationPhase();
+      setError('Course changed; location check was cancelled.');
+    }
+  }, [courseId, stopLocationPhase]);
+
+  useEffect(() => () => stopLocationPhase(), [stopLocationPhase]);
+
   const handleCourseKeyDown = (e) => {
     if (!courseMenuOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && courses.length > 0) {
       e.preventDefault();
@@ -214,59 +311,36 @@ export default function LectureEntry() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (submitting) return;
+    if (submitting || locationPhase === 'checking') return;
     setError(null);
     if (!courseId) {
       setError('Choose a course from the suggestions or type the full course code.');
       return;
     }
-    setSubmitting(true);
+    const trimmed = code.trim();
+    if (!trimmed) {
+      setError('Enter the lecture pin.');
+      return;
+    }
 
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords;
-        try {
-          const trimmed = code.trim();
-          const verify = await verifyLecture({
-            courseId,
-            lectureCode: trimmed,
-            lat: latitude,
-            lng: longitude,
-            accuracy,
-          });
-          if (verify.success) {
-            const method = 'google';
-            const record = await recordAttendance({
-              courseId,
-              lectureCode: trimmed,
-              method,
-              lat: latitude,
-              lng: longitude,
-              accuracy,
-            });
-            if (record.success) {
-              setRecorded(true);
-              setCode('');
-            } else {
-              setError(record.error || 'Failed to record attendance');
-            }
-          } else {
-            setError(verify.error || 'Lecture verification failed');
-          }
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          setSubmitting(false);
-        }
-      },
-      (err) => {
-        setError('Unable to get location: ' + err.message);
-        setSubmitting(false);
-      },
-    );
+    setSubmitting(true);
+    try {
+      const verify = await verifyLecturePin({ courseId, lectureCode: trimmed });
+      if (!verify.success) {
+        setError(verify.error || 'Lecture verification failed');
+        return;
+      }
+      startLocationPhase(courseId, trimmed);
+    } catch (err) {
+      setError(err?.message || 'Verification failed');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const noRunning = courses.length === 0 && !error;
+  const isCheckingLocation = locationPhase === 'checking';
+  const formLocked = submitting || checkingStatus || isCheckingLocation;
 
   return (
     <form className="student-panel page-fade" onSubmit={handleSubmit}>
@@ -274,7 +348,9 @@ export default function LectureEntry() {
         {!recorded && (
           <>
             <h2 className="card-title">Lecture attendance</h2>
-            <p className="card-subtitle">Select a running course, enter the pin shown in class, and allow location when prompted.</p>
+            <p className="card-subtitle">
+              Select a running course and enter the pin from class. After the pin is accepted, we confirm you are on campus using your location for up to a few minutes—allow location when prompted.
+            </p>
           </>
         )}
         {error && <p className="error">{error}</p>}
@@ -319,6 +395,7 @@ export default function LectureEntry() {
                 }}
                 onBlur={scheduleCloseMenu}
                 onKeyDown={handleCourseKeyDown}
+                disabled={formLocked}
                 required
               />
               {courseMenuOpen && filteredCourses.length > 0 ? (
@@ -358,10 +435,19 @@ export default function LectureEntry() {
                   placeholder="Code from lecturer"
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
+                  disabled={formLocked}
                   required
                 />
-                <button className="primary-btn" type="submit" disabled={submitting || checkingStatus}>
-                  {submitting ? 'Submitting…' : 'Submit attendance'}
+                <button
+                  className={`primary-btn${isCheckingLocation ? ' primary-btn--location-check' : ''}`}
+                  type="submit"
+                  disabled={formLocked}
+                >
+                  {isCheckingLocation
+                    ? 'Checking location…'
+                    : submitting
+                      ? 'Submitting…'
+                      : 'Submit attendance'}
                 </button>
               </>
             )}
