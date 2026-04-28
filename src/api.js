@@ -1,3 +1,5 @@
+import { notifySessionInvalid } from './utils/authRedirect';
+
 function apiBase() {
   if (process.env.REACT_APP_API_BASE) return process.env.REACT_APP_API_BASE;
   if (typeof window !== 'undefined' && window.location.port === '3000') return 'http://localhost:5000';
@@ -19,6 +21,9 @@ async function safeFetchJson(url, init = {}) {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
+      if (resp.status === 401) {
+        notifySessionInvalid();
+      }
       const msg = data.error || data.message || `Request failed (${resp.status})`;
       return { ...data, error: msg };
     }

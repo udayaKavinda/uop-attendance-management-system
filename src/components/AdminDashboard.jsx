@@ -298,6 +298,13 @@ export default function AdminDashboard() {
     setWorking(false);
   };
 
+  const openProjectorView = (sessionRecord) => {
+    const id = String(sessionRecord._id);
+    const label = `${sessionRecord.course?.code || 'Course'} · ${sessionRecord.lectureDay || ''} ${sessionRecord.startTime || ''}–${sessionRecord.endTime || ''}`;
+    const path = `/admin/present/session/${id}?${new URLSearchParams({ label }).toString()}`;
+    window.open(`${window.location.origin}${path}`, '_blank', 'noopener,noreferrer');
+  };
+
   const onDeleteCourse = async (courseId) => {
     const targetCourse = courses.find((c) => String(c._id) === String(courseId));
     const expect = `${targetCourse?.code || ''} ${targetCourse?.batch ?? ''}`.trim();
@@ -886,12 +893,21 @@ export default function AdminDashboard() {
                           >
                             {runningSessionCodes[String(s._id)].rotationPaused ? '⟳' : '⏸'}
                           </button>
-                          <p className="session-sub" style={{ color: '#4c1d95', fontWeight: 700, margin: 0 }}>
-                            Code: {runningSessionCodes[String(s._id)].code}
-                            {runningSessionCodes[String(s._id)].rotationPaused
-                              ? ' (Paused)'
-                              : ` (${runningSessionCodes[String(s._id)].secondsRemaining}s)`}
-                          </p>
+                          <button
+                            type="button"
+                            className="live-code-display-btn"
+                            onClick={() => openProjectorView(s)}
+                            title="Open PIN in a new tab for projector (large text + timer + rotation controls)"
+                          >
+                            <span className="live-code-display-btn__prefix">Code:</span>
+                            <span className="live-code-display-btn__digits">{runningSessionCodes[String(s._id)].code}</span>
+                            <span className="live-code-display-btn__suffix">
+                              {runningSessionCodes[String(s._id)].rotationPaused
+                                ? ' (Paused)'
+                                : ` (${runningSessionCodes[String(s._id)].secondsRemaining}s)`}
+                            </span>
+                            <span className="live-code-display-btn__hint" aria-hidden>⛶</span>
+                          </button>
                         </div>
                       )}
                     </div>

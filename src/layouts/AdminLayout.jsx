@@ -19,33 +19,36 @@ export default function AdminLayout() {
   const { pathname } = useLocation();
   const matrixMatch = pathname.match(/\/admin\/courses\/([^/]+)\/matrix$/);
   const isMatrix = Boolean(matrixMatch);
+  const isPresentPin = pathname.includes('/admin/present/');
 
   return (
-    <div className="layout-admin" data-layout="admin">
-      <header className="admin-chrome">
-        <div className="admin-chrome__left">
-          <img src="/logo.png" alt="" className="admin-chrome__logo" />
-          <div>
-            <p className="admin-chrome__title">Attendance administration</p>
-            <p className="admin-chrome__sub">{staffSubtitle()}</p>
+    <div className={`layout-admin ${isPresentPin ? 'layout-admin--present' : ''}`} data-layout="admin">
+      {!isPresentPin ? (
+        <header className="admin-chrome">
+          <div className="admin-chrome__left">
+            <img src="/logo.png" alt="" className="admin-chrome__logo" />
+            <div>
+              <p className="admin-chrome__title">Attendance administration</p>
+              <p className="admin-chrome__sub">{staffSubtitle()}</p>
+            </div>
           </div>
-        </div>
-        <nav className="admin-chrome__nav" aria-label="Admin">
-          {isMatrix ? (
-            <>
-              <Link to="/admin" className="admin-chrome__link">Dashboard</Link>
-              <span className="admin-chrome__sep" aria-hidden>/</span>
-              <span className="admin-chrome__crumb">Attendance table</span>
-            </>
-          ) : (
-            <span className="admin-chrome__pill">Console</span>
-          )}
-        </nav>
-      </header>
-      <div className="layout-admin__body">
+          <nav className="admin-chrome__nav" aria-label="Admin">
+            {isMatrix ? (
+              <>
+                <Link to="/admin" className="admin-chrome__link">Dashboard</Link>
+                <span className="admin-chrome__sep" aria-hidden>/</span>
+                <span className="admin-chrome__crumb">Attendance table</span>
+              </>
+            ) : (
+              <span className="admin-chrome__pill">Console</span>
+            )}
+          </nav>
+        </header>
+      ) : null}
+      <div className={`layout-admin__body ${isPresentPin ? 'layout-admin__body--present' : ''}`}>
         <Outlet />
       </div>
-      <SiteFooter />
+      {!isPresentPin ? <SiteFooter /> : null}
     </div>
   );
 }

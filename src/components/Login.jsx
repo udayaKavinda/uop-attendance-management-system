@@ -16,7 +16,7 @@ export default function Login() {
       } else if (code === 'profile') {
         setError('Could not load your profile from the server. Check that the API is reachable, then sign in again.');
       } else if (code === 'session') {
-        setError('Could not establish your session (check that the app URL is allowed by the server CORS settings and that cookies are enabled). Sign in again.');
+        setError('Your session has expired or the server was restarted. Please sign in with Google again.');
       } else {
         setError('Login error: ' + code);
       }

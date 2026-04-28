@@ -245,3 +245,4 @@ All `/api/admin/*` routes require a logged-in **staff** session (Google OAuth co
 - This repository includes migration logic in server startup to normalize older data (for example legacy collections/fields).
 - Session auto-expiry for non-recurring sessions runs in a background sweep job.
 - In development, unhandled promise rejections may be logged without stopping the dev experience; fix the underlying API or add `try/catch` in effects when introducing new calls.
+- **API restarts:** The default Express session store is **in-memory**, so a **Node restart invalidates all sessions** and APIs return `401`. The SPA redirects to `/?error=session` and clears `localStorage`. For production, use a **persistent store** (e.g. `connect-mongo` or Redis with `express-session`) so logins survive deploys/restarts.
