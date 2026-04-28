@@ -138,16 +138,15 @@ function minDistanceToAnyPolygonEdgeMeters(lat, lng, polygons = []) {
 function isWithinGeofenceWithAccuracy(lat, lng, accuracy, polygons = []) {
   const inside = isPointInsideAnyPolygon(lat, lng, polygons);
   const accuracyMeters = Number(accuracy);
-  // If no valid accuracy is provided, fallback to strict inside-polygon check.
-  if (!Number.isFinite(accuracyMeters) || accuracyMeters <= 0) return inside;
+  const edgeBufferMeters = (
+    Number.isFinite(accuracyMeters) && accuracyMeters > 0 && accuracyMeters <= 20
+  )
+    ? accuracyMeters
+    : 20;
 
-  // If accuracy is above 20m, use strict inside-polygon decision only.
-  if (accuracyMeters > 20) return inside;
-
-  // If accuracy is 20m or below, allow edge-tolerance using the accuracy radius.
   if (inside) return true;
   const edgeDistance = minDistanceToAnyPolygonEdgeMeters(lat, lng, polygons);
-  return edgeDistance <= accuracyMeters;
+  return edgeDistance <= edgeBufferMeters;
 }
 
 function sessionCodeKey(sessionId) {
