@@ -1,15 +1,10 @@
 import React, { useMemo } from 'react';
 import { Outlet } from 'react-router-dom';
 import SiteFooter from '../components/SiteFooter';
+import { readStoredStudent } from '../utils/safeStorage';
 
 export default function StudentLayout() {
-  const student = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem('student') || '{}');
-    } catch {
-      return {};
-    }
-  }, []);
+  const student = useMemo(() => readStoredStudent(), []);
 
   return (
     <div className="layout-student" data-layout="student">

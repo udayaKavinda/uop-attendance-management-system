@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getAdminAttendanceMatrix } from '../api';
 import { downloadAttendanceTableExcel } from '../utils/matrixExcel';
@@ -10,9 +10,6 @@ export default function AttendanceTablePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const student = useMemo(() => JSON.parse(localStorage.getItem('student') || '{}'), []);
-  const studentId = student?.studentId || '';
-
   useEffect(() => {
     let cancelled = false;
     async function run() {
@@ -23,19 +20,27 @@ export default function AttendanceTablePage() {
       }
       setLoading(true);
       setError('');
-      const resp = await getAdminAttendanceMatrix(studentId, courseId);
-      if (cancelled) return;
-      if (resp.error) {
-        setError(resp.error);
-        setData(null);
-      } else {
-        setData(resp);
+      try {
+        const resp = await getAdminAttendanceMatrix(courseId);
+        if (cancelled) return;
+        if (resp.error) {
+          setError(resp.error);
+          setData(null);
+        } else {
+          setData(resp);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err?.message || 'Could not load this table.');
+          setData(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
     }
     run();
     return () => { cancelled = true; };
-  }, [courseId, studentId]);
+  }, [courseId]);
 
   if (loading) {
     return (
@@ -74,7 +79,13 @@ export default function AttendanceTablePage() {
             <button
               type="button"
               className="primary-btn primary-btn--inline"
-              onClick={() => downloadAttendanceTableExcel(data)}
+              onClick={() => {
+                try {
+                  downloadAttendanceTableExcel(data);
+                } catch (err) {
+                  console.warn('Excel export failed:', err);
+                }
+              }}
             >
               Download Excel
             </button>

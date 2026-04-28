@@ -31,18 +31,25 @@ function studentDisplayIdFromEmail(email, fallbackStudentId) {
   return email.slice(0, at).trim();
 }
 
-/** Whole hour from "HH:mm" (minutes dropped for column labels). */
-function hourOnlyFromHHMM(hhmm) {
-  const [h] = String(hhmm || '').split(':');
-  const n = parseInt(h, 10);
-  return Number.isFinite(n) ? String(n) : '';
+function compactTimeForLabel(hhmm) {
+  const raw = String(hhmm || '').trim();
+  if (!raw) return '';
+  const [h, m] = raw.split(':').map((v) => parseInt(v, 10));
+  if (!Number.isFinite(h)) return raw.slice(0, 5);
+  if (!Number.isFinite(m) || m === 0) return String(h);
+  return `${h}:${String(m).padStart(2, '0')}`;
 }
 
-/** Column header: "Apr 22 8-10" (no year) when we have an attendance date; else "MON 8-10". */
+function timeRangeForColumnLabel(session) {
+  const a = compactTimeForLabel(session.startTime);
+  const b = compactTimeForLabel(session.endTime);
+  if (!a && !b) return '';
+  return `${a}-${b}`;
+}
+
+/** Column header: "Apr 22 8:00-10:00" (no year) when we have an attendance date; else "MON 8-10". */
 function formatAttendanceTableColumnLabel(session, minAttendanceDateYmd) {
-  const sh = hourOnlyFromHHMM(session.startTime);
-  const eh = hourOnlyFromHHMM(session.endTime);
-  const hourRange = sh && eh ? `${sh}-${eh}` : `${String(session.startTime || '').replace(/:00$/, '')}-${String(session.endTime || '').replace(/:00$/, '')}`;
+  const hourRange = timeRangeForColumnLabel(session);
   if (minAttendanceDateYmd && /^\d{4}-\d{2}-\d{2}$/.test(minAttendanceDateYmd)) {
     const d = new Date(`${minAttendanceDateYmd}T12:00:00`);
     if (!Number.isNaN(d.getTime())) {
@@ -50,7 +57,7 @@ function formatAttendanceTableColumnLabel(session, minAttendanceDateYmd) {
       return `${md} ${hourRange}`.trim();
     }
   }
-  return `${session.lectureDay} ${hourRange}`.trim();
+  return `${session.lectureDay} ${timeRangeForColumnLabel(session)}`.trim();
 }
 
 function isPointInsidePolygon(lat, lng, polygon) {
@@ -205,22 +212,45 @@ async function resolveActiveSessionForCourse(courseId) {
   return { course, session: active };
 }
 
-async function requireAdminByStudentId(studentId) {
-  if (!studentId) return { ok: false, message: 'Missing X-Student-Id header' };
-  const person = await Person.findById(studentId);
-  if (!person) return { ok: false, message: 'User not found' };
-  if (person.role !== 'admin') return { ok: false, message: 'Admin access required' };
-  return { ok: true, person };
+/** Staff API authorization: derived from Passport session (Google OAuth), not client headers. */
+async function sessionStaffAuth(req) {
+  if (typeof req.isAuthenticated !== 'function' || !req.isAuthenticated()) {
+    return { ok: false, status: 401, message: 'Authentication required' };
+  }
+  const person = await Person.findById(req.user._id);
+  if (!person) return { ok: false, status: 401, message: 'User not found' };
+  const role = person.role || 'student';
+  if (role !== 'admin' && role !== 'lecturer') {
+    return { ok: false, status: 403, message: 'Staff access required' };
+  }
+  if (role === 'lecturer' && person.deleted) {
+    return { ok: false, status: 403, message: 'Lecturer access revoked' };
+  }
+  return { ok: true, person, isAdmin: role === 'admin' };
 }
 
-async function requireStaffByStudentId(studentId) {
-  if (!studentId) return { ok: false, message: 'Missing X-Student-Id header' };
-  const person = await Person.findById(studentId);
-  if (!person) return { ok: false, message: 'User not found' };
+async function sessionAdminAuth(req) {
+  const auth = await sessionStaffAuth(req);
+  if (!auth.ok) return auth;
+  if (!auth.isAdmin) return { ok: false, status: 403, message: 'Admin access required' };
+  return { ok: true, person: auth.person, isAdmin: true };
+}
+
+/** Student lecture attendance: session only, role must be student. */
+async function sessionStudentAuth(req) {
+  if (typeof req.isAuthenticated !== 'function' || !req.isAuthenticated()) {
+    return { ok: false, status: 401, message: 'Authentication required' };
+  }
+  const person = await Person.findById(req.user._id);
+  if (!person) return { ok: false, status: 401, message: 'User not found' };
   const role = person.role || 'student';
-  if (role !== 'admin' && role !== 'lecturer') return { ok: false, message: 'Staff access required' };
-  if (role === 'lecturer' && person.deleted) return { ok: false, message: 'Lecturer access revoked' };
-  return { ok: true, person, isAdmin: role === 'admin' };
+  if (role !== 'student') {
+    return { ok: false, status: 403, message: 'Only student accounts can use lecture attendance' };
+  }
+  if (person.deleted) {
+    return { ok: false, status: 403, message: 'Account inactive' };
+  }
+  return { ok: true, person };
 }
 
 async function assertCourseAccess(person, isAdmin, courseId) {
@@ -256,19 +286,41 @@ function normalizePolygonsInput(polygons) {
 }
 
 const app = express();
-app.use(cors());
+
+const corsOrigins = (process.env.FRONTEND_URL
+  || process.env.APP_BASE_URL
+  || 'http://localhost:3000')
+  .split(',')
+  .map((s) => s.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (corsOrigins.includes(origin)) return callback(null, true);
+    return callback(null, false);
+  },
+  credentials: true,
+}));
 app.use(express.json());
 app.set('trust proxy', 1);
 
+const sessionCookieSecure = process.env.NODE_ENV === 'production';
+// Cross-site SPA (different subdomain/port) needs None + Secure in production.
+const sessionSameSite = sessionCookieSecure ? 'none' : 'lax';
+
 // session support required for Passport's req.login() after OAuth
 app.use(session({
+  name: 'attendance.sid',
   secret: process.env.SESSION_SECRET || 'attendance-dev-secret-change-in-production',
   resave: false,
   saveUninitialized: false,
   proxy: true,
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    secure: sessionCookieSecure,
+    sameSite: sessionSameSite,
+    httpOnly: true,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
   },
 }));
 app.use(passport.initialize());
@@ -370,14 +422,13 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
   }));
 
   app.get('/auth/google', passport.authenticate('google', { scope: ['email'] }));
-  const frontendUrl = process.env.APP_BASE_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = process.env.FRONTEND_URL || process.env.APP_BASE_URL || 'http://localhost:3000';
   app.get(
     '/auth/google/callback',
     passport.authenticate('google', { failureRedirect: `${frontendUrl}/?error=auth` }),
     (req, res) => {
-      const user = req.user;
-      const role = encodeURIComponent(user.role || 'student');
-      res.redirect(`${frontendUrl}/login/success?studentId=${user._id}&role=${role}`);
+      const base = String(frontendUrl || '').replace(/\/$/, '');
+      res.redirect(`${base}/login/success`);
     }
   );
 }
@@ -495,10 +546,11 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/me', async (req, res) => {
   try {
-    const studentId = String(req.query.studentId || '').trim();
-    if (!studentId) return res.status(400).json({ error: 'studentId query parameter is required' });
-    const person = await Person.findById(studentId);
-    if (!person) return res.status(404).json({ error: 'User not found' });
+    if (typeof req.isAuthenticated !== 'function' || !req.isAuthenticated()) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const person = await Person.findById(req.user._id);
+    if (!person) return res.status(401).json({ error: 'User not found' });
     return res.json({
       studentId: person._id,
       email: person.email,
@@ -508,6 +560,13 @@ app.get('/api/me', async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+});
+
+app.post('/api/logout', (req, res) => {
+  req.logout((err) => {
+    if (err) return res.status(500).json({ error: err.message });
+    return res.json({ success: true });
+  });
 });
 
 app.get('/api/courses', async (req, res) => {
@@ -567,8 +626,8 @@ app.get('/api/courses/running', async (req, res) => {
 
 app.get('/api/admin/courses', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const filter = auth.isAdmin ? {} : { lecturer: auth.person._id };
     const items = await Course.find(filter).populate('lecturer', 'name email phone').sort({ code: 1, batch: 1 });
     return res.json({ items });
@@ -579,8 +638,8 @@ app.get('/api/admin/courses', async (req, res) => {
 
 app.post('/api/admin/courses', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const code = lectureCode.normalizeCourseCode(req.body.code);
     const name = String(req.body.name || '').trim();
     const batch = String(req.body.batch ?? '').trim();
@@ -613,8 +672,8 @@ app.post('/api/admin/courses', async (req, res) => {
 
 app.delete('/api/admin/courses/:courseId', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, req.params.courseId);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     const course = access.course;
@@ -631,8 +690,8 @@ app.delete('/api/admin/courses/:courseId', async (req, res) => {
 
 app.patch('/api/admin/courses/:courseId/disable', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, req.params.courseId);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     const course = access.course;
@@ -649,8 +708,8 @@ app.patch('/api/admin/courses/:courseId/disable', async (req, res) => {
 
 app.patch('/api/admin/courses/:courseId/enable', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, req.params.courseId);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     const course = access.course;
@@ -664,8 +723,8 @@ app.patch('/api/admin/courses/:courseId/enable', async (req, res) => {
 
 app.patch('/api/admin/courses/:courseId/assign-lecturer', async (req, res) => {
   try {
-    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionAdminAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const lecturerIdBody = req.body.lecturerId;
     if (!mongoose.isValidObjectId(String(lecturerIdBody || ''))) {
       return res.status(400).json({ error: 'lecturerId is required' });
@@ -685,8 +744,8 @@ app.patch('/api/admin/courses/:courseId/assign-lecturer', async (req, res) => {
 
 app.get('/api/admin/courses/:courseId/sessions', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, req.params.courseId);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     const items = await LectureSession.find({ course: req.params.courseId, deleted: false }).sort({ lectureDay: 1, startTime: 1 });
@@ -698,8 +757,8 @@ app.get('/api/admin/courses/:courseId/sessions', async (req, res) => {
 
 app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, req.params.courseId);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     const course = access.course;
@@ -750,8 +809,8 @@ app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
 
 app.delete('/api/admin/sessions/:sessionId', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
     if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
@@ -768,8 +827,8 @@ app.delete('/api/admin/sessions/:sessionId', async (req, res) => {
 
 app.patch('/api/admin/sessions/:sessionId/activate', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false }).populate('course');
     if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
@@ -789,8 +848,8 @@ app.patch('/api/admin/sessions/:sessionId/activate', async (req, res) => {
 
 app.patch('/api/admin/sessions/:sessionId/deactivate', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
     if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
@@ -806,8 +865,8 @@ app.patch('/api/admin/sessions/:sessionId/deactivate', async (req, res) => {
 
 app.get('/api/admin/sessions', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const scope = await staffSessionMatch(auth.person, auth.isAdmin);
     const items = await LectureSession.find({ deleted: false, ...scope })
       .populate('course', 'code name active batch lecturer')
@@ -820,8 +879,8 @@ app.get('/api/admin/sessions', async (req, res) => {
 
 app.get('/api/admin/sessions/current-codes', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const scope = await staffSessionMatch(auth.person, auth.isAdmin);
     const now = new Date();
     const sessions = await LectureSession.find({ active: true, deleted: false, ...scope })
@@ -848,8 +907,8 @@ app.get('/api/admin/sessions/current-codes', async (req, res) => {
 
 app.patch('/api/admin/sessions/:sessionId/rotation/start', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
     if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
@@ -866,8 +925,8 @@ app.patch('/api/admin/sessions/:sessionId/rotation/start', async (req, res) => {
 
 app.patch('/api/admin/sessions/:sessionId/rotation/stop', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
     if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
@@ -884,8 +943,8 @@ app.patch('/api/admin/sessions/:sessionId/rotation/stop', async (req, res) => {
 
 app.get('/api/admin/sessions/:sessionId/current-code', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
     if (sessionItem) {
       const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
@@ -905,8 +964,12 @@ app.get('/api/admin/sessions/:sessionId/current-code', async (req, res) => {
 
 app.get('/api/lecture-code', async (req, res) => {
   try {
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const { courseId } = req.query;
     if (!courseId) return res.status(400).json({ error: 'courseId query parameter is required' });
+    const access = await assertCourseAccess(auth.person, auth.isAdmin, courseId);
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
     return res.json({
@@ -921,15 +984,16 @@ app.get('/api/lecture-code', async (req, res) => {
 
 app.get('/api/attendance-status', async (req, res) => {
   try {
-    const studentId = String(req.query.studentId || '').trim();
+    const auth = await sessionStudentAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const courseId = String(req.query.courseId || '').trim();
-    if (!studentId) return res.status(400).json({ error: 'studentId query parameter is required' });
     if (!courseId) return res.status(400).json({ error: 'courseId query parameter is required' });
 
+    const studentPk = auth.person._id;
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) {
       return res.json({
-        studentId,
+        studentId: studentPk,
         courseId,
         sessionId: null,
         attended: false,
@@ -940,14 +1004,14 @@ app.get('/api/attendance-status', async (req, res) => {
 
     const attendanceDate = new Date().toISOString().slice(0, 10);
     const attendance = await Attendance.findOne({
-      student: studentId,
+      student: studentPk,
       course: courseId,
       session: resolved.session._id,
       attendanceDate,
     }).sort({ timestamp: -1 });
 
     return res.json({
-      studentId,
+      studentId: studentPk,
       courseId,
       sessionId: resolved.session._id,
       attended: Boolean(attendance),
@@ -964,6 +1028,8 @@ app.post('/api/verify-lecture', async (req, res) => {
     lectureCode: submitted, courseId, lat, lng, accuracy,
   } = req.body;
   try {
+    const auth = await sessionStudentAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
     if (!lectureCode.hasValidLocation(lat, lng)) {
@@ -985,9 +1051,12 @@ app.post('/api/verify-lecture', async (req, res) => {
 
 app.post('/api/record-attendance', async (req, res) => {
   const {
-    studentId, lectureCode: submitted, courseId, method, lat, lng, accuracy,
+    lectureCode: submitted, courseId, method, lat, lng, accuracy,
   } = req.body;
   try {
+    const auth = await sessionStudentAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const studentPk = auth.person._id;
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
     if (!lectureCode.hasValidLocation(lat, lng)) {
@@ -1005,7 +1074,7 @@ app.post('/api/record-attendance', async (req, res) => {
     const normalizedCode = String(submitted).replace(/\s/g, '');
     const attendanceDate = new Date().toISOString().slice(0, 10);
     const existing = await Attendance.findOne({
-      student: studentId,
+      student: studentPk,
       session: resolved.session._id,
       attendanceDate,
     });
@@ -1014,7 +1083,7 @@ app.post('/api/record-attendance', async (req, res) => {
     }
 
     const attendance = new Attendance({
-      student: studentId,
+      student: studentPk,
       course: resolved.course._id,
       session: resolved.session._id,
       courseCode: resolved.course.code,
@@ -1032,14 +1101,13 @@ app.post('/api/record-attendance', async (req, res) => {
 
 app.get('/api/admin/courses/:courseId/attendance-matrix', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, req.params.courseId);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     const course = access.course;
 
     const sessionIds = await Attendance.distinct('session', { course: course._id });
-    const sessions = await LectureSession.find({ _id: { $in: sessionIds } }).sort({ lectureDay: 1, startTime: 1 });
     const attendanceDocs = await Attendance.find({ course: course._id, session: { $in: sessionIds } })
       .populate('student', 'studentId email');
     const sessionMinDate = new Map();
@@ -1049,6 +1117,21 @@ app.get('/api/admin/courses/:courseId/attendance-matrix', async (req, res) => {
       if (!ymd) return;
       const prev = sessionMinDate.get(sessKey);
       if (!prev || ymd < prev) sessionMinDate.set(sessKey, ymd);
+    });
+    const sessions = await LectureSession.find({ _id: { $in: sessionIds } });
+    sessions.sort((a, b) => {
+      const da = sessionMinDate.get(String(a._id));
+      const db = sessionMinDate.get(String(b._id));
+      if (da && db && da !== db) return da.localeCompare(db);
+      if (da && !db) return -1;
+      if (!da && db) return 1;
+      const dOrder = (day) => DAY_INDEX.indexOf(String(day || '').toUpperCase());
+      const diffDay = dOrder(a.lectureDay) - dOrder(b.lectureDay);
+      if (diffDay !== 0) return diffDay;
+      const taN = toMinutes(a.startTime);
+      const tbN = toMinutes(b.startTime);
+      if (taN !== tbN) return (taN ?? -1) - (tbN ?? -1);
+      return String(a._id).localeCompare(String(b._id));
     });
     const rowsMap = new Map();
     attendanceDocs.forEach((doc) => {
@@ -1078,8 +1161,8 @@ app.get('/api/admin/courses/:courseId/attendance-matrix', async (req, res) => {
 
 app.get('/api/admin/lecturers', async (req, res) => {
   try {
-    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionAdminAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const q = String(req.query.q || '').trim();
     const filter = { role: 'lecturer', deleted: false };
     if (q) {
@@ -1095,8 +1178,8 @@ app.get('/api/admin/lecturers', async (req, res) => {
 
 app.post('/api/admin/lecturers', async (req, res) => {
   try {
-    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionAdminAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const name = String(req.body.name || '').trim();
     const email = String(req.body.email || '').trim().toLowerCase();
     const phone = String(req.body.phone ?? '').trim();
@@ -1130,8 +1213,8 @@ app.post('/api/admin/lecturers', async (req, res) => {
 
 app.patch('/api/admin/lecturers/:id', async (req, res) => {
   try {
-    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionAdminAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const lec = await Person.findOne({ _id: req.params.id, role: 'lecturer', deleted: false });
     if (!lec) return res.status(404).json({ error: 'Lecturer not found' });
     const { name, email, phone, active } = req.body || {};
@@ -1153,8 +1236,8 @@ app.patch('/api/admin/lecturers/:id', async (req, res) => {
 
 app.delete('/api/admin/lecturers/:id', async (req, res) => {
   try {
-    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionAdminAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const lec = await Person.findOne({ _id: req.params.id, role: 'lecturer', deleted: false });
     if (!lec) return res.status(404).json({ error: 'Lecturer not found' });
     lec.deleted = true;
@@ -1169,8 +1252,8 @@ app.delete('/api/admin/lecturers/:id', async (req, res) => {
 
 app.get('/api/admin/polygon-presets', async (req, res) => {
   try {
-    const auth = await requireStaffByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const items = await PolygonPreset.find({}).sort({ name: 1 });
     return res.json({ items });
   } catch (err) {
@@ -1180,8 +1263,8 @@ app.get('/api/admin/polygon-presets', async (req, res) => {
 
 app.post('/api/admin/polygon-presets', async (req, res) => {
   try {
-    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionAdminAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const name = String(req.body.name || '').trim();
     const polygons = normalizePolygonsInput(req.body.polygons);
     if (!name) return res.status(400).json({ error: 'name is required' });
@@ -1194,8 +1277,8 @@ app.post('/api/admin/polygon-presets', async (req, res) => {
 
 app.patch('/api/admin/polygon-presets/:id', async (req, res) => {
   try {
-    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionAdminAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const preset = await PolygonPreset.findById(req.params.id);
     if (!preset) return res.status(404).json({ error: 'Preset not found' });
     const { name, polygons } = req.body || {};
@@ -1210,8 +1293,8 @@ app.patch('/api/admin/polygon-presets/:id', async (req, res) => {
 
 app.delete('/api/admin/polygon-presets/:id', async (req, res) => {
   try {
-    const auth = await requireAdminByStudentId(req.headers['x-student-id']);
-    if (!auth.ok) return res.status(403).json({ error: auth.message });
+    const auth = await sessionAdminAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     await PolygonPreset.deleteOne({ _id: req.params.id });
     return res.json({ success: true });
   } catch (err) {

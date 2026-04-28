@@ -15,6 +15,8 @@ export default function Login() {
         setError('Google authentication failed. Please try again.');
       } else if (code === 'profile') {
         setError('Could not load your profile from the server. Check that the API is reachable, then sign in again.');
+      } else if (code === 'session') {
+        setError('Could not establish your session (check that the app URL is allowed by the server CORS settings and that cookies are enabled). Sign in again.');
       } else {
         setError('Login error: ' + code);
       }

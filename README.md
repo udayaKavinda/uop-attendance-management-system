@@ -27,7 +27,10 @@ It uses a React frontend (`src/`) and an Express + MongoDB backend (`server/`).
   - `/` and `/login/success` (public/auth)
   - `/lecture` (student-only)
   - `/admin` (lecturer/admin-only)
-- API client functions in `src/api.js`
+- API client in `src/api.js`: all requests use `fetch` with **`credentials: 'include'`** so the Passport session cookie is sent; responses are normalized with **`safeFetchJson`** (network errors return `{ error }` instead of throwing).
+- Root **`ErrorBoundary`** wraps the app (friendlier recovery than a blank crash).
+- Corrupt `localStorage` for the `student` key is tolerated via **`readStoredStudent()`** (`src/utils/safeStorage.js`).
+- Student **course picker** on `/lecture` is a custom combobox (search by code/name, pick from list); students do **not** fetch the live PIN from the API—they enter the code shown in class.
 
 ## Roles and access
 
@@ -41,7 +44,17 @@ Access behavior:
 
 - `student` -> student page (`/lecture`)
 - `lecturer` and `admin` -> staff console (`/admin`)
-- Staff API routes require `X-Student-Id` header and server-side role checks.
+
+### Security model (recent)
+
+| Area | Behavior |
+|------|------------|
+| **Staff APIs** (`/api/admin/*`) | Identity comes from the **Passport session** only (cookie **`attendance.sid`**). The server reloads `Person` from MongoDB and checks **`admin`** / **`lecturer`**. The old **`X-Student-Id`** header is **not** used for authorization. |
+| **Student attendance** | `GET /api/attendance-status`, `POST /api/verify-lecture`, and `POST /api/record-attendance` require a session and **`role === 'student'`**. The server uses **`req.user`** (session)—**not** `studentId` in query or body. |
+| **Live PIN** | **`GET /api/lecture-code`** requires a **staff** session; **lecturers** only for **their** courses; **admins** for any course. Students cannot read the rotating code over this endpoint. |
+| **OAuth redirect** | After Google sign-in, the user is sent to **`/login/success`** without putting Mongo ids in the query string; the SPA calls **`GET /api/me`** with credentials to fill `localStorage` for UI routing. |
+| **CORS** | Server uses **credentials: true** and an allowlist from **`FRONTEND_URL`** (and fallback **`APP_BASE_URL`**); set origins to match your SPA exactly (comma-separated for multiple). |
+| **Production cookies** | Session cookie uses **`Secure`** and **`SameSite=None`** when `NODE_ENV === 'production'` so a separate API host can still receive the cookie (HTTPS required). |
 
 ## Core workflow
 
@@ -49,14 +62,14 @@ Access behavior:
 
 1. User starts Google OAuth at `/auth/google`.
 2. Backend resolves/creates `Person` by email.
-3. Backend redirects to `/login/success?studentId=...&role=...`.
-4. Frontend stores user identity and routes by role.
+3. Backend redirects to `/login/success` (session cookie is set on the API origin).
+4. Frontend calls `GET /api/me` with credentials, stores identity in `localStorage` for UI, and routes by role.
 
 ### 2) Student attendance (`/lecture`)
 
 1. UI fetches currently running courses (`GET /api/courses/running`).
 2. Student selects a running course.
-3. UI checks attendance status for current active session (`GET /api/attendance-status`).
+3. UI checks attendance status for the signed-in student (`GET /api/attendance-status` with session cookie).
 4. If not yet marked, student enters code and submits with location.
 5. Backend validates:
    - active session exists for selected course now
@@ -100,14 +113,20 @@ Create `.env` in project root:
 MONGO_URI=mongodb://localhost:27017/attendance
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
+
+# Use a long random string in production
 SESSION_SECRET=change-me
 
-# Public app origin (recommended for one-domain reverse proxy)
-APP_BASE_URL=https://app.domain.com
-FRONTEND_URL=https://app.domain.com
+# SPA origin(s) for CORS + post-OAuth redirect (comma-separated allowed).
+# Local dev with CRA on :3000 and API on :5000: include http://localhost:3000
+FRONTEND_URL=http://localhost:3000
 
-# Optional frontend API base override
-# Leave empty for same-origin proxy setup
+# Public URL of the app as seen by Google (OAuth callback is APP_BASE_URL/auth/google/callback).
+# Often same as FRONTEND_URL in single-domain or tunnel setups.
+APP_BASE_URL=http://localhost:3000
+
+# Optional: override API origin from the React app (e.g. http://localhost:5000).
+# Leave empty when the browser talks to the same host as the SPA (reverse proxy).
 REACT_APP_API_BASE=
 
 # Optional non-recurring session expiry sweep interval (ms)
@@ -133,6 +152,10 @@ SESSION_EXPIRE_JOB_MS=60000
    - Frontend: `http://localhost:3000`
    - Backend: `http://localhost:5000`
 
+Ensure **`FRONTEND_URL`** (and **`APP_BASE_URL`** if used for OAuth) include `http://localhost:3000` so CORS and the Google redirect after login resolve correctly.
+
+**OAuth callback URL:** In `server/index.js`, Google’s redirect URI is derived from **`APP_BASE_URL`** (then **`FRONTEND_URL`**). It must match the **public URL that reaches your Express app** for `/auth/google/callback` (e.g. same tunnel as the API, or `http://localhost:5000` if that is where OAuth is registered during split dev).
+
 ## Deployment notes
 
 Recommended deployment is **single-domain reverse proxy**:
@@ -154,23 +177,28 @@ A sample nginx config is available at `deploy/nginx-app-domain.conf`.
 
 - `GET /auth/google`
 - `GET /auth/google/callback`
-- `POST /api/login` (legacy lookup)
-- `GET /api/me?studentId=...`
+- `POST /api/login` (legacy lookup by email / external id; does **not** create a session—prefer Google OAuth)
+- `GET /api/me` (session required; returns current user: `studentId` = Person `_id`, `role`, `email`, `lecturerId`)
+- `POST /api/logout` (ends Passport session)
 
 ### Student endpoints
 
 - `GET /api/courses`
 - `GET /api/courses/running`
-- `GET /api/lecture-code?courseId=...`
-- `GET /api/attendance-status?studentId=...&courseId=...`
-- `POST /api/verify-lecture`
-- `POST /api/record-attendance`
+- `GET /api/attendance-status?courseId=...` (requires Google session; **student** role only; server uses session user, not `studentId` query)
+- `POST /api/verify-lecture` (session required; student role only)
+- `POST /api/record-attendance` (session required; student role only; **never** trusts `studentId` from body)
 
 ### Staff/admin endpoints
 
-All `/api/admin/*` routes require:
+All `/api/admin/*` routes require a logged-in **staff** session (Google OAuth cookie). Unauthorized responses use `401`; forbidden (e.g. student account) use `403`.
 
-- Header: `X-Student-Id: <person_id>`
+- Browser requests must include **credentials** (session cookie).
+- Configure **`FRONTEND_URL`** on the server to match your SPA origin(s) for CORS (comma-separated list allowed).
+
+#### Live lecture pin (by course, during active session)
+
+- `GET /api/lecture-code?courseId=...` — **staff session only**; **lecturers** only for courses they own; **admins** for any course. Students cannot call this. Client helper: `getLectureCode(courseId)` in `src/api.js` (same cookie rules as other staff calls).
 
 #### Courses
 
@@ -216,3 +244,4 @@ All `/api/admin/*` routes require:
 
 - This repository includes migration logic in server startup to normalize older data (for example legacy collections/fields).
 - Session auto-expiry for non-recurring sessions runs in a background sweep job.
+- In development, unhandled promise rejections may be logged without stopping the dev experience; fix the underlying API or add `try/catch` in effects when introducing new calls.

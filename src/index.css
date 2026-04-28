@@ -252,6 +252,62 @@ body {
   box-shadow: 0 0 0 4px var(--accent-soft);
 }
 
+/* Student lecture: course search (replaces flaky native datalist) */
+.course-combobox {
+  position: relative;
+  width: 100%;
+}
+
+.course-combobox__menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 50;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.35rem;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #d8dce6;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+}
+
+.course-combobox__option {
+  width: 100%;
+  display: block;
+  text-align: left;
+  border: 0;
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  margin: 2px 0;
+  font: inherit;
+  font-size: 0.95rem;
+  background: transparent;
+  color: var(--app-ink);
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.course-combobox__option:hover,
+.course-combobox__option[aria-selected='true'] {
+  background: var(--accent-soft);
+}
+
+.course-combobox__code {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.course-combobox__name {
+  display: block;
+  color: var(--uop-muted);
+  font-size: 0.86rem;
+  margin-top: 0.15rem;
+}
+
 .primary-btn {
   display: inline-flex;
   align-items: center;

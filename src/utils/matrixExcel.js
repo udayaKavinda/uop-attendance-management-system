@@ -4,10 +4,9 @@ import * as XLSX from 'xlsx';
 export function downloadAttendanceTableExcel(table) {
   if (!table?.course || !Array.isArray(table.sessions) || table.sessions.length === 0) return;
 
-  const headers = ['Student ID', 'Email', ...table.sessions.map((s) => s.label)];
+  const headers = ['Student ID', ...table.sessions.map((s) => s.label)];
   const body = (table.rows || []).map((row) => [
     row.studentId ?? '',
-    row.email ?? '',
     ...table.sessions.map((s) => (row.attendance?.[String(s._id)] ? 'P' : '')),
   ]);
   const aoa = [headers, ...body];

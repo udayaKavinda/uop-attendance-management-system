@@ -1,68 +1,41 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { getMe } from '../api';
 
 const VALID_ROLES = new Set(['admin', 'lecturer', 'student']);
 
 export default function GoogleSuccess() {
   const navigate = useNavigate();
-  const location = useLocation();
   const [lockupOk, setLockupOk] = useState(true);
 
   useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const studentId = params.get('studentId');
-    const serverRoleRaw = String(params.get('role') || '').trim();
-    const serverRole = VALID_ROLES.has(serverRoleRaw) ? serverRoleRaw : '';
-
     async function completeLogin() {
-      if (!studentId) {
-        navigate('/');
+      let last;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        last = await getMe();
+        if (last && !last.error) break;
+        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+      }
+
+      if (!last || last.error) {
+        navigate('/?error=session');
         return;
       }
 
-      async function fetchMeWithRetries() {
-        let last;
-        for (let attempt = 0; attempt < 5; attempt += 1) {
-          last = await getMe(studentId);
-          if (last && !last.error) return last;
-          await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
-        }
-        return last;
-      }
+      const role = VALID_ROLES.has(last.role) ? last.role : 'student';
+      const studentId = last.studentId != null ? String(last.studentId) : '';
 
-      try {
-        const me = await fetchMeWithRetries();
-
-        let role = 'student';
-        if (me && !me.error && VALID_ROLES.has(me.role)) {
-          role = me.role;
-        } else if (serverRole) {
-          role = serverRole;
-        }
-
-        localStorage.setItem('student', JSON.stringify({
-          studentId,
-          role,
-          email: (me && !me.error && me.email) ? me.email : '',
-          lecturerId: (me && !me.error && me.lecturerId) ? me.lecturerId : null,
-        }));
-        navigate(role === 'admin' || role === 'lecturer' ? '/admin' : '/lecture');
-      } catch (err) {
-        console.error('login/success', err);
-        const fallback = serverRole && VALID_ROLES.has(serverRole) ? serverRole : 'student';
-        localStorage.setItem('student', JSON.stringify({
-          studentId,
-          role: fallback,
-          email: '',
-          lecturerId: null,
-        }));
-        navigate(fallback === 'admin' || fallback === 'lecturer' ? '/admin' : '/lecture');
-      }
+      localStorage.setItem('student', JSON.stringify({
+        studentId,
+        role,
+        email: last.email || '',
+        lecturerId: last.lecturerId || null,
+      }));
+      navigate(role === 'admin' || role === 'lecturer' ? '/admin' : '/lecture');
     }
 
     completeLogin();
-  }, [location.search, navigate]);
+  }, [navigate]);
 
   return (
     <div className="marketing-card page-fade">

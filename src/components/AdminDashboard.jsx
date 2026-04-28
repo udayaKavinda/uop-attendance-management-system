@@ -2,7 +2,7 @@ import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapContainer, TileLayer, Polygon, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Polygon, useMapEvents, LayersControl } from 'react-leaflet';
 import {
   getAdminCourses,
   createAdminCourse,
@@ -25,10 +25,31 @@ import {
   createPolygonPreset,
   deletePolygonPreset,
 } from '../api';
+import { readStoredStudent } from '../utils/safeStorage';
 
 const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 const DAY_ORDER = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
 const MAP_CENTER = [7.2548, 80.5974];
+
+const OSM_TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+/** Esri World Imagery — use per Esri terms of service for your deployment. */
+const SATELLITE_TILE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const SATELLITE_ATTRIBUTION = 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community';
+
+function BasemapLayerControl() {
+  return (
+    <LayersControl position="topright">
+      <LayersControl.BaseLayer checked name="Street map">
+        <TileLayer attribution={OSM_ATTRIBUTION} url={OSM_TILE_URL} />
+      </LayersControl.BaseLayer>
+      <LayersControl.BaseLayer name="Satellite">
+        <TileLayer attribution={SATELLITE_ATTRIBUTION} url={SATELLITE_TILE_URL} />
+      </LayersControl.BaseLayer>
+    </LayersControl>
+  );
+}
 
 function MapClickCapture({ onAddPoint }) {
   useMapEvents({
@@ -87,12 +108,11 @@ export default function AdminDashboard() {
   const [presetPickerError, setPresetPickerError] = useState('');
   const presetDropdownRef = useRef(null);
 
-  const student = useMemo(() => JSON.parse(localStorage.getItem('student') || '{}'), []);
-  const studentId = student?.studentId || '';
+  const student = useMemo(() => readStoredStudent(), []);
   const isAdmin = student?.role === 'admin';
 
   const loadCourses = useCallback(async () => {
-    const resp = await getAdminCourses(studentId);
+    const resp = await getAdminCourses();
     if (resp.error) {
       setError(resp.error);
       return;
@@ -103,44 +123,51 @@ export default function AdminDashboard() {
     const ordered = [...enabled, ...disabled];
     setCourses(ordered);
     setSelectedCourseId((prev) => (prev ? prev : (enabled[0] ? String(enabled[0]._id) : '')));
-  }, [studentId]);
+  }, []);
 
   const loadSessions = useCallback(async () => {
-    const resp = await getAdminAllSessions(studentId);
+    const resp = await getAdminAllSessions();
     if (resp.error) {
       setError(resp.error);
       return;
     }
     setSessions(resp.items || []);
-  }, [studentId]);
+  }, []);
 
   const loadLecturers = useCallback(async () => {
     if (!isAdmin) return;
-    const resp = await getAdminLecturers(studentId, lecturerSearch.trim());
+    const resp = await getAdminLecturers(lecturerSearch.trim());
     if (resp.error) {
       setError(resp.error);
       return;
     }
     setLecturers(resp.items || []);
-  }, [studentId, lecturerSearch, isAdmin]);
+  }, [lecturerSearch, isAdmin]);
 
   const loadPolygonPresets = useCallback(async () => {
-    const resp = await getPolygonPresets(studentId);
+    const resp = await getPolygonPresets();
     if (resp.error) {
       setError(resp.error);
       return;
     }
     setPolygonPresets(resp.items || []);
-  }, [studentId]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     async function bootstrap() {
       setLoading(true);
-      const tasks = [loadCourses(), loadSessions(), loadPolygonPresets()];
-      if (isAdmin) tasks.push(loadLecturers());
-      await Promise.all(tasks);
-      if (!cancelled) setLoading(false);
+      try {
+        const tasks = [loadCourses(), loadSessions(), loadPolygonPresets()];
+        if (isAdmin) tasks.push(loadLecturers());
+        await Promise.all(tasks);
+      } catch (err) {
+        if (!cancelled) {
+          setError((prev) => prev || err?.message || 'Could not load the dashboard. Check your connection.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
     bootstrap();
     return () => { cancelled = true; };
@@ -180,7 +207,7 @@ export default function AdminDashboard() {
     async function refreshRunningCodes() {
       if (activeTab !== 'sessions') return;
       try {
-        const resp = await getAdminCurrentSessionCodes(studentId);
+        const resp = await getAdminCurrentSessionCodes();
         if (cancelled) return;
         if (!resp.error) {
           const next = {};
@@ -203,7 +230,7 @@ export default function AdminDashboard() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [activeTab, studentId]);
+  }, [activeTab]);
 
   useEffect(() => {
     if (!message) return undefined;
@@ -235,7 +262,7 @@ export default function AdminDashboard() {
       }
       payload.lecturerId = newCourseLecturerId;
     }
-    const resp = await createAdminCourse(studentId, payload);
+    const resp = await createAdminCourse(payload);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Course added.');
@@ -250,7 +277,7 @@ export default function AdminDashboard() {
   const onDisableCourse = async (courseId) => {
     setWorking(true);
     setError('');
-    const resp = await disableAdminCourse(studentId, courseId);
+    const resp = await disableAdminCourse(courseId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Course disabled.');
@@ -262,7 +289,7 @@ export default function AdminDashboard() {
   const onEnableCourse = async (courseId) => {
     setWorking(true);
     setError('');
-    const resp = await enableAdminCourse(studentId, courseId);
+    const resp = await enableAdminCourse(courseId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Course enabled.');
@@ -281,7 +308,7 @@ export default function AdminDashboard() {
     }
     setWorking(true);
     setError('');
-    const resp = await deleteAdminCourse(studentId, courseId);
+    const resp = await deleteAdminCourse(courseId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Course and related sessions/attendance deleted.');
@@ -328,7 +355,7 @@ export default function AdminDashboard() {
       setPresetPickerError('');
       setPresetPickerLoading(true);
       try {
-        const resp = await getPolygonPresets(studentId);
+        const resp = await getPolygonPresets();
         if (resp.error) {
           setPresetPickerError(String(resp.error));
         } else {
@@ -359,7 +386,7 @@ export default function AdminDashboard() {
     }
     setWorking(true);
     setError('');
-    const resp = await createAdminSession(studentId, selectedCourseId, {
+    const resp = await createAdminSession(selectedCourseId, {
       lectureDay,
       startTime,
       endTime,
@@ -384,7 +411,7 @@ export default function AdminDashboard() {
   const onActivateSession = async (sessionId) => {
     setWorking(true);
     setError('');
-    const resp = await activateAdminSession(studentId, sessionId);
+    const resp = await activateAdminSession(sessionId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Session activated.');
@@ -396,7 +423,7 @@ export default function AdminDashboard() {
   const onDeactivateSession = async (sessionId) => {
     setWorking(true);
     setError('');
-    const resp = await deactivateAdminSession(studentId, sessionId);
+    const resp = await deactivateAdminSession(sessionId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Session deactivated.');
@@ -410,7 +437,7 @@ export default function AdminDashboard() {
     if (!ok) return;
     setWorking(true);
     setError('');
-    const resp = await deleteAdminSession(studentId, sessionId);
+    const resp = await deleteAdminSession(sessionId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Session deleted.');
@@ -422,7 +449,7 @@ export default function AdminDashboard() {
   const onStartRotation = async (sessionId) => {
     setWorking(true);
     setError('');
-    const resp = await startAdminSessionRotation(studentId, sessionId);
+    const resp = await startAdminSessionRotation(sessionId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Code rotation started.');
@@ -434,7 +461,7 @@ export default function AdminDashboard() {
   const onStopRotation = async (sessionId) => {
     setWorking(true);
     setError('');
-    const resp = await stopAdminSessionRotation(studentId, sessionId);
+    const resp = await stopAdminSessionRotation(sessionId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Code rotation paused.');
@@ -446,7 +473,7 @@ export default function AdminDashboard() {
   const onAssignLecturer = async (courseId, lecturerId) => {
     setWorking(true);
     setError('');
-    const resp = await patchCourseAssignLecturer(studentId, courseId, lecturerId);
+    const resp = await patchCourseAssignLecturer(courseId, lecturerId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Course owner updated.');
@@ -459,7 +486,7 @@ export default function AdminDashboard() {
     setWorking(true);
     setError('');
     setMessage('');
-    const resp = await createAdminLecturer(studentId, {
+    const resp = await createAdminLecturer({
       name: newLecturerName.trim(),
       email: newLecturerEmail.trim(),
       phone: newLecturerPhone.trim(),
@@ -480,7 +507,7 @@ export default function AdminDashboard() {
     if (!ok) return;
     setWorking(true);
     setError('');
-    const resp = await deleteAdminLecturer(studentId, lecturerId);
+    const resp = await deleteAdminLecturer(lecturerId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Lecturer removed.');
@@ -495,7 +522,7 @@ export default function AdminDashboard() {
     if (!ok) return;
     setWorking(true);
     setError('');
-    const resp = await deletePolygonPreset(studentId, presetId);
+    const resp = await deletePolygonPreset(presetId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Preset deleted.');
@@ -543,7 +570,7 @@ export default function AdminDashboard() {
     }
     setWorking(true);
     setError('');
-    const resp = await createPolygonPreset(studentId, { name, polygons: rings });
+    const resp = await createPolygonPreset({ name, polygons: rings });
     if (resp.error) setError(resp.error);
     else {
       setMessage('Preset created.');
@@ -816,10 +843,7 @@ export default function AdminDashboard() {
                 </div>
                 <div className="map-wrap map-wrap--below-preset-dropdown">
                   <MapContainer center={MAP_CENTER} zoom={16} scrollWheelZoom style={{ height: 320, width: '100%' }}>
-                    <TileLayer
-                      attribution="&copy; OpenStreetMap contributors"
-                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    />
+                    <BasemapLayerControl />
                     {selectedPresetPolygons.map((poly, idx) => (poly.length >= 3 ? (
                       <Polygon key={`selected-preset-poly-${idx}`} positions={poly.map((p) => [p.lat, p.lng])} pathOptions={{ color: idx % 2 === 0 ? '#2563eb' : '#7b61ff' }} />
                     ) : null))}
@@ -986,10 +1010,7 @@ export default function AdminDashboard() {
                 </div>
                 <div className="map-wrap">
                   <MapContainer center={MAP_CENTER} zoom={16} scrollWheelZoom style={{ height: 320, width: '100%' }}>
-                    <TileLayer
-                      attribution="&copy; OpenStreetMap contributors"
-                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    />
+                    <BasemapLayerControl />
                     <MapClickCapture onAddPoint={presetDrawAddPoint} />
                     {presetDrawPolygons.map((poly, idx) => (poly.length >= 3 ? (
                       <Polygon key={`preset-draw-${idx}`} positions={poly.map((p) => [p.lat, p.lng])} pathOptions={{ color: idx === presetDrawActiveIdx ? '#7b61ff' : '#2563eb' }} />
