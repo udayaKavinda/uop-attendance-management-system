@@ -32,6 +32,8 @@ export default function LectureEntry() {
   const [recorded, setRecorded] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [locationPhase, setLocationPhase] = useState('idle');
+  /** Debug: last accuracy (meters) sent with record-attendance; remove when done debugging. */
+  const [debugGpsAccuracyM, setDebugGpsAccuracyM] = useState(null);
   const blurCloseTimer = useRef(null);
   const comboboxRef = useRef(null);
   const listboxId = 'running-course-listbox';
@@ -54,6 +56,7 @@ export default function LectureEntry() {
       if (prev === 'idle' && silent) return prev;
       return 'idle';
     });
+    setDebugGpsAccuracyM(null);
   }, []);
 
   const startLocationPhase = useCallback(
@@ -73,6 +76,9 @@ export default function LectureEntry() {
             if (!locationPhaseRef.current.active) return;
             const { courseId: cid, code } = locationPhaseRef.current;
             const { latitude, longitude, accuracy } = pos.coords;
+            setDebugGpsAccuracyM(
+              typeof accuracy === 'number' && Number.isFinite(accuracy) ? accuracy : null,
+            );
             try {
               const record = await recordAttendance({
                 courseId: cid,
@@ -343,7 +349,12 @@ export default function LectureEntry() {
   const formLocked = submitting || checkingStatus || isCheckingLocation;
 
   return (
-    <form className="student-panel page-fade" onSubmit={handleSubmit}>
+    <>
+      <div className="lecture-entry__debug-gps" title="Debug: accuracy sent to server">
+        GPS accuracy (sent):{' '}
+        {debugGpsAccuracyM != null ? `${Math.round(debugGpsAccuracyM)} m` : '—'}
+      </div>
+      <form className="student-panel page-fade" onSubmit={handleSubmit}>
       <div className="card-content">
         {!recorded && (
           <>
@@ -455,5 +466,6 @@ export default function LectureEntry() {
         )}
       </div>
     </form>
+    </>
   );
 }

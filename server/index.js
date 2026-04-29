@@ -17,6 +17,12 @@ const { startNonRecurringExpiryJob, isNonRecurringExpired } = require('./lib/ses
 
 const DAY_INDEX = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
+/**
+ * Geofence edge buffer cap (metres). Inside any polygon still passes. Outside passes only
+ * if distance to the nearest polygon edge ≤ this (or ≤ reported accuracy when 0 < accuracy ≤ cap).
+ */
+const GEOFENCE_ACCURACY_BUFFER_CAP_M = 5;
+
 function toMinutes(hhmm) {
   const [h, m] = String(hhmm || '').split(':').map((v) => parseInt(v, 10));
   if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
@@ -145,11 +151,12 @@ function minDistanceToAnyPolygonEdgeMeters(lat, lng, polygons = []) {
 function isWithinGeofenceWithAccuracy(lat, lng, accuracy, polygons = []) {
   const inside = isPointInsideAnyPolygon(lat, lng, polygons);
   const accuracyMeters = Number(accuracy);
+  const cap = GEOFENCE_ACCURACY_BUFFER_CAP_M;
   const edgeBufferMeters = (
-    Number.isFinite(accuracyMeters) && accuracyMeters > 0 && accuracyMeters <= 20
+    Number.isFinite(accuracyMeters) && accuracyMeters > 0 && accuracyMeters <= cap
   )
     ? accuracyMeters
-    : 20;
+    : cap;
 
   if (inside) return true;
   const edgeDistance = minDistanceToAnyPolygonEdgeMeters(lat, lng, polygons);
