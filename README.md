@@ -1,248 +1,383 @@
 # UOP Attendance Management System
 
-This project is a role-based attendance platform for the University of Peradeniya:
+Role-based web application for lecture attendance at the University of Peradeniya. Students mark attendance for **live** sessions using a **rotating PIN** and **browser geolocation**; **lecturers** and **admins** manage courses, sessions, geofences, and reporting.
 
-- **Students** submit attendance for currently running sessions.
-- **Lecturers/Admins** manage courses, lecture sessions, code rotation, and geofence polygons.
-- **Admins** additionally manage lecturer accounts and shared polygon presets.
+**Repository type:** private application (`package.json` → `"private": true`). **No `LICENSE` file** is present in this repo—treat usage and distribution as defined by your institution.
 
-It uses a React frontend (`src/`) and an Express + MongoDB backend (`server/`).
+---
 
-## Current architecture
+## Purpose
 
-### Backend
+- Give students a single place to record attendance when a session is **actively running** (same calendar day and clock time as the session slot).
+- Tie attendance to **verified identity** (Google OAuth + server session), **session PIN**, **schedule window**, and **campus geofence** (polygons + GPS accuracy buffer).
+- Let staff create and operate sessions, display live PINs, export matrices, and maintain reusable map presets.
 
-- Express API in `server/index.js`
-- Mongo models in `server/models/`:
-  - `Person` (stored in `people` collection)
-  - `Course`
-  - `LectureSession`
-  - `Attendance`
-  - `PolygonPreset`
+---
 
-### Frontend
+## Core features
 
-- React Router app in `src/App.js`
-- Layout-based routing:
-  - `/` and `/login/success` (public/auth)
-  - `/lecture` (student-only)
-  - `/admin` (lecturer/admin-only)
-- API client in `src/api.js`: all requests use `fetch` with **`credentials: 'include'`** so the Passport session cookie is sent; responses are normalized with **`safeFetchJson`** (network errors return `{ error }` instead of throwing).
-- Root **`ErrorBoundary`** wraps the app (friendlier recovery than a blank crash).
-- Corrupt `localStorage` for the `student` key is tolerated via **`readStoredStudent()`** (`src/utils/safeStorage.js`).
-- Student **course picker** on `/lecture` is a custom combobox (search by code/name, pick from list); students do **not** fetch the live PIN from the API—they enter the code shown in class.
+| Area | Capabilities |
+|------|----------------|
+| **Students** | Google sign-in; pick a **running** course; enter PIN from class; **PIN validated first**, then **periodic GPS samples** call `record-attendance` until success or timeout; attendance status polling per course. |
+| **Lecturers** | Staff console: courses they own, session CRUD, polygons (draw / presets), rotation start/stop, live PIN, attendance matrix, presentation route for PIN. |
+| **Admins** | Same as lecturers for any course, plus lecturer directory, polygon presets, course assign, full course lifecycle. |
+| **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence with **5 m** edge buffer cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M` in `server/index.js`); non-recurring session auto-deactivate via background job. |
 
-## Roles and access
+---
 
-Roles are stored on `Person.role`:
+## Tech stack
 
-- `student`
-- `lecturer`
-- `admin`
+| Layer | Technology |
+|-------|------------|
+| **Frontend** | React 19, React Router 6, Create React App (`react-scripts` 5), Leaflet / react-leaflet 5, `fetch` + credentialed CORS. |
+| **Backend** | Node.js, **Express 5**, Mongoose 9, Passport + `passport-google-oauth20`, `express-session`, `cors`, `dotenv`. |
+| **Data** | MongoDB (documents: people, courses, lecture sessions, attendance, polygon presets). |
+| **Tooling** | `concurrently` for `npm run dev`; optional Excel export via `xlsx` on the client (`matrixExcel.js`). |
 
-Access behavior:
+---
 
-- `student` -> student page (`/lecture`)
-- `lecturer` and `admin` -> staff console (`/admin`)
+## Architecture overview
 
-### Security model (recent)
+```mermaid
+flowchart LR
+  subgraph browser [Browser SPA]
+    UI[React App]
+    ApiClient[api.js fetch helpers]
+    UI --> ApiClient
+  end
+  subgraph server [Express server/index.js]
+    Auth[Passport Google OAuth]
+    Sess[express-session cookie attendance.sid]
+    Routes[REST routes]
+    Auth --> Sess
+    Sess --> Routes
+  end
+  subgraph data [MongoDB]
+    Person[(people)]
+    Course[(courses)]
+    Session[(lecture sessions)]
+    Attendance[(attendance)]
+    Preset[(polygon presets)]
+  end
+  ApiClient <-->|credentials include| Routes
+  Routes --> Person
+  Routes --> Course
+  Routes --> Session
+  Routes --> Attendance
+  Routes --> Preset
+```
 
-| Area | Behavior |
-|------|------------|
-| **Staff APIs** (`/api/admin/*`) | Identity comes from the **Passport session** only (cookie **`attendance.sid`**). The server reloads `Person` from MongoDB and checks **`admin`** / **`lecturer`**. The old **`X-Student-Id`** header is **not** used for authorization. |
-| **Student attendance** | `GET /api/attendance-status`, `POST /api/verify-lecture`, and `POST /api/record-attendance` require a session and **`role === 'student'`**. The server uses **`req.user`** (session)—**not** `studentId` in query or body. |
-| **Live PIN** | **`GET /api/lecture-code`** requires a **staff** session; **lecturers** only for **their** courses; **admins** for any course. Students cannot read the rotating code over this endpoint. |
-| **OAuth redirect** | After Google sign-in, the user is sent to **`/login/success`** without putting Mongo ids in the query string; the SPA calls **`GET /api/me`** with credentials to fill `localStorage` for UI routing. |
-| **CORS** | Server uses **credentials: true** and an allowlist from **`FRONTEND_URL`** (and fallback **`APP_BASE_URL`**); set origins to match your SPA exactly (comma-separated for multiple). |
-| **Production cookies** | Session cookie uses **`Secure`** and **`SameSite=None`** when `NODE_ENV === 'production'` so a separate API host can still receive the cookie (HTTPS required). |
+- **Single-process API** in `server/index.js` (large file: models, geofence math, auth helpers, and HTTP handlers).
+- **Session-based auth**: Passport serializes `Person._id`; staff vs student routes use `sessionStaffAuth` / `sessionStudentAuth` after reloading `Person` from MongoDB.
+- **PIN state** lives in **process memory** (`lectureCode.js` `Map`), not MongoDB—**server restarts** drop rotation state (codes re-materialize on next access).
+- **Local dev split**: default CRA dev is `http://localhost:3000`; API defaults to port **5000**. `src/api.js` points `REACT_APP_API_BASE` or `localhost:5000` when the app runs on port 3000.
 
-## Core workflow
+---
 
-### 1) Sign-in
+## Project structure
 
-1. User starts Google OAuth at `/auth/google`.
-2. Backend resolves/creates `Person` by email.
-3. Backend redirects to `/login/success` (session cookie is set on the API origin).
-4. Frontend calls `GET /api/me` with credentials, stores identity in `localStorage` for UI, and routes by role.
+```
+.
+├── public/                 # CRA static assets
+├── src/
+│   ├── App.js              # Routes, auth guards (localStorage + role)
+│   ├── index.js            # StrictMode, BrowserRouter, ErrorBoundary
+│   ├── index.css           # Global + component-adjacent utility styles
+│   ├── layouts/            # MarketingLayout, StudentLayout, AdminLayout + layouts.css
+│   ├── components/         # Login, GoogleSuccess, LectureEntry, AdminDashboard, …
+│   ├── api.js              # All HTTP helpers; safeFetchJson; 401 → notifySessionInvalid
+│   └── utils/              # safeStorage, authRedirect, matrixExcel
+├── server/
+│   ├── index.js            # Express app, OAuth, migrations, all API routes
+│   ├── models/             # Person, Course, LectureSession, Attendance, PolygonPreset, CourseConfig*
+│   └── lib/                # lectureCode.js, sessionExpiry.js
+├── deploy/
+│   └── nginx-app-domain.conf   # Example reverse-proxy (API + auth + SPA)
+├── package.json
+└── README.md
+```
 
-### 2) Student attendance (`/lecture`)
+\* **`CourseConfig`** (`server/models/CourseConfig.js`) defines a Mongoose model but is **not referenced** by `server/index.js` or the current API—treat as **legacy / unused** unless you wire it in.
 
-1. UI fetches currently running courses (`GET /api/courses/running`).
-2. Student selects a running course.
-3. UI checks attendance status for the signed-in student (`GET /api/attendance-status` with session cookie).
-4. If not yet marked, student enters code and submits with location.
-5. Backend validates:
-   - active session exists for selected course now
-   - submitted lecture code is valid
-   - current day/time is within session window
-   - location is inside any configured polygon
-6. Attendance is stored in `Attendance`.
-
-Duplicate protection is enforced by unique index:
-
-- `student + session + attendanceDate`
-
-### 3) Staff console (`/admin`)
-
-Tabs/features:
-
-- **Courses**
-  - create, enable/disable, delete
-  - admin can assign lecturer owner
-  - open attendance matrix per course
-- **Create session**
-  - day/start/end time
-  - recurring yes/no
-  - optional code rotation at creation
-  - draw one or more polygons on map
-  - optional merge from saved presets
-- **Sessions**
-  - activate/deactivate/delete sessions
-  - live code display for running sessions
-  - start/pause rotation
-- **Lecturers** (admin only)
-  - search/add/remove lecturer accounts
-- **Presets** (admin only)
-  - create/delete reusable polygon presets
+---
 
 ## Environment variables
 
-Create `.env` in project root:
+Create a **`.env`** file in the **project root** (not committed—verify with your team). Names below match `server/index.js`, `sessionExpiry.js`, and `src/api.js`.
 
-```env
-MONGO_URI=mongodb://localhost:27017/attendance
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-client-secret
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `MONGO_URI` | Recommended | Mongo connection string. Default in code: `mongodb://localhost:27017/attendance` |
+| `GOOGLE_CLIENT_ID` | Yes (OAuth) | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Yes (OAuth) | Google OAuth secret |
+| `SESSION_SECRET` | Production | Session HMAC secret; dev fallback exists—**change for production** |
+| `FRONTEND_URL` | Strongly recommended | Allowed CORS origin(s) for SPA; **comma-separated**, no trailing slash issues handled in code. Used after OAuth as redirect target base. |
+| `APP_BASE_URL` | Recommended for OAuth | Public origin used to build Google **`callbackURL`** (`…/auth/google/callback`). Fallback chain in strategy setup includes `FRONTEND_URL` / `REACT_APP_API_BASE`. |
+| `REACT_APP_API_BASE` | Optional | CRA: absolute API origin (e.g. `http://localhost:5000`) when SPA and API differ. Empty string = same origin (typical reverse proxy). |
+| `NODE_ENV` | Deployment | `production` enables **Secure** + **SameSite=None** session cookies (HTTPS required for cross-site cookies). |
+| `PORT` | Optional | Express listen port; default **5000** |
+| `SESSION_EXPIRE_JOB_MS` | Optional | Interval for non-recurring session sweep; min **10000**, default **60000** (`sessionExpiry.js`) |
 
-# Use a long random string in production
-SESSION_SECRET=change-me
+**CRA note:** Only variables prefixed with `REACT_APP_` are exposed to the browser at build time.
 
-# SPA origin(s) for CORS + post-OAuth redirect (comma-separated allowed).
-# Local dev with CRA on :3000 and API on :5000: include http://localhost:3000
-FRONTEND_URL=http://localhost:3000
+---
 
-# Public URL of the app as seen by Google (OAuth callback is APP_BASE_URL/auth/google/callback).
-# Often same as FRONTEND_URL in single-domain or tunnel setups.
-APP_BASE_URL=http://localhost:3000
+## Database setup
 
-# Optional: override API origin from the React app (e.g. http://localhost:5000).
-# Leave empty when the browser talks to the same host as the SPA (reverse proxy).
-REACT_APP_API_BASE=
+1. Install and start **MongoDB** locally or use Atlas / managed Mongo.
+2. Set `MONGO_URI` in `.env`.
+3. Start the server once: Mongoose creates/uses collections; **`server/index.js` runs startup migrations** (rename `students` → `people`, merge legacy `lecturers`, normalize courses, index sync, etc.). Review server logs on first boot.
 
-# Optional non-recurring session expiry sweep interval (ms)
-# minimum 10000, default 60000
-SESSION_EXPIRE_JOB_MS=60000
+**Important indexes:** `Attendance` has a **unique compound index** on `(student, session, attendanceDate)` for idempotent same-day recording.
+
+---
+
+## Install, run, build
+
+```bash
+npm install
 ```
 
-## Running locally
+**Development (SPA + API):**
 
-1. Install dependencies:
+```bash
+npm run dev
+```
 
-   ```bash
-   npm install
-   ```
+- Frontend: `http://localhost:3000` (CRA)
+- API: `http://localhost:5000` (unless `PORT` is set)
 
-2. Start app + API:
+Ensure `FRONTEND_URL` includes `http://localhost:3000` for CORS when using split ports.
 
-   ```bash
-   npm run dev
-   ```
+**Backend only:**
 
-3. Open:
-   - Frontend: `http://localhost:3000`
-   - Backend: `http://localhost:5000`
+```bash
+npm run server
+```
 
-Ensure **`FRONTEND_URL`** (and **`APP_BASE_URL`** if used for OAuth) include `http://localhost:3000` so CORS and the Google redirect after login resolve correctly.
+**Production build (static React):**
 
-**OAuth callback URL:** In `server/index.js`, Google’s redirect URI is derived from **`APP_BASE_URL`** (then **`FRONTEND_URL`**). It must match the **public URL that reaches your Express app** for `/auth/google/callback` (e.g. same tunnel as the API, or `http://localhost:5000` if that is where OAuth is registered during split dev).
+```bash
+npm run build
+```
 
-## Deployment notes
+Serve the `build/` folder behind the same origin as `/api` and `/auth` (recommended), or set `REACT_APP_API_BASE` to the API origin and configure CORS accordingly.
 
-Recommended deployment is **single-domain reverse proxy**:
+**Other scripts:** `npm start` (CRA dev, client only), `npm test`, `npm run tunnel` (expects **`ngrok`** on PATH—not an npm dependency).
 
-- `https://app.domain.com/` -> React frontend
-- `https://app.domain.com/api/*` -> backend
-- `https://app.domain.com/auth/*` -> backend
+---
 
-Google OAuth client should include:
+## Deployment (concise)
 
-- Authorized JavaScript origin: `https://app.domain.com`
-- Redirect URI: `https://app.domain.com/auth/google/callback`
+Prefer a **single hostname** reverse proxy:
 
-A sample nginx config is available at `deploy/nginx-app-domain.conf`.
+| Path | Target |
+|------|--------|
+| `/api/*` | Node (Express) |
+| `/auth/*` | Node (Passport OAuth callback) |
+| `/*` | Static `build/` or Node SSR (not included) |
 
-## API reference (implemented)
+Example: `deploy/nginx-app-domain.conf`.
 
-### Auth/profile
+**Google Cloud Console:** Authorized JavaScript origin and **redirect URI** must match how users reach the app (e.g. `https://app.example.com` and `https://app.example.com/auth/google/callback` if the API handles `/auth` on that host).
 
-- `GET /auth/google`
-- `GET /auth/google/callback`
-- `POST /api/login` (legacy lookup by email / external id; does **not** create a session—prefer Google OAuth)
-- `GET /api/me` (session required; returns current user: `studentId` = Person `_id`, `role`, `email`, `lecturerId`)
-- `POST /api/logout` (ends Passport session)
+**Sessions:** Default store is **`express-session` in-memory**. Deploys and Node restarts **invalidate all sessions**; the SPA treats `401` via `notifySessionInvalid`. For production durability, configure a persistent session store (e.g. `connect-mongo`).
 
-### Student endpoints
+---
 
-- `GET /api/courses`
-- `GET /api/courses/running`
-- `GET /api/attendance-status?courseId=...` (requires Google session; **student** role only; server uses session user, not `studentId` query)
-- `POST /api/verify-lecture` (session required; student role only)
-- `POST /api/record-attendance` (session required; student role only; **never** trusts `studentId` from body)
+## API overview
 
-### Staff/admin endpoints
+**Conventions**
 
-All `/api/admin/*` routes require a logged-in **staff** session (Google OAuth cookie). Unauthorized responses use `401`; forbidden (e.g. student account) use `403`.
+- JSON bodies for `POST`/`PATCH` where applicable.
+- **Cookie**: `attendance.sid` (HTTP-only); clients must use `credentials: 'include'` (`safeFetchJson` in `src/api.js`).
+- **401**: unauthenticated or invalid session; **403**: authenticated but wrong role or course access.
 
-- Browser requests must include **credentials** (session cookie).
-- Configure **`FRONTEND_URL`** on the server to match your SPA origin(s) for CORS (comma-separated list allowed).
+### Auth & profile
 
-#### Live lecture pin (by course, during active session)
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/auth/google` | Starts OAuth (503 JSON if Google env missing) |
+| GET | `/auth/google/callback` | OAuth callback → redirect to `FRONTEND_URL`/`…`/login/success |
+| POST | `/api/login` | Lookup person by email / id—**does not establish Passport session** |
+| GET | `/api/me` | Session required → `{ studentId, email, role, lecturerId }` |
+| POST | `/api/logout` | Destroy session |
 
-- `GET /api/lecture-code?courseId=...` — **staff session only**; **lecturers** only for courses they own; **admins** for any course. Students cannot call this. Client helper: `getLectureCode(courseId)` in `src/api.js` (same cookie rules as other staff calls).
+### Public read (no session in handler)
 
-#### Courses
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/api/courses` | Active courses (summary) |
+| GET | `/api/courses/running` | Courses with an active session **right now** |
 
-- `GET /api/admin/courses`
-- `POST /api/admin/courses`
-- `PATCH /api/admin/courses/:courseId/disable`
-- `PATCH /api/admin/courses/:courseId/enable`
-- `PATCH /api/admin/courses/:courseId/assign-lecturer` (admin)
-- `DELETE /api/admin/courses/:courseId`
+### Student (session + `role === 'student'`)
 
-#### Sessions
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/api/attendance-status?courseId=` | Same-day attendance for session-in-window |
+| POST | `/api/verify-lecture-pin` | PIN + schedule + active session **only** (no geolocation)—used before GPS phase |
+| POST | `/api/verify-lecture` | **Combined** PIN + schedule + **GPS/geofence** in one call (still on server; SPA may omit) |
+| POST | `/api/record-attendance` | PIN + schedule + GPS + geofence; persists attendance; trusts **session user** for student id |
 
-- `GET /api/admin/sessions`
-- `GET /api/admin/courses/:courseId/sessions`
-- `POST /api/admin/courses/:courseId/sessions`
-- `PATCH /api/admin/sessions/:sessionId/activate`
-- `PATCH /api/admin/sessions/:sessionId/deactivate`
-- `DELETE /api/admin/sessions/:sessionId`
-- `GET /api/admin/sessions/current-codes`
-- `GET /api/admin/sessions/:sessionId/current-code`
-- `PATCH /api/admin/sessions/:sessionId/rotation/start`
-- `PATCH /api/admin/sessions/:sessionId/rotation/stop`
+### Staff (`lecturer` or `admin`; course-scoped for lecturers)
 
-#### Reporting
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/api/lecture-code?courseId=` | Live PIN for active session (staff; lecturer owns course) |
+| GET | `/api/admin/courses` | Staff course list |
+| POST | `/api/admin/courses` | Create |
+| DELETE | `/api/admin/courses/:courseId` | Delete |
+| PATCH | `/api/admin/courses/:courseId/disable` | |
+| PATCH | `/api/admin/courses/:courseId/enable` | |
+| PATCH | `/api/admin/courses/:courseId/assign-lecturer` | Admin |
+| GET | `/api/admin/courses/:courseId/sessions` | |
+| POST | `/api/admin/courses/:courseId/sessions` | Create session |
+| GET | `/api/admin/sessions` | |
+| GET | `/api/admin/sessions/current-codes` | |
+| GET | `/api/admin/sessions/:sessionId/current-code` | |
+| PATCH | `/api/admin/sessions/:sessionId/activate` | |
+| PATCH | `/api/admin/sessions/:sessionId/deactivate` | |
+| DELETE | `/api/admin/sessions/:sessionId` | |
+| PATCH | `/api/admin/sessions/:sessionId/rotation/start` | |
+| PATCH | `/api/admin/sessions/:sessionId/rotation/stop` | |
+| GET | `/api/admin/courses/:courseId/attendance-matrix` | |
+| GET | `/api/admin/lecturers?q=` | Admin |
+| POST | `/api/admin/lecturers` | Admin |
+| PATCH | `/api/admin/lecturers/:id` | Admin |
+| DELETE | `/api/admin/lecturers/:id` | Admin |
+| GET | `/api/admin/polygon-presets` | |
+| POST | `/api/admin/polygon-presets` | Admin |
+| PATCH | `/api/admin/polygon-presets/:id` | Admin |
+| DELETE | `/api/admin/polygon-presets/:id` | Admin |
 
-- `GET /api/admin/courses/:courseId/attendance-matrix`
+---
 
-#### Lecturer directory (admin)
+## Authentication and authorization flow
 
-- `GET /api/admin/lecturers?q=...`
-- `POST /api/admin/lecturers`
-- `PATCH /api/admin/lecturers/:id`
-- `DELETE /api/admin/lecturers/:id`
+1. User visits `/` → `Login` can redirect to **`/auth/google`** on the **API origin** (full URL depends on deployment).
+2. Google returns to **`/auth/google/callback`**; Passport establishes session and redirects to **`{FRONTEND_URL}/login/success`**.
+3. `GoogleSuccess` calls **`GET /api/me`** with credentials and writes **`localStorage`** key `student` (shape expected by `App.js` guards).
+4. **Routing:** `student` → `/lecture`; `lecturer` / `admin` → `/admin`. Guards are **client-side** (localStorage); **server routes enforce real roles**—never rely on the client alone.
+5. **`/api/login`** remains for legacy lookup but does not replace OAuth session establishment.
 
-#### Polygon presets
+**Role source of truth:** `Person.role` in MongoDB (`student` | `lecturer` | `admin`). Google callback can **promote** to `lecturer` if email matches an active lecturer row (see `server/index.js` Google strategy).
 
-- `GET /api/admin/polygon-presets`
-- `POST /api/admin/polygon-presets` (admin)
-- `PATCH /api/admin/polygon-presets/:id` (admin)
-- `DELETE /api/admin/polygon-presets/:id` (admin)
+---
 
-## Notes
+## Student attendance flow (implementation)
 
-- This repository includes migration logic in server startup to normalize older data (for example legacy collections/fields).
-- Session auto-expiry for non-recurring sessions runs in a background sweep job.
-- In development, unhandled promise rejections may be logged without stopping the dev experience; fix the underlying API or add `try/catch` in effects when introducing new calls.
-- **API restarts:** The default Express session store is **in-memory**, so a **Node restart invalidates all sessions** and APIs return `401`. The SPA redirects to `/?error=session` and clears `localStorage`. For production, use a **persistent store** (e.g. `connect-mongo` or Redis with `express-session`) so logins survive deploys/restarts.
+This supersedes older “single submit with GPS” descriptions.
+
+1. `GET /api/courses/running` populates the combobox.
+2. On submit: **`POST /api/verify-lecture-pin`** with `courseId` + `lectureCode` (no coordinates).
+3. On success, the client starts a **location phase**: **`getCurrentPosition`** immediately and then every **5 s**, each calling **`POST /api/record-attendance`** with `method: 'google'` and coordinates until **`success`** or **`duplicate`**, or **~3 minutes** elapse.
+4. Server validates PIN, schedule, and **geofence** (including **5 m** edge buffer rules) on every `record-attendance` call.
+
+**Optional debug UI:** `LectureEntry.jsx` may show a **fixed GPS accuracy HUD** and related CSS—intended for temporary debugging; safe to remove for production polish.
+
+---
+
+## Development conventions
+
+- **API client:** Add new calls to `src/api.js` using **`safeFetchJson`**; preserve **`credentials: 'include'`** and **401 handling** (`notifySessionInvalid`).
+- **Styles:** Global `src/index.css`; layout-specific `src/layouts/layouts.css`. BEM-style class names appear in places (`student-empty__text`, `primary-btn--location-check`).
+- **Maps:** Leaflet assets; admin/student flows use React hooks and functional components.
+- **Error handling:** Root **`ErrorBoundary`**; dev-only `unhandledrejection` logging in `src/index.js`.
+
+---
+
+## Known limitations and assumptions
+
+| Topic | Detail |
+|-------|--------|
+| **PIN storage** | In-memory per server process; **not** durable across restarts or horizontal scaling without redesign. |
+| **Geofence** | Polygons on the **session**; point-in-polygon plus **edge buffer** capped at **5 m** (see `GEOFENCE_ACCURACY_BUFFER_CAP_M`). |
+| **PIN rotation** | **30 s** window in `lectureCode.js` when rotation is active (`ROTATION_MS`). |
+| **CourseConfig model** | Defined on disk but **not used** by current routes—verify before deleting. |
+| **`/api/courses` /running** | Implemented without session checks—**assume public discovery** is acceptable; restrict in proxy if needed. |
+| **Client guards** | Route protection uses **localStorage**; always mirror rules on the server (already done for attendance). |
+| **Tests** | CRA test stack present; **no comprehensive API integration tests** in repo were verified for this README. |
+
+---
+
+## Troubleshooting
+
+| Symptom | Things to check |
+|---------|-------------------|
+| CORS errors | `FRONTEND_URL` matches browser origin exactly; `credentials: true` on server; no mixed `www` vs bare domain. |
+| OAuth redirect mismatch | Google Console redirect URI matches **`APP_BASE_URL` + `/auth/google/callback`** (or relative path if relative callback is registered, which is uncommon). |
+| 401 after deploy | In-memory sessions lost; users must sign in again; consider persistent session store. |
+| PIN always invalid | Clock skew; session not “running” (day/time); rotation paused; wrong `courseId`; server restarted (new code). |
+| Geofence rejects on edge | **5 m** buffer; accuracy reported > 5 m uses 5 m buffer; verify polygon draws. |
+| Mongo migration errors | Inspect startup logs in `server/index.js` connect handler; backup DB before upgrades. |
+
+---
+
+## Contributing
+
+1. Work on a feature branch; keep changes focused.
+2. Match existing patterns in `src/api.js`, `server/index.js` auth helpers, and component style.
+3. Run **`npm run build`** before sharing frontend changes; **`node --check server/index.js`** for syntax after server edits.
+4. Update this README when adding env vars, routes, or auth behavior—**documentation drift** has been an issue historically.
+
+---
+
+## AI Context (for coding assistants)
+
+**Goals when editing this repo**
+
+- Prefer **small, reviewable diffs**; do not refactor `server/index.js` broadly without explicit instruction.
+- **Never** trust `studentId` from request body for authorization—use `sessionStudentAuth` / `req.user` patterns already in place.
+- **Preserve** `safeFetchJson` and **401 → `notifySessionInvalid`** behavior for session coherence.
+
+**Architecture patterns**
+
+- Monolithic Express file with inline helpers (`resolveActiveSessionForCourse`, geofence, schedule checks).
+- Mongoose models in `server/models/`.
+- React SPA with **layout routes** and **role gates** in `App.js` (localStorage snapshot of `/api/me`).
+
+**State management**
+
+- **React component state and hooks only**—no Redux or global client store.
+
+**Styling**
+
+- CSS files (`index.css`, `layouts.css`); utility classes like `primary-btn`, `card-content`, `input`.
+
+**Naming**
+
+- Mongo: `Person` model, `people` collection historically; routes under `/api/admin/…`.
+- Session cookie name: **`attendance.sid`**.
+
+**Sensitive / high-impact areas (edit carefully)**
+
+- **`server/index.js`**: OAuth strategy, session cookie flags, CORS, startup **migrations**, attendance and geofence logic.
+- **`server/lib/lectureCode.js`**: PIN generation and validation contract with clients.
+- **`src/utils/authRedirect.js`**, **`src/api.js`**: session invalidation and base URL logic.
+
+**Likely obsolete**
+
+- **`POST /api/verify-lecture`** for the **current** SPA path (`LectureEntry` uses **verify-lecture-pin** + **record-attendance**); keep if external clients rely on it.
+
+**Files with temporary debug**
+
+- **`src/components/LectureEntry.jsx`** — GPS accuracy HUD (remove if not wanted).
+- **`src/index.css`** — `.lecture-entry__debug-gps`
+
+---
+
+## Verification notes (README vs codebase)
+
+| Item | Status |
+|------|--------|
+| Student flow (PIN then GPS polling) | **Updated in this README**; older text describing a single GPS+verify step was **out of date**. |
+| `POST /api/verify-lecture-pin` | **Documented here**; was missing from the previous README API list. |
+| Geofence buffer | **5 m** in code—prior docs mentioning **20 m** would be **wrong**. |
+| `CourseConfig` | **Exists** but **unused** in server routes—flagged above. |
+| License | **No LICENSE file**; package is **private**—not open source by default. |
+
+---
+
+## License
+
+No license file is included. **`package.json` declares `"private": true`.** Use and redistribution are subject to your institution’s policies; add a `LICENSE` file if you intend open-source distribution.

@@ -180,11 +180,6 @@ export default function AdminDashboard() {
   }, [lecturerSearch, isAdmin, loadLecturers]);
 
   useEffect(() => {
-    if (!isAdmin || lecturers.length === 0) return;
-    setNewCourseLecturerId((prev) => (prev ? prev : String(lecturers[0]._id)));
-  }, [isAdmin, lecturers]);
-
-  useEffect(() => {
     if (!isAdmin) return;
     if (activeTab === 'lecturers') loadLecturers();
     if (activeTab === 'presets') loadPolygonPresets();
@@ -200,6 +195,24 @@ export default function AdminDashboard() {
       })
       .sort((a, b) => sessionDistanceMinutes(a) - sessionDistanceMinutes(b));
   }, [sessionSearch, sessions]);
+
+  /** Admin: catalog + session wizard list only courses owned by the selected lecturer. Empty selection = all courses. Lecturers already receive a server-filtered list. */
+  const coursesFilteredByOwner = useMemo(() => {
+    if (!isAdmin || !newCourseLecturerId) return courses;
+    return courses.filter((c) => String(c.lecturer?._id || '') === String(newCourseLecturerId));
+  }, [courses, isAdmin, newCourseLecturerId]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const pool = newCourseLecturerId
+      ? courses.filter((c) => String(c.lecturer?._id || '') === String(newCourseLecturerId))
+      : courses;
+    setSelectedCourseId((prev) => {
+      if (prev && pool.some((c) => String(c._id) === prev && c.active)) return prev;
+      const firstActive = pool.find((c) => c.active);
+      return firstActive ? String(firstActive._id) : '';
+    });
+  }, [isAdmin, newCourseLecturerId, courses]);
 
   useEffect(() => {
     let cancelled = false;
@@ -638,17 +651,20 @@ export default function AdminDashboard() {
                   <div className="form-section" style={{ marginTop: '0.5rem' }}>
                     <label className="field-label" htmlFor="newCourseLecturer">Lecturer (owner)</label>
                     <select id="newCourseLecturer" className="input" value={newCourseLecturerId} onChange={(e) => setNewCourseLecturerId(e.target.value)}>
-                      <option value="">Select lecturer</option>
+                      <option value="">All lecturers — show every course</option>
                       {lecturers.map((lec) => (
                         <option key={lec._id} value={lec._id}>{lec.name} ({lec.email})</option>
                       ))}
                     </select>
+                    <p className="section-desc" style={{ marginTop: '0.35rem', marginBottom: 0, fontSize: '0.88rem' }}>
+                      Filter the catalog and Create session course list by owner. The first option lists every course.
+                    </p>
                   </div>
                 ) : null}
               </div>
 
               <div className="course-list">
-                {courses.map((c) => (
+                {coursesFilteredByOwner.map((c) => (
                   <div
                     key={c._id}
                     className={`course-item ${c.active ? 'enabled' : 'disabled'}`}
@@ -692,6 +708,15 @@ export default function AdminDashboard() {
                     </div>
                   </div>
                 ))}
+                {coursesFilteredByOwner.length === 0 ? (
+                  <p className="section-desc" style={{ marginTop: '0.75rem' }}>
+                    {courses.length === 0
+                      ? 'No courses yet. Add one above.'
+                      : isAdmin && newCourseLecturerId
+                        ? 'No courses assigned to this lecturer. Choose another owner or select "All lecturers".'
+                        : 'No courses to show.'}
+                  </p>
+                ) : null}
               </div>
 
             </div>
@@ -711,7 +736,7 @@ export default function AdminDashboard() {
                 <p className="form-section__label">Course</p>
                 <select id="sessionCourseSelect" className="input" value={selectedCourseId} onChange={(e) => setSelectedCourseId(e.target.value)}>
                   <option value="">Select course</option>
-                  {courses.filter((c) => c.active).map((c) => (
+                  {coursesFilteredByOwner.filter((c) => c.active).map((c) => (
                     <option key={c._id} value={c._id}>{c.code}{c.batch ? ` (${c.batch})` : ''} — {c.name}</option>
                   ))}
                 </select>
