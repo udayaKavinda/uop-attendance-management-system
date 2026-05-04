@@ -246,6 +246,14 @@ export async function stopAdminSessionRotation(sessionId) {
   });
 }
 
+export async function patchAdminSessionAttendancePaused(sessionId, paused) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/attendance-paused`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paused }),
+  });
+}
+
 export async function getAdminSessionCode(sessionId) {
   return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/current-code`);
 }

@@ -17,6 +17,7 @@ import {
   getAdminCurrentSessionCodes,
   startAdminSessionRotation,
   stopAdminSessionRotation,
+  patchAdminSessionAttendancePaused,
   patchCourseAssignLecturer,
   getAdminLecturers,
   createAdminLecturer,
@@ -30,6 +31,8 @@ import { readStoredStudent } from '../utils/safeStorage';
 const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 const DAY_ORDER = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
 const MAP_CENTER = [7.2548, 80.5974];
+const OWNER_ALL_LABEL = 'All lecturers — show every course';
+const OWNER_LISTBOX_ID = 'admin-catalog-owner-listbox';
 
 const OSM_TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
@@ -94,11 +97,18 @@ export default function AdminDashboard() {
   const [message, setMessage] = useState('');
   const [toast, setToast] = useState('');
   const [lecturers, setLecturers] = useState([]);
+  /** Full lecturer list for catalog owner picker & per-course assign (not filtered by Lecturers-tab search). */
+  const [lecturerDirectory, setLecturerDirectory] = useState([]);
   const [lecturerSearch, setLecturerSearch] = useState('');
   const [newLecturerName, setNewLecturerName] = useState('');
   const [newLecturerEmail, setNewLecturerEmail] = useState('');
   const [newLecturerPhone, setNewLecturerPhone] = useState('');
   const [newCourseLecturerId, setNewCourseLecturerId] = useState('');
+  const [ownerLecturerQuery, setOwnerLecturerQuery] = useState(OWNER_ALL_LABEL);
+  const [ownerLecturerMenuOpen, setOwnerLecturerMenuOpen] = useState(false);
+  const [ownerLecturerHighlight, setOwnerLecturerHighlight] = useState(-1);
+  const ownerLecturerBlurTimer = useRef(null);
+  const ownerLecturerComboboxRef = useRef(null);
   const [polygonPresets, setPolygonPresets] = useState([]);
   const [presetTabName, setPresetTabName] = useState('');
   const [presetDrawPolygons, setPresetDrawPolygons] = useState([[]]);
@@ -134,6 +144,16 @@ export default function AdminDashboard() {
     setSessions(resp.items || []);
   }, []);
 
+  const loadLecturerDirectory = useCallback(async () => {
+    if (!isAdmin) return;
+    const resp = await getAdminLecturers('');
+    if (resp.error) {
+      setError(resp.error);
+      return;
+    }
+    setLecturerDirectory(resp.items || []);
+  }, [isAdmin]);
+
   const loadLecturers = useCallback(async () => {
     if (!isAdmin) return;
     const resp = await getAdminLecturers(lecturerSearch.trim());
@@ -159,7 +179,10 @@ export default function AdminDashboard() {
       setLoading(true);
       try {
         const tasks = [loadCourses(), loadSessions(), loadPolygonPresets()];
-        if (isAdmin) tasks.push(loadLecturers());
+        if (isAdmin) {
+          tasks.push(loadLecturers());
+          tasks.push(loadLecturerDirectory());
+        }
         await Promise.all(tasks);
       } catch (err) {
         if (!cancelled) {
@@ -171,7 +194,7 @@ export default function AdminDashboard() {
     }
     bootstrap();
     return () => { cancelled = true; };
-  }, [loadCourses, loadSessions, loadPolygonPresets, loadLecturers, isAdmin]);
+  }, [loadCourses, loadSessions, loadPolygonPresets, loadLecturers, loadLecturerDirectory, isAdmin]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -201,6 +224,99 @@ export default function AdminDashboard() {
     if (!isAdmin || !newCourseLecturerId) return courses;
     return courses.filter((c) => String(c.lecturer?._id || '') === String(newCourseLecturerId));
   }, [courses, isAdmin, newCourseLecturerId]);
+
+  const ownerPickerRows = useMemo(() => {
+    const q = ownerLecturerQuery.trim().toLowerCase();
+    const lecFiltered = lecturerDirectory.filter((lec) =>
+      !q || `${lec.name || ''} ${lec.email || ''}`.toLowerCase().includes(q),
+    );
+    return [
+      { type: 'all', key: '__all', label: OWNER_ALL_LABEL },
+      ...lecFiltered.map((lec) => ({ type: 'lec', key: String(lec._id), ...lec })),
+    ];
+  }, [ownerLecturerQuery, lecturerDirectory]);
+
+  const clearOwnerLecturerBlur = useCallback(() => {
+    if (ownerLecturerBlurTimer.current) {
+      clearTimeout(ownerLecturerBlurTimer.current);
+      ownerLecturerBlurTimer.current = null;
+    }
+  }, []);
+
+  const openOwnerLecturerMenu = useCallback(() => {
+    clearOwnerLecturerBlur();
+    setOwnerLecturerMenuOpen(true);
+  }, [clearOwnerLecturerBlur]);
+
+  const scheduleCloseOwnerLecturerMenu = useCallback(() => {
+    clearOwnerLecturerBlur();
+    ownerLecturerBlurTimer.current = setTimeout(() => {
+      setOwnerLecturerMenuOpen(false);
+      setOwnerLecturerHighlight(-1);
+    }, 200);
+  }, [clearOwnerLecturerBlur]);
+
+  const pickOwnerLecturerRow = useCallback((row) => {
+    if (row.type === 'all') {
+      setNewCourseLecturerId('');
+      setOwnerLecturerQuery(OWNER_ALL_LABEL);
+    } else {
+      setNewCourseLecturerId(String(row._id));
+      setOwnerLecturerQuery(`${row.name} (${row.email})`);
+    }
+    setOwnerLecturerMenuOpen(false);
+    setOwnerLecturerHighlight(-1);
+    clearOwnerLecturerBlur();
+  }, [clearOwnerLecturerBlur]);
+
+  useEffect(() => {
+    if (!ownerLecturerMenuOpen) return;
+    setOwnerLecturerHighlight((i) => {
+      const max = ownerPickerRows.length - 1;
+      if (max < 0) return -1;
+      if (i < 0) return 0;
+      return Math.min(i, max);
+    });
+  }, [ownerLecturerMenuOpen, ownerPickerRows.length]);
+
+  useEffect(() => () => clearOwnerLecturerBlur(), [clearOwnerLecturerBlur]);
+
+  const handleOwnerLecturerKeyDown = (e) => {
+    if (!isAdmin) return;
+    if (!ownerLecturerMenuOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      openOwnerLecturerMenu();
+      setOwnerLecturerHighlight(0);
+      return;
+    }
+    if (!ownerLecturerMenuOpen) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setOwnerLecturerMenuOpen(false);
+      setOwnerLecturerHighlight(-1);
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setOwnerLecturerHighlight((i) => {
+        const next = i < 0 ? 0 : i + 1;
+        return next >= ownerPickerRows.length ? Math.max(0, ownerPickerRows.length - 1) : next;
+      });
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setOwnerLecturerHighlight((i) => {
+        const next = i <= 0 ? 0 : i - 1;
+        return next;
+      });
+      return;
+    }
+    if (e.key === 'Enter' && ownerLecturerHighlight >= 0 && ownerPickerRows[ownerLecturerHighlight]) {
+      e.preventDefault();
+      pickOwnerLecturerRow(ownerPickerRows[ownerLecturerHighlight]);
+    }
+  };
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -466,6 +582,24 @@ export default function AdminDashboard() {
     setWorking(false);
   };
 
+  const onToggleAttendancePaused = async (sessionId) => {
+    const sid = String(sessionId);
+    const rc = runningSessionCodes[sid];
+    const nextPaused = !rc?.attendancePaused;
+    setWorking(true);
+    setError('');
+    const resp = await patchAdminSessionAttendancePaused(sessionId, nextPaused);
+    if (resp.error) setError(resp.error);
+    else {
+      setMessage(nextPaused ? 'Student attendance paused for this session.' : 'Student attendance resumed.');
+      setRunningSessionCodes((prev) => (
+        prev[sid] ? { ...prev, [sid]: { ...prev[sid], attendancePaused: nextPaused } } : prev
+      ));
+      await loadSessions();
+    }
+    setWorking(false);
+  };
+
   const onStartRotation = async (sessionId) => {
     setWorking(true);
     setError('');
@@ -518,6 +652,7 @@ export default function AdminDashboard() {
       setNewLecturerEmail('');
       setNewLecturerPhone('');
       await loadLecturers();
+      await loadLecturerDirectory();
     }
     setWorking(false);
   };
@@ -532,6 +667,7 @@ export default function AdminDashboard() {
     else {
       setMessage('Lecturer removed.');
       await loadLecturers();
+      await loadLecturerDirectory();
       await loadCourses();
     }
     setWorking(false);
@@ -641,26 +777,78 @@ export default function AdminDashboard() {
                 <p className="section-desc">Add or manage courses. Open a course to view the attendance table in a dedicated report.</p>
               </header>
               <div className="course-add-stack">
+                {isAdmin ? (
+                  <div className="form-section" style={{ marginBottom: '0.65rem' }}>
+                    <label className="field-label" htmlFor="catalogOwnerSearch">Lecturer (owner)</label>
+                    <div className="course-combobox" ref={ownerLecturerComboboxRef}>
+                      <input
+                        id="catalogOwnerSearch"
+                        className="input"
+                        type="text"
+                        autoComplete="off"
+                        placeholder="Search name or email, or show all courses"
+                        value={ownerLecturerQuery}
+                        role="combobox"
+                        aria-expanded={ownerLecturerMenuOpen}
+                        aria-controls={OWNER_LISTBOX_ID}
+                        aria-autocomplete="list"
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setOwnerLecturerQuery(v);
+                          openOwnerLecturerMenu();
+                          if (newCourseLecturerId) {
+                            const lec = lecturerDirectory.find((l) => String(l._id) === String(newCourseLecturerId));
+                            const canonical = lec ? `${lec.name} (${lec.email})` : '';
+                            if (!canonical || v !== canonical) setNewCourseLecturerId('');
+                          }
+                        }}
+                        onFocus={() => {
+                          clearOwnerLecturerBlur();
+                          openOwnerLecturerMenu();
+                        }}
+                        onBlur={scheduleCloseOwnerLecturerMenu}
+                        onKeyDown={handleOwnerLecturerKeyDown}
+                      />
+                      {ownerLecturerMenuOpen && ownerPickerRows.length > 0 ? (
+                        <ul id={OWNER_LISTBOX_ID} className="course-combobox__menu" role="listbox">
+                          {ownerPickerRows.map((row, idx) => (
+                            <li key={row.key} role="presentation">
+                              <button
+                                type="button"
+                                role="option"
+                                className="course-combobox__option"
+                                aria-selected={idx === ownerLecturerHighlight}
+                                onMouseDown={(ev) => {
+                                  ev.preventDefault();
+                                  pickOwnerLecturerRow(row);
+                                }}
+                                onMouseEnter={() => setOwnerLecturerHighlight(idx)}
+                              >
+                                {row.type === 'all' ? (
+                                  <span className="course-combobox__code">All lecturers</span>
+                                ) : (
+                                  <>
+                                    <span className="course-combobox__code">{row.name}</span>
+                                    <span className="course-combobox__name">{row.email}</span>
+                                  </>
+                                )}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                    <p className="section-desc" style={{ marginTop: '0.35rem', marginBottom: 0, fontSize: '0.88rem' }}>
+                      Filter the catalog and Create session list by owner. Choose All lecturers for every course.
+                    </p>
+                  </div>
+                ) : null}
                 <div className="course-add-grid">
                   <input className="input" placeholder="Course code" value={newCourseCode} onChange={(e) => setNewCourseCode(e.target.value.toUpperCase())} />
                   <input className="input" placeholder="Batch (required)" value={newCourseBatch} onChange={(e) => setNewCourseBatch(e.target.value)} />
                   <button className="primary-btn" type="button" onClick={onCreateCourse} disabled={working}>Add course</button>
                 </div>
                 <input className="input" placeholder="Course name" value={newCourseName} onChange={(e) => setNewCourseName(e.target.value)} />
-                {isAdmin ? (
-                  <div className="form-section" style={{ marginTop: '0.5rem' }}>
-                    <label className="field-label" htmlFor="newCourseLecturer">Lecturer (owner)</label>
-                    <select id="newCourseLecturer" className="input" value={newCourseLecturerId} onChange={(e) => setNewCourseLecturerId(e.target.value)}>
-                      <option value="">All lecturers — show every course</option>
-                      {lecturers.map((lec) => (
-                        <option key={lec._id} value={lec._id}>{lec.name} ({lec.email})</option>
-                      ))}
-                    </select>
-                    <p className="section-desc" style={{ marginTop: '0.35rem', marginBottom: 0, fontSize: '0.88rem' }}>
-                      Filter the catalog and Create session course list by owner. The first option lists every course.
-                    </p>
-                  </div>
-                ) : null}
               </div>
 
               <div className="course-list">
@@ -694,7 +882,7 @@ export default function AdminDashboard() {
                           onChange={(e) => { e.stopPropagation(); onAssignLecturer(c._id, e.target.value); }}
                           aria-label="Assign course owner"
                         >
-                          {lecturers.map((lec) => (
+                          {lecturerDirectory.map((lec) => (
                             <option key={lec._id} value={lec._id}>{lec.name}</option>
                           ))}
                         </select>
@@ -891,7 +1079,7 @@ export default function AdminDashboard() {
               <header className="section-head">
                 <p className="section-kicker">Operations</p>
                 <h2 className="section-title">Session control</h2>
-                <p className="section-desc">Search sessions, toggle activation, manage pin rotation during live lectures, or soft-delete while keeping attendance history.</p>
+                <p className="section-desc">Search sessions, toggle activation, or click the blinking Live badge to pause or resume student attendance. Use ↻ beside the code for PIN rotation. Deactivate or soft-delete as needed.</p>
               </header>
               <input
                 className="input"
@@ -905,18 +1093,39 @@ export default function AdminDashboard() {
                     <div>
                       <div className="session-item__head">
                         <p className="session-main">{s.course?.code} — {s.lectureDay} {s.startTime}–{s.endTime}</p>
-                        {runningSessionCodes[String(s._id)] ? <span className="session-live-badge">Live</span> : null}
+                        {runningSessionCodes[String(s._id)] ? (() => {
+                          const rc = runningSessionCodes[String(s._id)];
+                          return (
+                            <button
+                              type="button"
+                              className={`session-live-badge ${rc.attendancePaused ? 'session-live-badge--attendance-paused' : 'session-live-badge--blink'}`}
+                              disabled={working}
+                              onClick={() => onToggleAttendancePaused(s._id)}
+                              title={rc.attendancePaused ? 'Click to resume student attendance' : 'Click to pause student attendance'}
+                            >
+                              {rc.attendancePaused ? 'Paused' : 'Live'}
+                            </button>
+                          );
+                        })() : null}
                       </div>
                       <p className="session-sub">{s.recurring ? 'Recurring' : 'One-time'}</p>
-                      {runningSessionCodes[String(s._id)] && (
+                      {runningSessionCodes[String(s._id)] && (() => {
+                        const rc = runningSessionCodes[String(s._id)];
+                        const suffix = rc.attendancePaused
+                          ? (rc.rotationPaused ? ' (attendance paused · rotation paused)' : ' (attendance paused)')
+                          : rc.rotationPaused
+                            ? ' (rotation paused)'
+                            : ` (${rc.secondsRemaining}s)`;
+                        return (
                         <div className="live-code-row">
                           <button
                             type="button"
                             className="icon-btn"
-                            onClick={() => (runningSessionCodes[String(s._id)].rotationPaused ? onStartRotation(s._id) : onStopRotation(s._id))}
-                            title={runningSessionCodes[String(s._id)].rotationPaused ? 'Start code rotation' : 'Pause code rotation'}
+                            disabled={working}
+                            onClick={() => (rc.rotationPaused ? onStartRotation(s._id) : onStopRotation(s._id))}
+                            title={rc.rotationPaused ? 'Resume PIN rotation' : 'Pause PIN rotation'}
                           >
-                            {runningSessionCodes[String(s._id)].rotationPaused ? '⟳' : '⏸'}
+                            {rc.rotationPaused ? '⟳' : '↻'}
                           </button>
                           <button
                             type="button"
@@ -925,16 +1134,13 @@ export default function AdminDashboard() {
                             title="Open PIN in a new tab for projector (large text + timer + rotation controls)"
                           >
                             <span className="live-code-display-btn__prefix">Code:</span>
-                            <span className="live-code-display-btn__digits">{runningSessionCodes[String(s._id)].code}</span>
-                            <span className="live-code-display-btn__suffix">
-                              {runningSessionCodes[String(s._id)].rotationPaused
-                                ? ' (Paused)'
-                                : ` (${runningSessionCodes[String(s._id)].secondsRemaining}s)`}
-                            </span>
+                            <span className="live-code-display-btn__digits">{rc.code}</span>
+                            <span className="live-code-display-btn__suffix">{suffix}</span>
                             <span className="live-code-display-btn__hint" aria-hidden>⛶</span>
                           </button>
                         </div>
-                      )}
+                        );
+                      })()}
                     </div>
                     <div className="course-actions">
                       {s.active

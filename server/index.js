@@ -176,6 +176,7 @@ async function syncSessionCodeMode(sessionItem, now = new Date()) {
   const codeKey = sessionCodeKey(sessionItem._id);
   if (sessionItem.rotationOccurrenceKey !== occurrence) {
     sessionItem.rotationOccurrenceKey = occurrence;
+    sessionItem.attendancePaused = false;
     lectureCode.resetCode(codeKey);
     await sessionItem.save();
   }
@@ -862,6 +863,7 @@ app.patch('/api/admin/sessions/:sessionId/deactivate', async (req, res) => {
     const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     sessionItem.active = false;
+    sessionItem.attendancePaused = false;
     await sessionItem.save();
     lectureCode.removeKey(sessionCodeKey(sessionItem._id));
     return res.json({ success: true, session: sessionItem });
@@ -903,6 +905,7 @@ app.get('/api/admin/sessions/current-codes', async (req, res) => {
         courseCode: s.course.code,
         rotationEnabled: Boolean(s.rotationEnabled),
         rotationPaused: Boolean(s.rotationPaused),
+        attendancePaused: Boolean(s.attendancePaused),
         ...lectureCode.getCurrent(codeKey),
       });
     }
@@ -948,6 +951,23 @@ app.patch('/api/admin/sessions/:sessionId/rotation/stop', async (req, res) => {
   }
 });
 
+app.patch('/api/admin/sessions/:sessionId/attendance-paused', async (req, res) => {
+  try {
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
+    const paused = Boolean(req.body?.paused);
+    sessionItem.attendancePaused = paused;
+    await sessionItem.save();
+    return res.json({ success: true, session: sessionItem, attendancePaused: paused });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/admin/sessions/:sessionId/current-code', async (req, res) => {
   try {
     const auth = await sessionStaffAuth(req);
@@ -963,7 +983,15 @@ app.get('/api/admin/sessions/:sessionId/current-code', async (req, res) => {
       lectureCode.removeKey(sessionCodeKey(sessionItem._id));
     }
     if (!sessionItem || !sessionItem.active) return res.status(404).json({ error: 'Session not found' });
-    return res.json({ sessionId: sessionItem._id, ...lectureCode.getCurrent(sessionCodeKey(sessionItem._id)) });
+    const now = new Date();
+    if (isSessionRunningNow(sessionItem, now)) {
+      await syncSessionCodeMode(sessionItem, now);
+    }
+    return res.json({
+      sessionId: sessionItem._id,
+      attendancePaused: Boolean(sessionItem.attendancePaused),
+      ...lectureCode.getCurrent(sessionCodeKey(sessionItem._id)),
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -1039,6 +1067,11 @@ app.post('/api/verify-lecture', async (req, res) => {
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
+    if (resolved.session.attendancePaused) {
+      return res.status(400).json({
+        error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.',
+      });
+    }
     if (!lectureCode.hasValidLocation(lat, lng)) {
       return res.status(400).json({ error: 'Valid latitude and longitude are required' });
     }
@@ -1064,6 +1097,11 @@ app.post('/api/verify-lecture-pin', async (req, res) => {
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
+    if (resolved.session.attendancePaused) {
+      return res.status(400).json({
+        error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.',
+      });
+    }
     if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
       return res.status(400).json({ error: 'Invalid or expired lecture code' });
     }
@@ -1089,6 +1127,11 @@ app.post('/api/record-attendance', async (req, res) => {
     const studentPk = auth.person._id;
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
+    if (resolved.session.attendancePaused) {
+      return res.status(400).json({
+        error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.',
+      });
+    }
     if (!lectureCode.hasValidLocation(lat, lng)) {
       return res.status(400).json({ error: 'Valid latitude and longitude are required' });
     }

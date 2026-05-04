@@ -4,6 +4,7 @@ import {
   getAdminSessionCode,
   startAdminSessionRotation,
   stopAdminSessionRotation,
+  patchAdminSessionAttendancePaused,
 } from '../api';
 
 export default function SessionPinPresentPage() {
@@ -66,6 +67,16 @@ export default function SessionPinPresentPage() {
     setBusy(false);
   };
 
+  const onToggleAttendancePaused = async () => {
+    if (!sessionId || !pin || busy) return;
+    setBusy(true);
+    setError('');
+    const resp = await patchAdminSessionAttendancePaused(sessionId, !pin.attendancePaused);
+    if (resp.error) setError(resp.error);
+    await refresh();
+    setBusy(false);
+  };
+
   return (
     <div className="present-pin">
       <div className="present-pin__top">
@@ -83,7 +94,9 @@ export default function SessionPinPresentPage() {
           <div className="present-pin__center">
             <p className="present-pin__code" aria-live="polite">{pin.code}</p>
             <p className="present-pin__timer" aria-live="polite">
-              {pin.paused ? (
+              {pin.attendancePaused ? (
+                <span className="present-pin__paused">Student attendance is paused — submissions are blocked.</span>
+              ) : pin.paused ? (
                 <span className="present-pin__paused">Rotation paused — PIN stays on screen</span>
               ) : (
                 <>
@@ -94,14 +107,24 @@ export default function SessionPinPresentPage() {
             </p>
           </div>
           <div className="present-pin__controls">
-            <button
-              type="button"
-              className="present-pin__btn present-pin__btn--primary"
-              onClick={onToggleRotation}
-              disabled={busy}
-            >
-              {pin.paused ? '▶ Resume rotation' : '⏸ Pause rotation'}
-            </button>
+            <div className="present-pin__btn-row">
+              <button
+                type="button"
+                className="present-pin__btn present-pin__btn--secondary"
+                onClick={onToggleAttendancePaused}
+                disabled={busy}
+              >
+                {pin.attendancePaused ? '▶ Resume attendance' : '⏸ Pause attendance'}
+              </button>
+              <button
+                type="button"
+                className="present-pin__btn present-pin__btn--primary"
+                onClick={onToggleRotation}
+                disabled={busy}
+              >
+                {pin.paused ? '▶ Resume rotation' : '⏸ Pause rotation'}
+              </button>
+            </div>
             <p className="present-pin__meta">
               {pin.rotationSeconds ? `Rotation interval: ${pin.rotationSeconds}s` : null}
             </p>

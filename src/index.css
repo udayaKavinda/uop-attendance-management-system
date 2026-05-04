@@ -907,6 +907,14 @@ body.present-pin-mode {
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
+.present-pin__btn-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.65rem;
+}
+
 .present-pin__btn {
   border: 0;
   border-radius: var(--radius-pill);
@@ -921,6 +929,17 @@ body.present-pin-mode {
 .present-pin__btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.present-pin__btn--secondary {
+  background: rgba(255, 255, 255, 0.12);
+  color: #e0e7ff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.present-pin__btn--secondary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
 }
 
 .present-pin__btn--primary {
