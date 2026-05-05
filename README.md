@@ -30,8 +30,8 @@ Role-based web application for lecture attendance at the University of Peradeniy
 | Layer | Technology |
 |-------|------------|
 | **Frontend** | React 19, React Router 6, Create React App (`react-scripts` 5), Leaflet / react-leaflet 5, `fetch` + credentialed CORS. |
-| **Backend** | Node.js, **Express 5**, Mongoose 9, Passport + `passport-google-oauth20`, `express-session`, `cors`, `dotenv`. |
-| **Data** | MongoDB (documents: people, courses, lecture sessions, attendance, polygon presets). |
+| **Backend** | Node.js, **Express 5**, Mongoose 9, Passport + `passport-google-oauth20`, `express-session` + **`connect-mongo`** (persistent sessions), **`helmet`** (security headers), **`express-rate-limit`** (per-route brute-force/DOS protection), `cors`, `dotenv`. |
+| **Data** | MongoDB (documents: people, courses, lecture sessions, attendance, polygon presets, sessions). |
 | **Tooling** | `concurrently` for `npm run dev`; optional Excel export via `xlsx` on the client (`matrixExcel.js`). |
 
 ---
@@ -107,15 +107,16 @@ Create a **`.env`** file in the **project root** (not committed—verify with yo
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MONGO_URI` | Recommended | Mongo connection string. Default in code: `mongodb://localhost:27017/attendance` |
+| `MONGO_URI` | Recommended | Mongo connection string. Default in code: `mongodb://localhost:27017/attendance`. Also used by the `connect-mongo` session store. |
 | `GOOGLE_CLIENT_ID` | Yes (OAuth) | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Yes (OAuth) | Google OAuth secret |
-| `SESSION_SECRET` | Production | Session HMAC secret; dev fallback exists—**change for production** |
+| `SESSION_SECRET` | **Required in production** | Session HMAC secret. Server **fails to boot** in production if missing. Dev fallback exists. |
 | `FRONTEND_URL` | Strongly recommended | Allowed CORS origin(s) for SPA; **comma-separated**, no trailing slash issues handled in code. Used after OAuth as redirect target base. |
 | `APP_BASE_URL` | Recommended for OAuth | Public origin used to build Google **`callbackURL`** (`…/auth/google/callback`). Fallback chain in strategy setup includes `FRONTEND_URL` / `REACT_APP_API_BASE`. |
 | `REACT_APP_API_BASE` | Optional | CRA: absolute API origin (e.g. `http://localhost:5000`) when SPA and API differ. Empty string = same origin (typical reverse proxy). |
 | `NODE_ENV` | Deployment | `production` enables **Secure** + **SameSite=None** session cookies (HTTPS required for cross-site cookies). |
 | `PORT` | Optional | Express listen port; default **5000** |
+| `TZ` | Optional | Server timezone for schedule comparisons; defaulted to **`Asia/Colombo`** at boot if unset. Override only if running classes in another timezone. |
 | `SESSION_EXPIRE_JOB_MS` | Optional | Interval for non-recurring session sweep; min **10000**, default **60000** (`sessionExpiry.js`) |
 
 **CRA note:** Only variables prefixed with `REACT_APP_` are exposed to the browser at build time.
@@ -181,7 +182,7 @@ Example: `deploy/nginx-app-domain.conf`.
 
 **Google Cloud Console:** Authorized JavaScript origin and **redirect URI** must match how users reach the app (e.g. `https://app.example.com` and `https://app.example.com/auth/google/callback` if the API handles `/auth` on that host).
 
-**Sessions:** Default store is **`express-session` in-memory**. Deploys and Node restarts **invalidate all sessions**; the SPA treats `401` via `notifySessionInvalid`. For production durability, configure a persistent session store (e.g. `connect-mongo`).
+**Sessions:** Stored in MongoDB via **`connect-mongo`** (collection `sessions`). Sessions survive Node restarts and horizontal scaling; the SPA still handles transient `401` via `notifySessionInvalid`.
 
 ---
 
@@ -197,27 +198,27 @@ Example: `deploy/nginx-app-domain.conf`.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/auth/google` | Starts OAuth (503 JSON if Google env missing) |
-| GET | `/auth/google/callback` | OAuth callback → redirect to `FRONTEND_URL`/`…`/login/success |
-| POST | `/api/login` | Lookup person by email / id—**does not establish Passport session** |
+| GET | `/auth/google` | Starts OAuth (503 JSON if Google env missing). Rate-limited. |
+| GET | `/auth/google/callback` | OAuth callback → redirect to `FRONTEND_URL`/`…`/login/success. Rate-limited. |
 | GET | `/api/me` | Session required → `{ studentId, email, role, lecturerId }` |
 | POST | `/api/logout` | Destroy session |
+| GET | `/api/healthz` | Liveness/readiness probe (`200` with Mongo `readyState===1`, else `503`) |
 
-### Public read (no session in handler)
+### Read endpoints (session required)
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/api/courses` | Active courses (summary) |
-| GET | `/api/courses/running` | Courses with an active session **right now** |
+| GET | `/api/courses` | Active courses (summary). **Auth required**. |
+| GET | `/api/courses/running` | Courses with an active session **right now**. **Auth required**. |
 
 ### Student (session + `role === 'student'`)
 
 | Method | Path | Notes |
 |--------|------|--------|
 | GET | `/api/attendance-status?courseId=` | Same-day attendance for session-in-window |
-| POST | `/api/verify-lecture-pin` | PIN + schedule + active session **only** (no geolocation)—used before GPS phase |
-| POST | `/api/verify-lecture` | **Combined** PIN + schedule + **GPS/geofence** in one call (still on server; SPA may omit) |
-| POST | `/api/record-attendance` | PIN + schedule + GPS + geofence; persists attendance; trusts **session user** for student id |
+| POST | `/api/verify-lecture-pin` | PIN + schedule + active session **only** (no geolocation)—used before GPS phase. **Rate-limited** (~30 req/min/IP). |
+| POST | `/api/verify-lecture` | **Combined** PIN + schedule + **GPS/geofence** in one call (deprecated; SPA does not call it). **Rate-limited**. |
+| POST | `/api/record-attendance` | PIN + schedule + GPS + geofence; persists attendance; trusts **session user** for student id. **Rate-limited** (~60 req/min/IP). Returns `{ success: true, duplicate: true }` for same-day re-records (no longer 500 on race). |
 
 ### Staff (`lecturer` or `admin`; course-scoped for lecturers)
 
@@ -234,12 +235,13 @@ Example: `deploy/nginx-app-domain.conf`.
 | POST | `/api/admin/courses/:courseId/sessions` | Create session |
 | GET | `/api/admin/sessions` | |
 | GET | `/api/admin/sessions/current-codes` | |
-| GET | `/api/admin/sessions/:sessionId/current-code` | |
+| GET | `/api/admin/sessions/:sessionId/current-code` | Also calls `syncSessionCodeMode` while the session is in its scheduled window. |
 | PATCH | `/api/admin/sessions/:sessionId/activate` | |
 | PATCH | `/api/admin/sessions/:sessionId/deactivate` | |
 | DELETE | `/api/admin/sessions/:sessionId` | |
 | PATCH | `/api/admin/sessions/:sessionId/rotation/start` | |
 | PATCH | `/api/admin/sessions/:sessionId/rotation/stop` | |
+| PATCH | `/api/admin/sessions/:sessionId/attendance-paused` | Pause/resume student attendance for the **current** live window. Auto-clears for new occurrences. |
 | GET | `/api/admin/courses/:courseId/attendance-matrix` | |
 | GET | `/api/admin/lecturers?q=` | Admin |
 | POST | `/api/admin/lecturers` | Admin |
@@ -255,10 +257,9 @@ Example: `deploy/nginx-app-domain.conf`.
 ## Authentication and authorization flow
 
 1. User visits `/` → `Login` can redirect to **`/auth/google`** on the **API origin** (full URL depends on deployment).
-2. Google returns to **`/auth/google/callback`**; Passport establishes session and redirects to **`{FRONTEND_URL}/login/success`**.
+2. Google returns to **`/auth/google/callback`**; Passport establishes session (persisted in MongoDB via `connect-mongo`) and redirects to **`{FRONTEND_URL}/login/success`**.
 3. `GoogleSuccess` calls **`GET /api/me`** with credentials and writes **`localStorage`** key `student` (shape expected by `App.js` guards).
 4. **Routing:** `student` → `/lecture`; `lecturer` / `admin` → `/admin`. Guards are **client-side** (localStorage); **server routes enforce real roles**—never rely on the client alone.
-5. **`/api/login`** remains for legacy lookup but does not replace OAuth session establishment.
 
 **Role source of truth:** `Person.role` in MongoDB (`student` | `lecturer` | `admin`). Google callback can **promote** to `lecturer` if email matches an active lecturer row (see `server/index.js` Google strategy).
 
@@ -292,10 +293,10 @@ This supersedes older “single submit with GPS” descriptions.
 | Topic | Detail |
 |-------|--------|
 | **PIN storage** | In-memory per server process; **not** durable across restarts or horizontal scaling without redesign. |
-| **Geofence** | Polygons on the **session**; point-in-polygon plus **edge buffer** capped at **5 m** (see `GEOFENCE_ACCURACY_BUFFER_CAP_M`). |
+| **Geofence** | Polygons on the **session**; point-in-polygon plus **edge buffer** capped at **5 m** (see `GEOFENCE_ACCURACY_BUFFER_CAP_M`). Polygons are validated server-side (max **50** polygons per session, max **1000** points per polygon). |
 | **PIN rotation** | **30 s** window in `lectureCode.js` when rotation is active (`ROTATION_MS`). |
 | **CourseConfig model** | Defined on disk but **not used** by current routes—verify before deleting. |
-| **`/api/courses` /running** | Implemented without session checks—**assume public discovery** is acceptable; restrict in proxy if needed. |
+| **Public discovery** | `/api/courses` and `/api/courses/running` now require an authenticated session. |
 | **Client guards** | Route protection uses **localStorage**; always mirror rules on the server (already done for attendance). |
 | **Tests** | CRA test stack present; **no comprehensive API integration tests** in repo were verified for this README. |
 
@@ -358,7 +359,7 @@ This supersedes older “single submit with GPS” descriptions.
 
 **Likely obsolete**
 
-- **`POST /api/verify-lecture`** for the **current** SPA path (`LectureEntry` uses **verify-lecture-pin** + **record-attendance**); keep if external clients rely on it.
+- **`POST /api/verify-lecture`** for the **current** SPA path (`LectureEntry` uses **verify-lecture-pin** + **record-attendance**); kept on the server for any external clients but rate-limited.
 
 **Files with temporary debug**
 
@@ -375,6 +376,11 @@ This supersedes older “single submit with GPS” descriptions.
 | `POST /api/verify-lecture-pin` | **Documented here**; was missing from the previous README API list. |
 | Geofence buffer | **5 m** in code—prior docs mentioning **20 m** would be **wrong**. |
 | `CourseConfig` | **Exists** but **unused** in server routes—flagged above. |
+| Sessions persistence | **`connect-mongo`** is now wired in (`sessions` collection); README updated. |
+| Security middleware | **`helmet`** and **`express-rate-limit`** are now mounted; README updated. |
+| Removed routes | `POST /api/login` was an unauthenticated user-enumeration oracle; **removed**. The `login()` helper in `src/api.js` was also removed. |
+| Duplicate-record race | `record-attendance` now catches the unique-index violation and returns `{ success: true, duplicate: true }` instead of `500`. |
+| Timezone | Server defaults `TZ=Asia/Colombo` at boot when not set, eliminating UTC drift in schedule comparisons. |
 | License | **No LICENSE file**; package is **private**—not open source by default. |
 
 ---

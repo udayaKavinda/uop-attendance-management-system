@@ -1,9 +1,16 @@
 require('dotenv').config();
 
+if (!process.env.TZ) {
+  process.env.TZ = 'Asia/Colombo';
+}
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const session = require('express-session');
+const MongoStore = require('connect-mongo');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 
@@ -16,6 +23,33 @@ const lectureCode = require('./lib/lectureCode');
 const { startNonRecurringExpiryJob, isNonRecurringExpired } = require('./lib/sessionExpiry');
 
 const DAY_INDEX = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+const MAX_POLYGONS_PER_SESSION = 50;
+const MAX_POLYGON_POINTS = 1000;
+const MAX_LECTURE_PIN_LENGTH = 16;
+
+const isProd = process.env.NODE_ENV === 'production';
+if (isProd && !process.env.SESSION_SECRET) {
+  console.error('FATAL: SESSION_SECRET must be set in production.');
+  process.exit(1);
+}
+
+/**
+ * Classifies common Mongo/Mongoose errors so handlers don't return 500 for client mistakes
+ * and don't leak driver internals.
+ */
+function respondError(res, err, fallbackStatus = 500) {
+  if (err && err.name === 'CastError') {
+    return res.status(400).json({ error: 'Invalid identifier' });
+  }
+  if (err && err.name === 'ValidationError') {
+    return res.status(400).json({ error: 'Invalid input' });
+  }
+  if (err && (err.code === 11000 || err.code === 11001)) {
+    return res.status(409).json({ error: 'Duplicate value' });
+  }
+  return res.status(fallbackStatus).json({ error: isProd ? 'Internal server error' : (err?.message || 'Internal server error') });
+}
 
 /**
  * Geofence edge buffer cap (metres). Inside any polygon still passes. Outside passes only
@@ -286,11 +320,34 @@ function escapeRegex(s) {
 function normalizePolygonsInput(polygons) {
   if (!Array.isArray(polygons)) return [];
   return polygons
+    .slice(0, MAX_POLYGONS_PER_SESSION)
     .map((poly) => (Array.isArray(poly)
-      ? poly.map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }))
-        .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+      ? poly
+        .slice(0, MAX_POLYGON_POINTS)
+        .map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }))
+        .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)
+          && p.lat >= -90 && p.lat <= 90 && p.lng >= -180 && p.lng <= 180)
       : []))
     .filter((poly) => poly.length >= 3);
+}
+
+function isValidLatLng(lat, lng) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  return Number.isFinite(la) && Number.isFinite(ln)
+    && la >= -90 && la <= 90 && ln >= -180 && ln <= 180;
+}
+
+function isValidAccuracy(value) {
+  if (value === undefined || value === null || value === '') return true;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 && n <= 1_000_000;
+}
+
+function isValidPin(pin) {
+  if (typeof pin !== 'string' && typeof pin !== 'number') return false;
+  const stripped = String(pin).replace(/\s/g, '');
+  return stripped.length > 0 && stripped.length <= MAX_LECTURE_PIN_LENGTH;
 }
 
 const app = express();
@@ -302,6 +359,12 @@ const corsOrigins = (process.env.FRONTEND_URL
   .map((s) => s.trim().replace(/\/$/, ''))
   .filter(Boolean);
 
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
+
 app.use(cors({
   origin(origin, callback) {
     if (!origin) return callback(null, true);
@@ -310,12 +373,20 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '256kb' }));
 app.set('trust proxy', 1);
 
-const sessionCookieSecure = process.env.NODE_ENV === 'production';
+const sessionCookieSecure = isProd;
 // Cross-site SPA (different subdomain/port) needs None + Secure in production.
 const sessionSameSite = sessionCookieSecure ? 'none' : 'lax';
+
+const sessionStore = MongoStore.create({
+  mongoUrl: process.env.MONGO_URI || 'mongodb://localhost:27017/attendance',
+  collectionName: 'sessions',
+  ttl: 7 * 24 * 60 * 60,
+  touchAfter: 60 * 60,
+});
+sessionStore.on('error', (err) => console.error('[session-store]', err.message));
 
 // session support required for Passport's req.login() after OAuth
 app.use(session({
@@ -324,6 +395,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   proxy: true,
+  store: sessionStore,
   cookie: {
     secure: sessionCookieSecure,
     sameSite: sessionSameSite,
@@ -333,6 +405,28 @@ app.use(session({
 }));
 app.use(passport.initialize());
 app.use(passport.session());
+
+const studentPinLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts, please slow down.' },
+});
+const studentRecordLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts, please slow down.' },
+});
+const oauthLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many sign-in attempts.' },
+});
 
 passport.serializeUser((user, done) => done(null, user._id));
 passport.deserializeUser(async (id, done) => {
@@ -391,7 +485,8 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
             changed = true;
           }
         }
-        if (String(person.studentId || '').startsWith('dir-') || String(person.studentId || '').startsWith('pending:')) {
+        const synthStudentId = String(person.studentId || '');
+        if (synthStudentId.startsWith('dir:') || synthStudentId.startsWith('dir-') || synthStudentId.startsWith('pending:')) {
           person.studentId = profile.id;
           changed = true;
         } else if (!person.studentId) {
@@ -429,10 +524,11 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
     }
   }));
 
-  app.get('/auth/google', passport.authenticate('google', { scope: ['email'] }));
+  app.get('/auth/google', oauthLimiter, passport.authenticate('google', { scope: ['email'] }));
   const frontendUrl = process.env.FRONTEND_URL || process.env.APP_BASE_URL || 'http://localhost:3000';
   app.get(
     '/auth/google/callback',
+    oauthLimiter,
     passport.authenticate('google', { failureRedirect: `${frontendUrl}/?error=auth` }),
     (req, res) => {
       const base = String(frontendUrl || '').replace(/\/$/, '');
@@ -539,17 +635,9 @@ mongoose
   })
   .catch((err) => console.error('Mongo connection error', err));
 
-app.post('/api/login', async (req, res) => {
-  const { identifier } = req.body;
-  try {
-    const person = await Person.findOne({
-      $or: [{ email: identifier }, { studentId: identifier }],
-    });
-    if (!person) return res.status(404).json({ message: 'User not found' });
-    res.json({ studentId: person._id, email: person.email });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+app.get('/api/healthz', async (req, res) => {
+  const mongoState = mongoose.connection?.readyState === 1 ? 'ok' : 'down';
+  res.status(mongoState === 'ok' ? 200 : 503).json({ status: mongoState });
 });
 
 app.get('/api/me', async (req, res) => {
@@ -566,19 +654,22 @@ app.get('/api/me', async (req, res) => {
       lecturerId: person.role === 'lecturer' ? person._id : null,
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
 app.post('/api/logout', (req, res) => {
   req.logout((err) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return respondError(res, err);
     return res.json({ success: true });
   });
 });
 
 app.get('/api/courses', async (req, res) => {
   try {
+    if (typeof req.isAuthenticated !== 'function' || !req.isAuthenticated()) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
     const items = await Course.find({ active: true }).sort({ code: 1, batch: 1 });
     return res.json({
       items: items.map((c) => ({
@@ -589,12 +680,15 @@ app.get('/api/courses', async (req, res) => {
       })),
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
 app.get('/api/courses/running', async (req, res) => {
   try {
+    if (typeof req.isAuthenticated !== 'function' || !req.isAuthenticated()) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
     const now = new Date();
     const day = DAY_INDEX[now.getDay()];
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -628,7 +722,7 @@ app.get('/api/courses/running', async (req, res) => {
       }),
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -640,7 +734,7 @@ app.get('/api/admin/courses', async (req, res) => {
     const items = await Course.find(filter).populate('lecturer', 'name email phone').sort({ code: 1, batch: 1 });
     return res.json({ items });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -674,7 +768,7 @@ app.post('/api/admin/courses', async (req, res) => {
     if (err && err.code === 11000) {
       return res.status(400).json({ error: 'A course with this code and batch already exists' });
     }
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -692,7 +786,7 @@ app.delete('/api/admin/courses/:courseId', async (req, res) => {
     sessionIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
     return res.json({ success: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -710,7 +804,7 @@ app.patch('/api/admin/courses/:courseId/disable', async (req, res) => {
     sessionIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
     return res.json({ success: true, course });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -725,7 +819,7 @@ app.patch('/api/admin/courses/:courseId/enable', async (req, res) => {
     await course.save();
     return res.json({ success: true, course });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -746,7 +840,7 @@ app.patch('/api/admin/courses/:courseId/assign-lecturer', async (req, res) => {
     await course.populate('lecturer', 'name email phone');
     return res.json({ success: true, course });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -759,7 +853,7 @@ app.get('/api/admin/courses/:courseId/sessions', async (req, res) => {
     const items = await LectureSession.find({ course: req.params.courseId, deleted: false }).sort({ lectureDay: 1, startTime: 1 });
     return res.json({ items });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -811,7 +905,7 @@ app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
     });
     return res.json({ success: true, session: created });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -829,7 +923,7 @@ app.delete('/api/admin/sessions/:sessionId', async (req, res) => {
     lectureCode.removeKey(sessionCodeKey(sessionItem._id));
     return res.json({ success: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -850,7 +944,7 @@ app.patch('/api/admin/sessions/:sessionId/activate', async (req, res) => {
     }
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -868,7 +962,7 @@ app.patch('/api/admin/sessions/:sessionId/deactivate', async (req, res) => {
     lectureCode.removeKey(sessionCodeKey(sessionItem._id));
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -882,7 +976,7 @@ app.get('/api/admin/sessions', async (req, res) => {
       .sort({ updatedAt: -1 });
     return res.json({ items });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -911,7 +1005,7 @@ app.get('/api/admin/sessions/current-codes', async (req, res) => {
     }
     return res.json({ items });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -929,7 +1023,7 @@ app.patch('/api/admin/sessions/:sessionId/rotation/start', async (req, res) => {
     lectureCode.resumeCode(sessionCodeKey(sessionItem._id));
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -947,7 +1041,7 @@ app.patch('/api/admin/sessions/:sessionId/rotation/stop', async (req, res) => {
     lectureCode.pauseCode(sessionCodeKey(sessionItem._id));
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -964,7 +1058,7 @@ app.patch('/api/admin/sessions/:sessionId/attendance-paused', async (req, res) =
     await sessionItem.save();
     return res.json({ success: true, session: sessionItem, attendancePaused: paused });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -993,7 +1087,7 @@ app.get('/api/admin/sessions/:sessionId/current-code', async (req, res) => {
       ...lectureCode.getCurrent(sessionCodeKey(sessionItem._id)),
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1013,7 +1107,7 @@ app.get('/api/lecture-code', async (req, res) => {
       ...lectureCode.getCurrent(sessionCodeKey(resolved.session._id)),
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1054,26 +1148,33 @@ app.get('/api/attendance-status', async (req, res) => {
       attendedAt: attendance?.timestamp || null,
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
-app.post('/api/verify-lecture', async (req, res) => {
+app.post('/api/verify-lecture', studentRecordLimiter, async (req, res) => {
   const {
     lectureCode: submitted, courseId, lat, lng, accuracy,
-  } = req.body;
+  } = req.body || {};
   try {
     const auth = await sessionStudentAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    if (!isValidPin(submitted)) return res.status(400).json({ error: 'Invalid lecture code' });
+    if (!mongoose.isValidObjectId(String(courseId || ''))) {
+      return res.status(400).json({ error: 'Invalid courseId' });
+    }
+    if (!isValidLatLng(lat, lng)) {
+      return res.status(400).json({ error: 'Valid latitude and longitude are required' });
+    }
+    if (!isValidAccuracy(accuracy)) {
+      return res.status(400).json({ error: 'Invalid accuracy value' });
+    }
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
     if (resolved.session.attendancePaused) {
       return res.status(400).json({
         error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.',
       });
-    }
-    if (!lectureCode.hasValidLocation(lat, lng)) {
-      return res.status(400).json({ error: 'Valid latitude and longitude are required' });
     }
     if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
       return res.status(400).json({ error: 'Invalid or expired lecture code' });
@@ -1085,16 +1186,20 @@ app.post('/api/verify-lecture', async (req, res) => {
     }
     return res.json({ success: true, sessionId: resolved.session._id });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
 /** PIN + schedule only (student). Starts multi-sample GPS flow on the client when PIN is valid. */
-app.post('/api/verify-lecture-pin', async (req, res) => {
-  const { lectureCode: submitted, courseId } = req.body;
+app.post('/api/verify-lecture-pin', studentPinLimiter, async (req, res) => {
+  const { lectureCode: submitted, courseId } = req.body || {};
   try {
     const auth = await sessionStudentAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    if (!isValidPin(submitted)) return res.status(400).json({ error: 'Invalid lecture code' });
+    if (!mongoose.isValidObjectId(String(courseId || ''))) {
+      return res.status(400).json({ error: 'Invalid courseId' });
+    }
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
     if (resolved.session.attendancePaused) {
@@ -1113,17 +1218,27 @@ app.post('/api/verify-lecture-pin', async (req, res) => {
       courseId: resolved.course._id,
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
-app.post('/api/record-attendance', async (req, res) => {
+app.post('/api/record-attendance', studentRecordLimiter, async (req, res) => {
   const {
     lectureCode: submitted, courseId, method, lat, lng, accuracy,
-  } = req.body;
+  } = req.body || {};
   try {
     const auth = await sessionStudentAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    if (!isValidPin(submitted)) return res.status(400).json({ error: 'Invalid lecture code' });
+    if (!mongoose.isValidObjectId(String(courseId || ''))) {
+      return res.status(400).json({ error: 'Invalid courseId' });
+    }
+    if (!isValidLatLng(lat, lng)) {
+      return res.status(400).json({ error: 'Valid latitude and longitude are required' });
+    }
+    if (!isValidAccuracy(accuracy)) {
+      return res.status(400).json({ error: 'Invalid accuracy value' });
+    }
     const studentPk = auth.person._id;
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
@@ -1131,9 +1246,6 @@ app.post('/api/record-attendance', async (req, res) => {
       return res.status(400).json({
         error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.',
       });
-    }
-    if (!lectureCode.hasValidLocation(lat, lng)) {
-      return res.status(400).json({ error: 'Valid latitude and longitude are required' });
     }
     if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
       return res.status(400).json({ error: 'Invalid or expired lecture code' });
@@ -1155,20 +1267,31 @@ app.post('/api/record-attendance', async (req, res) => {
       return res.json({ success: true, attendance: existing, duplicate: true });
     }
 
-    const attendance = new Attendance({
-      student: studentPk,
-      course: resolved.course._id,
-      session: resolved.session._id,
-      courseCode: resolved.course.code,
-      lectureCode: normalizedCode,
-      attendanceDate,
-      method,
-      location: { lat: Number(lat), lng: Number(lng), accuracy: Number(accuracy) },
-    });
-    await attendance.save();
-    res.json({ success: true, attendance });
+    try {
+      const attendance = await Attendance.create({
+        student: studentPk,
+        course: resolved.course._id,
+        session: resolved.session._id,
+        courseCode: resolved.course.code,
+        lectureCode: normalizedCode,
+        attendanceDate,
+        method,
+        location: { lat: Number(lat), lng: Number(lng), accuracy: Number(accuracy) },
+      });
+      return res.json({ success: true, attendance });
+    } catch (err) {
+      if (err && err.code === 11000) {
+        const dup = await Attendance.findOne({
+          student: studentPk,
+          session: resolved.session._id,
+          attendanceDate,
+        });
+        return res.json({ success: true, attendance: dup, duplicate: true });
+      }
+      throw err;
+    }
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1228,7 +1351,7 @@ app.get('/api/admin/courses/:courseId/attendance-matrix', async (req, res) => {
       rows: Array.from(rowsMap.values()),
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1245,7 +1368,7 @@ app.get('/api/admin/lecturers', async (req, res) => {
     const items = await Person.find(filter).sort({ name: 1, email: 1 });
     return res.json({ items });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1280,7 +1403,7 @@ app.post('/api/admin/lecturers', async (req, res) => {
     return res.json({ success: true, lecturer: p });
   } catch (err) {
     if (err && err.code === 11000) return res.status(400).json({ error: 'Email already registered' });
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1303,7 +1426,7 @@ app.patch('/api/admin/lecturers/:id', async (req, res) => {
     return res.json({ success: true, lecturer: lec });
   } catch (err) {
     if (err && err.code === 11000) return res.status(400).json({ error: 'Email already registered' });
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1319,7 +1442,7 @@ app.delete('/api/admin/lecturers/:id', async (req, res) => {
     await lec.save();
     return res.json({ success: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1330,7 +1453,7 @@ app.get('/api/admin/polygon-presets', async (req, res) => {
     const items = await PolygonPreset.find({}).sort({ name: 1 });
     return res.json({ items });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1344,7 +1467,7 @@ app.post('/api/admin/polygon-presets', async (req, res) => {
     const preset = await PolygonPreset.create({ name, polygons });
     return res.json({ success: true, preset });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1360,7 +1483,7 @@ app.patch('/api/admin/polygon-presets/:id', async (req, res) => {
     await preset.save();
     return res.json({ success: true, preset });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
@@ -1371,11 +1494,21 @@ app.delete('/api/admin/polygon-presets/:id', async (req, res) => {
     await PolygonPreset.deleteOne({ _id: req.params.id });
     return res.json({ success: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return respondError(res, err);
   }
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`🚀 Server listening on ${PORT}`);
 });
+
+function shutdown(signal) {
+  console.log(`[shutdown] received ${signal}`);
+  httpServer.close(() => {
+    mongoose.connection.close(false).finally(() => process.exit(0));
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

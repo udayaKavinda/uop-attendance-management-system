@@ -33,14 +33,6 @@ async function safeFetchJson(url, init = {}) {
   }
 }
 
-export async function login(identifier) {
-  return safeFetchJson(`${apiBase()}/api/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifier }),
-  });
-}
-
 /** Current user from server session (requires Google OAuth cookie). */
 export async function getMe() {
   return safeFetchJson(`${apiBase()}/api/me`);
