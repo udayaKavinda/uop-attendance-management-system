@@ -271,9 +271,9 @@ This supersedes older “single submit with GPS” descriptions.
 
 1. `GET /api/courses/running` populates the combobox.
 2. On submit: **`POST /api/verify-lecture-pin`** with `courseId` + `lectureCode` (no coordinates).
-3. On success, the client marks PIN as trusted for the **current active session** and starts a **location phase**: **`getCurrentPosition`** immediately and then every **5 s**, each calling **`POST /api/record-attendance`** with `method: 'google'` and coordinates until **`success`** or **`duplicate`**, or **~3 minutes** elapse.
-4. If location phase times out / geofence fails, retry in that **same active session** reuses the trusted PIN (no PIN re-entry). When the active session changes, this trust resets and PIN is required again.
-5. Server validates PIN, schedule, and **geofence** (including **5 m** edge buffer rules) on every `record-attendance` call.
+3. On success, the **server** marks the user's Passport session as PIN-verified for `(sessionId, today's occurrence)`, and the client starts a **location phase**: **`getCurrentPosition`** immediately and then every **5 s**, each calling **`POST /api/record-attendance`** with `method: 'google'` and coordinates until **`success`** or **`duplicate`**, or **~3 minutes** elapse.
+4. While the user has a valid server-side trust marker for the current session occurrence, `/api/record-attendance` **skips PIN re-validation** so the location loop is not interrupted by **PIN rotation** mid-window. Schedule window, attendance-paused, and **geofence** are still enforced on every call.
+5. If the 3-minute location phase times out, retrying in the same session reuses the trust — no PIN re-entry. When the active session changes (next week / different lecture), the trust marker auto-expires and PIN is required again.
 
 **Optional debug UI:** `LectureEntry.jsx` may show a **fixed GPS accuracy HUD** and related CSS—intended for temporary debugging; safe to remove for production polish.
 

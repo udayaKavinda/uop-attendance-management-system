@@ -96,12 +96,6 @@ export default function LectureEntry() {
                 setRecorded(true);
                 setCode('');
                 setError(null);
-                return;
-              }
-              if (record.error && /invalid or expired lecture code|invalid lecture code/i.test(String(record.error))) {
-                stopLocationPhase();
-                setPinVerified({ courseId: '', sessionId: '', code: '' });
-                setError('Lecture PIN changed; please enter the new PIN to continue.');
               }
             } catch {
               /* keep sampling until deadline */

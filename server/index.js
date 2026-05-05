@@ -10,7 +10,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
-const MongoStore = require('connect-mongo');
+const { MongoStore } = require('connect-mongo');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 
@@ -203,6 +203,20 @@ function sessionCodeKey(sessionId) {
 
 function currentOccurrenceKey(now = new Date()) {
   return now.toISOString().slice(0, 10);
+}
+
+/** Mark this Passport session as having proven PIN knowledge for (sessionId, today). */
+function rememberSessionPinTrust(req, sessionId) {
+  if (!req || !req.session) return;
+  const map = req.session.verifiedSessions || {};
+  map[String(sessionId)] = currentOccurrenceKey();
+  req.session.verifiedSessions = map;
+}
+
+/** True when the user already verified the PIN for this lecture-session today. */
+function hasSessionPinTrust(req, sessionId) {
+  if (!req || !req.session || !req.session.verifiedSessions) return false;
+  return req.session.verifiedSessions[String(sessionId)] === currentOccurrenceKey();
 }
 
 async function syncSessionCodeMode(sessionItem, now = new Date()) {
@@ -1212,6 +1226,7 @@ app.post('/api/verify-lecture-pin', studentPinLimiter, async (req, res) => {
     }
     const schedule = checkScheduleWindow(resolved.session);
     if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
+    rememberSessionPinTrust(req, resolved.session._id);
     return res.json({
       success: true,
       sessionId: resolved.session._id,
@@ -1247,8 +1262,12 @@ app.post('/api/record-attendance', studentRecordLimiter, async (req, res) => {
         error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.',
       });
     }
-    if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
-      return res.status(400).json({ error: 'Invalid or expired lecture code' });
+    const sessionTrusted = hasSessionPinTrust(req, resolved.session._id);
+    if (!sessionTrusted) {
+      if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
+        return res.status(400).json({ error: 'Invalid or expired lecture code' });
+      }
+      rememberSessionPinTrust(req, resolved.session._id);
     }
     const schedule = checkScheduleWindow(resolved.session);
     if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
