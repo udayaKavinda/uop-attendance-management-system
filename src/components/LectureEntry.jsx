@@ -23,6 +23,8 @@ function runningCourseLabel(item) {
 export default function LectureEntry() {
   const [code, setCode] = useState('');
   const [courseId, setCourseId] = useState('');
+  const [activeSessionId, setActiveSessionId] = useState('');
+  const [pinVerified, setPinVerified] = useState({ courseId: '', sessionId: '', code: '' });
   const [courses, setCourses] = useState([]);
   const [courseQuery, setCourseQuery] = useState('');
   const [courseMenuOpen, setCourseMenuOpen] = useState(false);
@@ -211,6 +213,7 @@ export default function LectureEntry() {
     async function syncStatus() {
       if (!courseId) {
         setRecorded(false);
+        setActiveSessionId('');
         setCode('');
         return;
       }
@@ -229,14 +232,17 @@ export default function LectureEntry() {
         if (status.error) {
           setError(status.error);
           setRecorded(false);
+          setActiveSessionId('');
         } else {
           setRecorded(Boolean(status.attended));
+          setActiveSessionId(String(status.sessionId || ''));
           if (status.attended) setCode('');
         }
       } catch (err) {
         if (!cancelled) {
           setError(err.message || 'Failed to check attendance status');
           setRecorded(false);
+          setActiveSessionId('');
         }
       }
       setCheckingStatus(false);
@@ -267,6 +273,16 @@ export default function LectureEntry() {
       stopLocationPhase({ silent: true });
     }
   }, [recorded, stopLocationPhase]);
+
+  useEffect(() => {
+    // PIN trust is only valid for the currently active session of the selected course.
+    setPinVerified((prev) => {
+      if (!prev.code) return prev;
+      if (!courseId || !activeSessionId) return { courseId: '', sessionId: '', code: '' };
+      if (prev.courseId === courseId && prev.sessionId === activeSessionId) return prev;
+      return { courseId: '', sessionId: '', code: '' };
+    });
+  }, [courseId, activeSessionId]);
 
   useEffect(() => {
     if (!locationPhaseRef.current.active) return;
@@ -323,20 +339,33 @@ export default function LectureEntry() {
       setError('Choose a course from the suggestions or type the full course code.');
       return;
     }
+    const hasTrustedPin = (
+      Boolean(pinVerified.code)
+      && pinVerified.courseId === courseId
+      && pinVerified.sessionId === activeSessionId
+    );
     const trimmed = code.trim();
-    if (!trimmed) {
+    if (!hasTrustedPin && !trimmed) {
       setError('Enter the lecture pin.');
       return;
     }
 
     setSubmitting(true);
     try {
-      const verify = await verifyLecturePin({ courseId, lectureCode: trimmed });
-      if (!verify.success) {
-        setError(verify.error || 'Lecture verification failed');
-        return;
+      if (hasTrustedPin) {
+        startLocationPhase(courseId, pinVerified.code);
+      } else {
+        const verify = await verifyLecturePin({ courseId, lectureCode: trimmed });
+        if (!verify.success) {
+          setError(verify.error || 'Lecture verification failed');
+          return;
+        }
+        const verifiedSessionId = String(verify.sessionId || '');
+        setPinVerified({ courseId, sessionId: verifiedSessionId, code: trimmed });
+        setActiveSessionId(verifiedSessionId);
+        setCode('');
+        startLocationPhase(courseId, trimmed);
       }
-      startLocationPhase(courseId, trimmed);
     } catch (err) {
       setError(err?.message || 'Verification failed');
     } finally {
@@ -346,6 +375,11 @@ export default function LectureEntry() {
 
   const noRunning = courses.length === 0 && !error;
   const isCheckingLocation = locationPhase === 'checking';
+  const hasTrustedPin = (
+    Boolean(pinVerified.code)
+    && pinVerified.courseId === courseId
+    && pinVerified.sessionId === activeSessionId
+  );
   const formLocked = submitting || checkingStatus || isCheckingLocation;
 
   return (
@@ -438,17 +472,25 @@ export default function LectureEntry() {
             </div>
             {!recorded && (
               <>
-                <label className="field-label" htmlFor="lectureCode" style={{ marginTop: '0.85rem' }}>Pin code</label>
-                <input
-                  id="lectureCode"
-                  className="input"
-                  type="text"
-                  placeholder="Code from lecturer"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  disabled={formLocked}
-                  required
-                />
+                {hasTrustedPin ? (
+                  <p className="card-subtitle" style={{ marginTop: '0.85rem' }}>
+                    PIN already verified for this live session. You can retry location check without entering PIN.
+                  </p>
+                ) : (
+                  <>
+                    <label className="field-label" htmlFor="lectureCode" style={{ marginTop: '0.85rem' }}>Pin code</label>
+                    <input
+                      id="lectureCode"
+                      className="input"
+                      type="text"
+                      placeholder="Code from lecturer"
+                      value={code}
+                      onChange={(e) => setCode(e.target.value)}
+                      disabled={formLocked}
+                      required
+                    />
+                  </>
+                )}
                 <button
                   className={`primary-btn${isCheckingLocation ? ' primary-btn--location-check' : ''}`}
                   type="submit"
@@ -458,7 +500,9 @@ export default function LectureEntry() {
                     ? 'Checking location…'
                     : submitting
                       ? 'Submitting…'
-                      : 'Submit attendance'}
+                      : hasTrustedPin
+                        ? 'Retry location check'
+                        : 'Submit attendance'}
                 </button>
               </>
             )}

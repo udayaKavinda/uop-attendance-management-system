@@ -18,7 +18,7 @@ Role-based web application for lecture attendance at the University of Peradeniy
 
 | Area | Capabilities |
 |------|----------------|
-| **Students** | Google sign-in; pick a **running** course; enter PIN from class; **PIN validated first**, then **periodic GPS samples** call `record-attendance` until success or timeout; attendance status polling per course. |
+| **Students** | Google sign-in; pick a **running** course; enter PIN from class; **PIN validated first**, then **periodic GPS samples** call `record-attendance` until success or timeout; if PIN is valid but geofence fails, retry in the **same live session** can skip PIN re-entry; attendance status polling per course. |
 | **Lecturers** | Staff console: courses they own, session CRUD, polygons (draw / presets), rotation start/stop, live PIN, attendance matrix, presentation route for PIN. |
 | **Admins** | Same as lecturers for any course, plus lecturer directory, polygon presets, course assign, full course lifecycle. |
 | **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence with **5 m** edge buffer cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M` in `server/index.js`); non-recurring session auto-deactivate via background job. |
@@ -270,8 +270,9 @@ This supersedes older “single submit with GPS” descriptions.
 
 1. `GET /api/courses/running` populates the combobox.
 2. On submit: **`POST /api/verify-lecture-pin`** with `courseId` + `lectureCode` (no coordinates).
-3. On success, the client starts a **location phase**: **`getCurrentPosition`** immediately and then every **5 s**, each calling **`POST /api/record-attendance`** with `method: 'google'` and coordinates until **`success`** or **`duplicate`**, or **~3 minutes** elapse.
-4. Server validates PIN, schedule, and **geofence** (including **5 m** edge buffer rules) on every `record-attendance` call.
+3. On success, the client marks PIN as trusted for the **current active session** and starts a **location phase**: **`getCurrentPosition`** immediately and then every **5 s**, each calling **`POST /api/record-attendance`** with `method: 'google'` and coordinates until **`success`** or **`duplicate`**, or **~3 minutes** elapse.
+4. If location phase times out / geofence fails, retry in that **same active session** reuses the trusted PIN (no PIN re-entry). When the active session changes, this trust resets and PIN is required again.
+5. Server validates PIN, schedule, and **geofence** (including **5 m** edge buffer rules) on every `record-attendance` call.
 
 **Optional debug UI:** `LectureEntry.jsx` may show a **fixed GPS accuracy HUD** and related CSS—intended for temporary debugging; safe to remove for production polish.
 
