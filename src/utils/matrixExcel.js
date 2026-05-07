@@ -1,5 +1,18 @@
 import * as XLSX from 'xlsx';
 
+function colomboYmd(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Colombo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const y = parts.find((p) => p.type === 'year')?.value || '0000';
+  const m = parts.find((p) => p.type === 'month')?.value || '01';
+  const d = parts.find((p) => p.type === 'day')?.value || '01';
+  return `${y}-${m}-${d}`;
+}
+
 /** @param {{ course?: { code?: string }; sessions: { _id: unknown; label: string }[]; rows?: { studentId?: string; email?: string; attendance?: Record<string, boolean> }[] }} table */
 export function downloadAttendanceTableExcel(table) {
   if (!table?.course || !Array.isArray(table.sessions) || table.sessions.length === 0) return;
@@ -19,6 +32,6 @@ export function downloadAttendanceTableExcel(table) {
   const safeCode = rawCode.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'course';
   const safeBatch = rawBatch.replace(/[\\/:*?"<>|]+/g, '_').trim();
   const slug = safeBatch ? `${safeCode}-${safeBatch}` : safeCode;
-  const date = new Date().toISOString().slice(0, 10);
+  const date = colomboYmd();
   XLSX.writeFile(wb, `attendance-table-${slug}-${date}.xlsx`);
 }

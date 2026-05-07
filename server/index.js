@@ -201,8 +201,15 @@ function sessionCodeKey(sessionId) {
   return `session:${sessionId}`;
 }
 
+function localYmd(now = new Date()) {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function currentOccurrenceKey(now = new Date()) {
-  return now.toISOString().slice(0, 10);
+  return localYmd(now);
 }
 
 /** Mark this Passport session as having proven PIN knowledge for (sessionId, today). */
@@ -420,9 +427,16 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
+function limiterKeyByUserOrIp(req) {
+  const uid = req?.user?._id ? String(req.user._id) : '';
+  if (uid) return `user:${uid}`;
+  return `ip:${req.ip}`;
+}
+
 const studentPinLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
+  keyGenerator: limiterKeyByUserOrIp,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many attempts, please slow down.' },
@@ -430,6 +444,7 @@ const studentPinLimiter = rateLimit({
 const studentRecordLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
+  keyGenerator: limiterKeyByUserOrIp,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many attempts, please slow down.' },
@@ -1145,7 +1160,7 @@ app.get('/api/attendance-status', async (req, res) => {
       });
     }
 
-    const attendanceDate = new Date().toISOString().slice(0, 10);
+    const attendanceDate = localYmd();
     const attendance = await Attendance.findOne({
       student: studentPk,
       course: courseId,
@@ -1276,7 +1291,7 @@ app.post('/api/record-attendance', studentRecordLimiter, async (req, res) => {
     }
 
     const normalizedCode = String(submitted).replace(/\s/g, '');
-    const attendanceDate = new Date().toISOString().slice(0, 10);
+    const attendanceDate = localYmd();
     const existing = await Attendance.findOne({
       student: studentPk,
       session: resolved.session._id,

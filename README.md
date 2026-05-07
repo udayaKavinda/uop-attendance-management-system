@@ -216,9 +216,9 @@ Example: `deploy/nginx-app-domain.conf`.
 | Method | Path | Notes |
 |--------|------|--------|
 | GET | `/api/attendance-status?courseId=` | Same-day attendance for session-in-window |
-| POST | `/api/verify-lecture-pin` | PIN + schedule + active session **only** (no geolocation)—used before GPS phase. **Rate-limited** (~30 req/min/IP). |
+| POST | `/api/verify-lecture-pin` | PIN + schedule + active session **only** (no geolocation)—used before GPS phase. **Rate-limited** (~30 req/min per authenticated user; IP fallback). |
 | POST | `/api/verify-lecture` | **Combined** PIN + schedule + **GPS/geofence** in one call (deprecated; SPA does not call it). **Rate-limited**. |
-| POST | `/api/record-attendance` | PIN + schedule + GPS + geofence; persists attendance; trusts **session user** for student id. **Rate-limited** (~60 req/min/IP). Returns `{ success: true, duplicate: true }` for same-day re-records (no longer 500 on race). |
+| POST | `/api/record-attendance` | PIN + schedule + GPS + geofence; persists attendance; trusts **session user** for student id. **Rate-limited** (~60 req/min per authenticated user; IP fallback). Returns `{ success: true, duplicate: true }` for same-day re-records (no longer 500 on race). |
 
 ### Staff (`lecturer` or `admin`; course-scoped for lecturers)
 
@@ -380,7 +380,7 @@ This supersedes older “single submit with GPS” descriptions.
 | Security middleware | **`helmet`** and **`express-rate-limit`** are now mounted; README updated. |
 | Removed routes | `POST /api/login` was an unauthenticated user-enumeration oracle; **removed**. The `login()` helper in `src/api.js` was also removed. |
 | Duplicate-record race | `record-attendance` now catches the unique-index violation and returns `{ success: true, duplicate: true }` instead of `500`. |
-| Timezone | Server defaults `TZ=Asia/Colombo` at boot when not set, eliminating UTC drift in schedule comparisons. |
+| Timezone | Server defaults `TZ=Asia/Colombo` and now uses **local Y-M-D keys** for occurrence/date markers (`currentOccurrenceKey`, `attendanceDate`) to avoid UTC/local day-boundary drift. |
 | License | **No LICENSE file**; package is **private**—not open source by default. |
 
 ---
