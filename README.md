@@ -19,9 +19,9 @@ Role-based web application for lecture attendance at the University of Peradeniy
 | Area | Capabilities |
 |------|----------------|
 | **Students** | Google sign-in; pick a **running** course; enter PIN from class; **PIN validated first**, then **periodic GPS samples** call `record-attendance` until success or timeout; if PIN is valid but geofence fails, retry in the **same live session** can skip PIN re-entry; attendance status polling per course. |
-| **Lecturers** | Staff console: courses they own, session CRUD, polygons (draw / presets), rotation start/stop, live PIN, attendance matrix, presentation route for PIN. |
+| **Lecturers** | Staff console: courses they own, session CRUD, polygons (draw / presets), live PIN, attendance matrix, presentation route for PIN, and **live attendance gating** (`attendancePaused`) using the blinking **Live** badge. |
 | **Admins** | Same as lecturers for any course, plus lecturer directory, polygon presets, course assign, full course lifecycle. |
-| **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence with **5 m** edge buffer cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M` in `server/index.js`); non-recurring session auto-deactivate via background job. |
+| **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence with **5 m** edge buffer cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M` in `server/index.js`); non-recurring session auto-deactivate via background job; date-sensitive server keys use **local Colombo Y-M-D** (not UTC slices). |
 
 ---
 
@@ -234,14 +234,14 @@ Example: `deploy/nginx-app-domain.conf`.
 | GET | `/api/admin/courses/:courseId/sessions` | |
 | POST | `/api/admin/courses/:courseId/sessions` | Create session |
 | GET | `/api/admin/sessions` | |
-| GET | `/api/admin/sessions/current-codes` | |
-| GET | `/api/admin/sessions/:sessionId/current-code` | Also calls `syncSessionCodeMode` while the session is in its scheduled window. |
+| GET | `/api/admin/sessions/current-codes` | Includes `attendancePaused` and rotation state for live cards. |
+| GET | `/api/admin/sessions/:sessionId/current-code` | Also calls `syncSessionCodeMode` while the session is in its scheduled window; includes `attendancePaused` for presenter mode. |
 | PATCH | `/api/admin/sessions/:sessionId/activate` | |
 | PATCH | `/api/admin/sessions/:sessionId/deactivate` | |
 | DELETE | `/api/admin/sessions/:sessionId` | |
-| PATCH | `/api/admin/sessions/:sessionId/rotation/start` | |
-| PATCH | `/api/admin/sessions/:sessionId/rotation/stop` | |
-| PATCH | `/api/admin/sessions/:sessionId/attendance-paused` | Pause/resume student attendance for the **current** live window. Auto-clears for new occurrences. |
+| PATCH | `/api/admin/sessions/:sessionId/rotation/start` | Enable rotation and **resume** if paused (`rotationEnabled=true`, `rotationPaused=false`). |
+| PATCH | `/api/admin/sessions/:sessionId/rotation/stop` | Keep rotation enabled but **pause** it so the current PIN stays on screen (`rotationPaused=true`). |
+| PATCH | `/api/admin/sessions/:sessionId/attendance-paused` | Pause/resume student attendance for the **current** live window. Auto-clears for new occurrences (next live run starts unpaused). |
 | GET | `/api/admin/courses/:courseId/attendance-matrix` | |
 | GET | `/api/admin/lecturers?q=` | Admin |
 | POST | `/api/admin/lecturers` | Admin |
@@ -274,6 +274,10 @@ This supersedes older “single submit with GPS” descriptions.
 3. On success, the **server** marks the user's Passport session as PIN-verified for `(sessionId, today's occurrence)`, and the client starts a **location phase**: **`getCurrentPosition`** immediately and then every **5 s**, each calling **`POST /api/record-attendance`** with `method: 'google'` and coordinates until **`success`** or **`duplicate`**, or **~3 minutes** elapse.
 4. While the user has a valid server-side trust marker for the current session occurrence, `/api/record-attendance` **skips PIN re-validation** so the location loop is not interrupted by **PIN rotation** mid-window. Schedule window, attendance-paused, and **geofence** are still enforced on every call.
 5. If the 3-minute location phase times out, retrying in the same session reuses the trust — no PIN re-entry. When the active session changes (next week / different lecture), the trust marker auto-expires and PIN is required again.
+
+Staff live control notes:
+- The **blinking Live badge** in Session control toggles `attendancePaused` (pause/resume student submissions) for the running window.
+- PIN rotation remains a separate control (`↻` / `⟳`) and can be paused independently of attendance acceptance.
 
 **Optional debug UI:** `LectureEntry.jsx` may show a **fixed GPS accuracy HUD** and related CSS—intended for temporary debugging; safe to remove for production polish.
 
@@ -308,7 +312,7 @@ This supersedes older “single submit with GPS” descriptions.
 |---------|-------------------|
 | CORS errors | `FRONTEND_URL` matches browser origin exactly; `credentials: true` on server; no mixed `www` vs bare domain. |
 | OAuth redirect mismatch | Google Console redirect URI matches **`APP_BASE_URL` + `/auth/google/callback`** (or relative path if relative callback is registered, which is uncommon). |
-| 401 after deploy | In-memory sessions lost; users must sign in again; consider persistent session store. |
+| 401 after deploy | Sessions are persisted in Mongo (`connect-mongo`), so mass logout is no longer expected. Check `SESSION_SECRET`, cookie domain/protocol (`Secure`/`SameSite`), and whether deploy changed host/origin unexpectedly. |
 | PIN always invalid | Clock skew; session not “running” (day/time); rotation paused; wrong `courseId`; server restarted (new code). |
 | Geofence rejects on edge | **5 m** buffer; accuracy reported > 5 m uses 5 m buffer; verify polygon draws. |
 | Mongo migration errors | Inspect startup logs in `server/index.js` connect handler; backup DB before upgrades. |
@@ -368,20 +372,26 @@ This supersedes older “single submit with GPS” descriptions.
 
 ---
 
-## Verification notes (README vs codebase)
+## Codebase invariants (current state)
 
-| Item | Status |
-|------|--------|
-| Student flow (PIN then GPS polling) | **Updated in this README**; older text describing a single GPS+verify step was **out of date**. |
-| `POST /api/verify-lecture-pin` | **Documented here**; was missing from the previous README API list. |
-| Geofence buffer | **5 m** in code—prior docs mentioning **20 m** would be **wrong**. |
-| `CourseConfig` | **Exists** but **unused** in server routes—flagged above. |
-| Sessions persistence | **`connect-mongo`** is now wired in (`sessions` collection); README updated. |
-| Security middleware | **`helmet`** and **`express-rate-limit`** are now mounted; README updated. |
-| Removed routes | `POST /api/login` was an unauthenticated user-enumeration oracle; **removed**. The `login()` helper in `src/api.js` was also removed. |
-| Duplicate-record race | `record-attendance` now catches the unique-index violation and returns `{ success: true, duplicate: true }` instead of `500`. |
-| Timezone | Server defaults `TZ=Asia/Colombo` and now uses **local Y-M-D keys** for occurrence/date markers (`currentOccurrenceKey`, `attendanceDate`) to avoid UTC/local day-boundary drift. |
-| License | **No LICENSE file**; package is **private**—not open source by default. |
+This table is the quick reference for facts the rest of the README depends on. Update it together with the code if any of these change.
+
+| Item | Current state | Source |
+|------|---------------|--------|
+| Student flow | **PIN-first** (`/api/verify-lecture-pin`) → **GPS polling** every 5 s for ~3 min calling `/api/record-attendance` until success / duplicate / timeout. | `src/components/LectureEntry.jsx` |
+| Server-side PIN trust | After a successful PIN verify, `record-attendance` skips PIN re-validation for the same `(user, session, occurrence)` so rotation mid-window does not break the location loop. | `server/index.js` (`rememberSessionPinTrust`, `hasSessionPinTrust`) |
+| Geofence buffer | **5 m** edge cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M`). Reported accuracy > 5 m falls back to the 5 m cap. | `server/index.js` |
+| PIN rotation | **30 s** window when rotation is active (`ROTATION_MS`); rotation can be paused independently of attendance acceptance. | `server/lib/lectureCode.js` |
+| PIN storage | **In-process memory** only (Map). Server restart drops rotation state. | `server/lib/lectureCode.js` |
+| Sessions persistence | `express-session` + **`connect-mongo`** (collection `sessions`, TTL 7 d). Survives Node restarts and horizontal scaling. | `server/index.js` |
+| Security middleware | **`helmet`**, **`cors`** (allow-list, credentialed), **`express-rate-limit`** (per-user via `limiterKeyByUserOrIp`, IP fallback). | `server/index.js` |
+| Duplicate attendance | `/api/record-attendance` returns `{ success: true, duplicate: true }` for same-day re-records (pre-check **and** unique-index race), never 500. | `server/index.js` |
+| Public discovery | `/api/courses` and `/api/courses/running` require an authenticated session. | `server/index.js` |
+| Removed | `POST /api/login` (unauthenticated user-enumeration oracle) and the `login()` helper in `src/api.js`. | — |
+| Timezone | Server defaults `TZ=Asia/Colombo` at boot if unset; `currentOccurrenceKey` and `attendanceDate` use **local Y-M-D** (`localYmd`); Excel filename uses Colombo Y-M-D (`colomboYmd`). | `server/index.js`, `src/utils/matrixExcel.js` |
+| Live attendance gating | Per-session `attendancePaused` flag toggled via the **blinking Live badge** in Session control or the projector view. Auto-clears when a new daily occurrence rolls over. | `server/models/LectureSession.js`, `src/components/AdminDashboard.jsx`, `src/components/SessionPinPresentPage.jsx` |
+| `CourseConfig` model | **Defined but unused** by current routes — verify before deleting. | `server/models/CourseConfig.js` |
+| License | **No `LICENSE` file**; package is `"private": true` in `package.json`. | `package.json` |
 
 ---
 
