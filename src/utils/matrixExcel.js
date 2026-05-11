@@ -1,8 +1,7 @@
 import * as XLSX from 'xlsx';
 
-function colomboYmd(now = new Date()) {
+function systemLocalYmd(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Colombo',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -32,6 +31,6 @@ export function downloadAttendanceTableExcel(table) {
   const safeCode = rawCode.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'course';
   const safeBatch = rawBatch.replace(/[\\/:*?"<>|]+/g, '_').trim();
   const slug = safeBatch ? `${safeCode}-${safeBatch}` : safeCode;
-  const date = colomboYmd();
+  const date = systemLocalYmd();
   XLSX.writeFile(wb, `attendance-table-${slug}-${date}.xlsx`);
 }

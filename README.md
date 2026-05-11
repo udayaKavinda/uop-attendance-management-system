@@ -116,7 +116,7 @@ Create a **`.env`** file in the **project root** (not committed—verify with yo
 | `REACT_APP_API_BASE` | Optional | CRA: absolute API origin (e.g. `http://localhost:5000`) when SPA and API differ. Empty string = same origin (typical reverse proxy). |
 | `NODE_ENV` | Deployment | `production` enables **Secure** + **SameSite=None** session cookies (HTTPS required for cross-site cookies). |
 | `PORT` | Optional | Express listen port; default **5000** |
-| `TZ` | Optional | Server timezone for schedule comparisons; defaulted to **`Asia/Colombo`** at boot if unset. Override only if running classes in another timezone. |
+| `TZ` | Optional | Server timezone for schedule comparisons. If unset, Node uses the host system timezone. Set only when you need to force a specific timezone. |
 | `SESSION_EXPIRE_JOB_MS` | Optional | Interval for non-recurring session sweep; min **10000**, default **60000** (`sessionExpiry.js`) |
 
 **CRA note:** Only variables prefixed with `REACT_APP_` are exposed to the browser at build time.
@@ -388,7 +388,7 @@ This table is the quick reference for facts the rest of the README depends on. U
 | Duplicate attendance | `/api/record-attendance` returns `{ success: true, duplicate: true }` for same-day re-records (pre-check **and** unique-index race), never 500. | `server/index.js` |
 | Public discovery | `/api/courses` and `/api/courses/running` require an authenticated session. | `server/index.js` |
 | Removed | `POST /api/login` (unauthenticated user-enumeration oracle) and the `login()` helper in `src/api.js`. | — |
-| Timezone | Server defaults `TZ=Asia/Colombo` at boot if unset; `currentOccurrenceKey` and `attendanceDate` use **local Y-M-D** (`localYmd`); Excel filename uses Colombo Y-M-D (`colomboYmd`). | `server/index.js`, `src/utils/matrixExcel.js` |
+| Timezone | Server date/day logic uses host system local time (`localYmd`) unless `TZ` is explicitly set in the environment; Excel filename date uses system-local Y-M-D (`systemLocalYmd`). | `server/index.js`, `src/utils/matrixExcel.js` |
 | Live attendance gating | Per-session `attendancePaused` flag toggled via the **blinking Live badge** in Session control or the projector view. Auto-clears when a new daily occurrence rolls over. | `server/models/LectureSession.js`, `src/components/AdminDashboard.jsx`, `src/components/SessionPinPresentPage.jsx` |
 | `CourseConfig` model | **Defined but unused** by current routes — verify before deleting. | `server/models/CourseConfig.js` |
 | License | **No `LICENSE` file**; package is `"private": true` in `package.json`. | `package.json` |
