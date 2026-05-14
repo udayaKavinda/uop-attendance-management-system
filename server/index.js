@@ -376,8 +376,42 @@ const corsOrigins = (process.env.FRONTEND_URL
   .map((s) => s.trim().replace(/\/$/, ''))
   .filter(Boolean);
 
+// Content Security Policy: production-only enforcement (CRA dev uses `eval` for
+// source maps, which CSP would block). Allow-list is built from the actual
+// external origins this app loads — see README "Content Security Policy".
+const cspExtraConnect = String(process.env.CSP_EXTRA_CONNECT_SRC || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const cspReportOnly = String(process.env.CSP_REPORT_ONLY || '').toLowerCase() === '1'
+  || String(process.env.CSP_REPORT_ONLY || '').toLowerCase() === 'true';
+const cspDirectives = {
+  defaultSrc: ["'self'"],
+  baseUri: ["'self'"],
+  objectSrc: ["'none'"],
+  scriptSrc: ["'self'"],
+  scriptSrcAttr: ["'none'"],
+  styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+  fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+  imgSrc: [
+    "'self'",
+    'data:',
+    'blob:',
+    'https://*.tile.openstreetmap.org',
+    'https://server.arcgisonline.com',
+  ],
+  connectSrc: ["'self'", ...cspExtraConnect],
+  frameAncestors: ["'none'"],
+  formAction: ["'self'", 'https://accounts.google.com'],
+  workerSrc: ["'self'", 'blob:'],
+  manifestSrc: ["'self'"],
+  upgradeInsecureRequests: [],
+};
+
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: isProd
+    ? { useDefaults: false, directives: cspDirectives, reportOnly: cspReportOnly }
+    : false,
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));

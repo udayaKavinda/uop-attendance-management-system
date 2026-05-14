@@ -118,6 +118,8 @@ Create a **`.env`** file in the **project root** (not committed—verify with yo
 | `PORT` | Optional | Express listen port; default **5000** |
 | `TZ` | Optional | Server timezone for schedule comparisons. If unset, Node uses the host system timezone. Set only when you need to force a specific timezone. |
 | `SESSION_EXPIRE_JOB_MS` | Optional | Interval for non-recurring session sweep; min **10000**, default **60000** (`sessionExpiry.js`) |
+| `CSP_EXTRA_CONNECT_SRC` | Optional (production) | Extra origins to append to the CSP `connect-src` directive — needed when the SPA fetches an API on a **different** origin (split-host deploys). Comma-separated. Example: `https://api.example.com,https://cdn.example.com`. Ignored unless `NODE_ENV=production`. |
+| `CSP_REPORT_ONLY` | Optional (production) | If `1` / `true`, the server emits `Content-Security-Policy-Report-Only` instead of the enforcing header so blocked resources are reported to DevTools but still load. Use to roll out CSP safely on staging. Ignored unless `NODE_ENV=production`. |
 
 **CRA note:** Only variables prefixed with `REACT_APP_` are exposed to the browser at build time.
 
@@ -254,6 +256,51 @@ Example: `deploy/nginx-app-domain.conf`.
 
 ---
 
+## Content Security Policy
+
+CSP is **enforced only when `NODE_ENV=production`** (CRA's dev server uses `eval` for source maps, which a strict CSP would block). The policy is built from the actual external origins the app loads:
+
+```
+default-src 'self';
+base-uri 'self';
+object-src 'none';
+script-src 'self';
+script-src-attr 'none';
+style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+font-src 'self' data: https://fonts.gstatic.com;
+img-src 'self' data: blob:
+  https://*.tile.openstreetmap.org
+  https://server.arcgisonline.com;
+connect-src 'self' [+ CSP_EXTRA_CONNECT_SRC];
+frame-ancestors 'none';
+form-action 'self' https://accounts.google.com;
+worker-src 'self' blob:;
+manifest-src 'self';
+upgrade-insecure-requests;
+```
+
+**Allow-list rationale**
+
+| Origin | Why it's allowed |
+|---|---|
+| `https://fonts.googleapis.com` | Inter font CSS in `public/index.html` |
+| `https://fonts.gstatic.com` | Inter `.woff2` files |
+| `https://*.tile.openstreetmap.org` | OpenStreetMap base layer in `AdminDashboard.jsx` |
+| `https://server.arcgisonline.com` | Esri satellite layer in `AdminDashboard.jsx` |
+| `https://accounts.google.com` (`form-action`) | OAuth redirect target |
+| `'unsafe-inline'` for `style-src` | Leaflet sets inline `transform:` styles on map markers; script XSS remains blocked |
+
+**Rolling it out safely**
+
+1. Deploy with `CSP_REPORT_ONLY=1`. Browsers send `Content-Security-Policy-Report-Only` so violations show up in DevTools (`Reports` tab) without breaking the page.
+2. Use the app on staging across all roles for a session — note any `[CSP]` violation reports.
+3. If you added a new external resource (new map provider, analytics, etc.), either add its origin to the directives in `server/index.js` or to `CSP_EXTRA_CONNECT_SRC` (for fetch/XHR origins only).
+4. Unset `CSP_REPORT_ONLY` to enforce.
+
+If your deployment serves the SPA and the API on **different hostnames** (i.e. `REACT_APP_API_BASE` is set to a different origin), add that API origin to `CSP_EXTRA_CONNECT_SRC` so the browser will allow `fetch()` to it.
+
+---
+
 ## Authentication and authorization flow
 
 1. User visits `/` → `Login` can redirect to **`/auth/google`** on the **API origin** (full URL depends on deployment).
@@ -384,7 +431,7 @@ This table is the quick reference for facts the rest of the README depends on. U
 | PIN rotation | **30 s** window when rotation is active (`ROTATION_MS`); rotation can be paused independently of attendance acceptance. | `server/lib/lectureCode.js` |
 | PIN storage | **In-process memory** only (Map). Server restart drops rotation state. | `server/lib/lectureCode.js` |
 | Sessions persistence | `express-session` + **`connect-mongo`** (collection `sessions`, TTL 7 d). Survives Node restarts and horizontal scaling. | `server/index.js` |
-| Security middleware | **`helmet`**, **`cors`** (allow-list, credentialed), **`express-rate-limit`** (per-user via `limiterKeyByUserOrIp`; IP fallback wraps `req.ip` with `rateLimit.ipKeyGenerator()` so IPv6 clients can't bypass limits by rotating addresses — required by `express-rate-limit` v8 `ERR_ERL_KEY_GEN_IPV6` validator). | `server/index.js` |
+| Security middleware | **`helmet`** with **production-only CSP** (allow-list of OSM/Esri tiles, Google Fonts; everything else `'self'`; `frame-ancestors 'none'`; toggleable via `CSP_REPORT_ONLY` and extendable via `CSP_EXTRA_CONNECT_SRC`); **`cors`** (allow-list, credentialed); **`express-rate-limit`** (per-user via `limiterKeyByUserOrIp`; IP fallback wraps `req.ip` with `rateLimit.ipKeyGenerator()` so IPv6 clients can't bypass limits by rotating addresses — required by `express-rate-limit` v8 `ERR_ERL_KEY_GEN_IPV6` validator). | `server/index.js` |
 | Duplicate attendance | `/api/record-attendance` returns `{ success: true, duplicate: true }` for same-day re-records (pre-check **and** unique-index race), never 500. | `server/index.js` |
 | Public discovery | `/api/courses` and `/api/courses/running` require an authenticated session. | `server/index.js` |
 | Removed | `POST /api/login` (unauthenticated user-enumeration oracle) and the `login()` helper in `src/api.js`. | — |
