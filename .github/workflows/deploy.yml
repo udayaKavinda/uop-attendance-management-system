@@ -1,0 +1,63 @@
+name: Deploy to attendance.eng.pdn.ac.lk
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64, attendance-prod]
+    timeout-minutes: 20
+    env:
+      APP_DIR: /opt/attendance/app
+      NODE_ENV: production
+    steps:
+      - name: Show context
+        run: |
+          echo "runner=$(hostname)"
+          echo "user=$(id -un)"
+          echo "node=$(/usr/bin/node -v)"
+          echo "npm=$(/usr/bin/npm -v)"
+          echo "app_dir=$APP_DIR"
+
+      - name: Sync code into APP_DIR
+        run: |
+          cd "$APP_DIR"
+          git fetch --all --prune
+          git reset --hard origin/main
+          git clean -fdx -e .env -e build -e node_modules
+
+      - name: Server syntax check
+        run: |
+          cd "$APP_DIR"
+          /usr/bin/node --check server/index.js
+
+      - name: Install dependencies
+        run: |
+          cd "$APP_DIR"
+          PATH=/usr/bin:$PATH /usr/bin/npm install --no-audit --no-fund
+
+      - name: Build SPA
+        run: |
+          cd "$APP_DIR"
+          PATH=/usr/bin:$PATH REACT_APP_API_BASE="" CI=false /usr/bin/npm run build
+
+      - name: Restart attendance service
+        run: sudo /bin/systemctl restart attendance
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:5000/api/healthz > /dev/null; then
+              echo "healthy"; exit 0
+            fi
+            sleep 2
+          done
+          echo "health check failed"
+          sudo systemctl status attendance --no-pager | head -n 30
+          exit 1
