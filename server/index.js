@@ -426,7 +426,8 @@ app.use(passport.session());
 function limiterKeyByUserOrIp(req) {
   const uid = req?.user?._id ? String(req.user._id) : '';
   if (uid) return `user:${uid}`;
-  return `ip:${req.ip}`;
+  // express-rate-limit helper normalizes IPv6 addresses to avoid bypasses.
+  return `ip:${rateLimit.ipKeyGenerator(req.ip)}`;
 }
 
 const studentPinLimiter = rateLimit({

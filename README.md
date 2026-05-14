@@ -19,8 +19,8 @@ Role-based web application for lecture attendance at the University of Peradeniy
 | Area | Capabilities |
 |------|----------------|
 | **Students** | Google sign-in; pick a **running** course; enter PIN from class; **PIN validated first**, then **periodic GPS samples** call `record-attendance` until success or timeout; if PIN is valid but geofence fails, retry in the **same live session** can skip PIN re-entry; attendance status polling per course. |
-| **Lecturers** | Staff console: courses they own, session CRUD, polygons (draw / presets), live PIN, attendance matrix, presentation route for PIN, and **live attendance gating** (`attendancePaused`) using the blinking **Live** badge. |
-| **Admins** | Same as lecturers for any course, plus lecturer directory, polygon presets, course assign, full course lifecycle. |
+| **Lecturers** | Staff console: courses they own, session CRUD, polygons (presets), live PIN, attendance matrix, presentation route for PIN, and **live attendance gating** (`attendancePaused`) using the blinking **Live** badge. |
+| **Admins** | Same as lecturers for any course, plus lecturer directory,draw polygon presets, course assign, full course lifecycle. |
 | **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence with **5 m** edge buffer cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M` in `server/index.js`); non-recurring session auto-deactivate via background job; date-sensitive server keys use **local Colombo Y-M-D** (not UTC slices). |
 
 ---
@@ -384,7 +384,7 @@ This table is the quick reference for facts the rest of the README depends on. U
 | PIN rotation | **30 s** window when rotation is active (`ROTATION_MS`); rotation can be paused independently of attendance acceptance. | `server/lib/lectureCode.js` |
 | PIN storage | **In-process memory** only (Map). Server restart drops rotation state. | `server/lib/lectureCode.js` |
 | Sessions persistence | `express-session` + **`connect-mongo`** (collection `sessions`, TTL 7 d). Survives Node restarts and horizontal scaling. | `server/index.js` |
-| Security middleware | **`helmet`**, **`cors`** (allow-list, credentialed), **`express-rate-limit`** (per-user via `limiterKeyByUserOrIp`, IP fallback). | `server/index.js` |
+| Security middleware | **`helmet`**, **`cors`** (allow-list, credentialed), **`express-rate-limit`** (per-user via `limiterKeyByUserOrIp`; IP fallback wraps `req.ip` with `rateLimit.ipKeyGenerator()` so IPv6 clients can't bypass limits by rotating addresses — required by `express-rate-limit` v8 `ERR_ERL_KEY_GEN_IPV6` validator). | `server/index.js` |
 | Duplicate attendance | `/api/record-attendance` returns `{ success: true, duplicate: true }` for same-day re-records (pre-check **and** unique-index race), never 500. | `server/index.js` |
 | Public discovery | `/api/courses` and `/api/courses/running` require an authenticated session. | `server/index.js` |
 | Removed | `POST /api/login` (unauthenticated user-enumeration oracle) and the `login()` helper in `src/api.js`. | — |
