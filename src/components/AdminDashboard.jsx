@@ -749,8 +749,16 @@ export default function AdminDashboard() {
       .slice(0, ASSIGN_OWNER_SEARCH_LIMIT);
   }, [assignOwnerQuery, lecturerDirectory]);
 
+  const assignableLecturerIdSet = useMemo(
+    () => new Set(lecturerDirectory.map((lec) => String(lec._id))),
+    [lecturerDirectory],
+  );
+
   const onToggleCourseLecturer = async (course, lecturerId) => {
-    const selected = (course.lecturers || []).map((lec) => String(lec?._id || lec));
+    // Drop stale owner IDs (e.g. deleted lecturers) before sending updates.
+    const selected = (course.lecturers || [])
+      .map((lec) => String(lec?._id || lec))
+      .filter((id) => assignableLecturerIdSet.has(id));
     const targetId = String(lecturerId);
     const alreadySelected = selected.includes(targetId);
     let next;

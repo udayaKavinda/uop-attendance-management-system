@@ -1556,6 +1556,35 @@ app.delete('/api/admin/lecturers/:id', async (req, res) => {
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const lec = await Person.findOne({ _id: req.params.id, role: 'lecturer', deleted: false });
     if (!lec) return res.status(404).json({ error: 'Lecturer not found' });
+
+    const affectedCourses = await Course.find({ lecturers: lec._id }).select('_id lecturers');
+    let fallbackLecturerId = null;
+    const needsFallback = affectedCourses.some((courseDoc) => {
+      const remaining = (courseDoc.lecturers || []).filter((id) => String(id) !== String(lec._id));
+      return remaining.length === 0;
+    });
+    if (needsFallback) {
+      const fallbackLecturer = await Person.findOne({
+        _id: { $ne: lec._id },
+        role: 'lecturer',
+        deleted: false,
+      }).sort({ createdAt: 1 }).select('_id');
+      if (!fallbackLecturer) {
+        return res.status(400).json({
+          error: 'Cannot remove this lecturer because one or more courses would have no assigned lecturer.',
+        });
+      }
+      fallbackLecturerId = fallbackLecturer._id;
+    }
+
+    for (const courseDoc of affectedCourses) {
+      const nextLecturers = (courseDoc.lecturers || []).filter((id) => String(id) !== String(lec._id));
+      courseDoc.lecturers = nextLecturers.length > 0
+        ? nextLecturers
+        : [fallbackLecturerId];
+      await courseDoc.save();
+    }
+
     lec.deleted = true;
     lec.active = false;
     lec.role = 'student';
