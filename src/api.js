@@ -7,7 +7,7 @@ function apiBase() {
 }
 
 /**
- * Fetch JSON; does not throw on network failure or non-JSON body.
+ * Fetch JSON; does not throw on network failure or non-JSON body..
  * Sends cookies (Passport session) on same-site / credentialed CORS requests.
  */
 async function safeFetchJson(url, init = {}) {
