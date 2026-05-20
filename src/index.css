@@ -460,7 +460,7 @@ body.present-pin-mode {
 
 .course-add-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: 1fr 1fr 1fr auto;
   gap: 0.6rem;
   align-items: end;
 }

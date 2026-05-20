@@ -846,9 +846,9 @@ export default function AdminDashboard() {
                 <div className="course-add-grid">
                   <input className="input" placeholder="Course code" value={newCourseCode} onChange={(e) => setNewCourseCode(e.target.value.toUpperCase())} />
                   <input className="input" placeholder="Batch (required)" value={newCourseBatch} onChange={(e) => setNewCourseBatch(e.target.value)} />
+                  <input className="input" placeholder="Course name" value={newCourseName} onChange={(e) => setNewCourseName(e.target.value)} />
                   <button className="primary-btn" type="button" onClick={onCreateCourse} disabled={working}>Add course</button>
                 </div>
-                <input className="input" placeholder="Course name" value={newCourseName} onChange={(e) => setNewCourseName(e.target.value)} />
               </div>
 
               <div className="course-list">
