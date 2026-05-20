@@ -109,11 +109,11 @@ export async function createAdminCourse(payload) {
   });
 }
 
-export async function patchCourseAssignLecturer(courseId, lecturerId) {
+export async function patchCourseAssignLecturer(courseId, lecturerIds) {
   return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/assign-lecturer`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lecturerId }),
+    body: JSON.stringify({ lecturerIds }),
   });
 }
 

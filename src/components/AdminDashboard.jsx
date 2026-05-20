@@ -33,6 +33,8 @@ const DAY_ORDER = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
 const MAP_CENTER = [7.2548, 80.5974];
 const OWNER_ALL_LABEL = 'All lecturers — show every course';
 const OWNER_LISTBOX_ID = 'admin-catalog-owner-listbox';
+const MAX_COURSE_LECTURERS = 5;
+const ASSIGN_OWNER_SEARCH_LIMIT = 8;
 
 const OSM_TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
@@ -104,6 +106,8 @@ export default function AdminDashboard() {
   const [newLecturerEmail, setNewLecturerEmail] = useState('');
   const [newLecturerPhone, setNewLecturerPhone] = useState('');
   const [newCourseLecturerId, setNewCourseLecturerId] = useState('');
+  const [assignOwnerCourseId, setAssignOwnerCourseId] = useState('');
+  const [assignOwnerQuery, setAssignOwnerQuery] = useState('');
   const [ownerLecturerQuery, setOwnerLecturerQuery] = useState(OWNER_ALL_LABEL);
   const [ownerLecturerMenuOpen, setOwnerLecturerMenuOpen] = useState(false);
   const [ownerLecturerHighlight, setOwnerLecturerHighlight] = useState(-1);
@@ -222,7 +226,7 @@ export default function AdminDashboard() {
   /** Admin: catalog + session wizard list only courses owned by the selected lecturer. Empty selection = all courses. Lecturers already receive a server-filtered list. */
   const coursesFilteredByOwner = useMemo(() => {
     if (!isAdmin || !newCourseLecturerId) return courses;
-    return courses.filter((c) => String(c.lecturer?._id || '') === String(newCourseLecturerId));
+    return courses.filter((c) => (c.lecturers || []).some((lec) => String(lec?._id || lec) === String(newCourseLecturerId)));
   }, [courses, isAdmin, newCourseLecturerId]);
 
   const ownerPickerRows = useMemo(() => {
@@ -262,7 +266,7 @@ export default function AdminDashboard() {
       setOwnerLecturerQuery(OWNER_ALL_LABEL);
     } else {
       setNewCourseLecturerId(String(row._id));
-      setOwnerLecturerQuery(`${row.name} (${row.email})`);
+      setOwnerLecturerQuery(`${row.email}`);
     }
     setOwnerLecturerMenuOpen(false);
     setOwnerLecturerHighlight(-1);
@@ -321,7 +325,7 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!isAdmin) return;
     const pool = newCourseLecturerId
-      ? courses.filter((c) => String(c.lecturer?._id || '') === String(newCourseLecturerId))
+      ? courses.filter((c) => (c.lecturers || []).some((lec) => String(lec?._id || lec) === String(newCourseLecturerId)))
       : courses;
     setSelectedCourseId((prev) => {
       if (prev && pool.some((c) => String(c._id) === prev && c.active)) return prev;
@@ -389,7 +393,7 @@ export default function AdminDashboard() {
         setWorking(false);
         return;
       }
-      payload.lecturerId = newCourseLecturerId;
+      payload.lecturerIds = [newCourseLecturerId];
     }
     const resp = await createAdminCourse(payload);
     if (resp.error) setError(resp.error);
@@ -624,13 +628,13 @@ export default function AdminDashboard() {
     setWorking(false);
   };
 
-  const onAssignLecturer = async (courseId, lecturerId) => {
+  const onAssignLecturer = async (courseId, lecturerIds) => {
     setWorking(true);
     setError('');
-    const resp = await patchCourseAssignLecturer(courseId, lecturerId);
+    const resp = await patchCourseAssignLecturer(courseId, lecturerIds);
     if (resp.error) setError(resp.error);
     else {
-      setMessage('Course owner updated.');
+      setMessage('Course owners updated.');
       await loadCourses();
     }
     setWorking(false);
@@ -738,6 +742,34 @@ export default function AdminDashboard() {
     setWorking(false);
   };
 
+  const assignOwnerRows = useMemo(() => {
+    const q = assignOwnerQuery.trim().toLowerCase();
+    return lecturerDirectory
+      .filter((lec) => !q || `${lec.email || ''} ${lec.name || ''}`.toLowerCase().includes(q))
+      .slice(0, ASSIGN_OWNER_SEARCH_LIMIT);
+  }, [assignOwnerQuery, lecturerDirectory]);
+
+  const onToggleCourseLecturer = async (course, lecturerId) => {
+    const selected = (course.lecturers || []).map((lec) => String(lec?._id || lec));
+    const targetId = String(lecturerId);
+    const alreadySelected = selected.includes(targetId);
+    let next;
+    if (alreadySelected) {
+      next = selected.filter((id) => id !== targetId);
+      if (next.length === 0) {
+        setError('At least one lecturer must be assigned to a course.');
+        return;
+      }
+    } else {
+      if (selected.length >= MAX_COURSE_LECTURERS) {
+        setError(`You can assign up to ${MAX_COURSE_LECTURERS} lecturers per course.`);
+        return;
+      }
+      next = [...selected, targetId];
+    }
+    await onAssignLecturer(course._id, next);
+  };
+
   if (loading) {
     return (
       <div className="admin-surface page-fade">
@@ -798,7 +830,7 @@ export default function AdminDashboard() {
                           openOwnerLecturerMenu();
                           if (newCourseLecturerId) {
                             const lec = lecturerDirectory.find((l) => String(l._id) === String(newCourseLecturerId));
-                            const canonical = lec ? `${lec.name} (${lec.email})` : '';
+                            const canonical = lec ? `${lec.email}` : '';
                             if (!canonical || v !== canonical) setNewCourseLecturerId('');
                           }
                         }}
@@ -828,8 +860,8 @@ export default function AdminDashboard() {
                                   <span className="course-combobox__code">All lecturers</span>
                                 ) : (
                                   <>
-                                    <span className="course-combobox__code">{row.name}</span>
-                                    <span className="course-combobox__name">{row.email}</span>
+                                    <span className="course-combobox__code">{row.email}</span>
+                                    <span className="course-combobox__name">{row.name}</span>
                                   </>
                                 )}
                               </button>
@@ -867,25 +899,65 @@ export default function AdminDashboard() {
                         <p className="course-code">{c.code}{c.batch ? ` · ${c.batch}` : ''}</p>
                         <p className="course-name">{c.name}</p>
                         <p className="course-item__hint">
-                          {c.lecturer?.name ? `Owner: ${c.lecturer.name}` : ''}
+                          {Array.isArray(c.lecturers) && c.lecturers.length > 0
+                            ? `Owners: ${c.lecturers.map((lec) => lec?.email).filter(Boolean).join(', ')}`
+                            : ''}
                         </p>
                       </div>
                       <span className="course-item__chevron" aria-hidden>›</span>
                     </div>
                     <div className="course-actions">
                       {isAdmin ? (
-                        <select
-                          className="input"
-                          style={{ maxWidth: 180 }}
-                          value={String(c.lecturer?._id || '')}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => { e.stopPropagation(); onAssignLecturer(c._id, e.target.value); }}
-                          aria-label="Assign course owner"
-                        >
-                          {lecturerDirectory.map((lec) => (
-                            <option key={lec._id} value={lec._id}>{lec.name}</option>
-                          ))}
-                        </select>
+                        <div className="course-owner-picker" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            className="pill-btn"
+                            onClick={() => {
+                              if (assignOwnerCourseId === String(c._id)) {
+                                setAssignOwnerCourseId('');
+                                setAssignOwnerQuery('');
+                              } else {
+                                setAssignOwnerCourseId(String(c._id));
+                                setAssignOwnerQuery('');
+                              }
+                            }}
+                          >
+                            Owners ({(c.lecturers || []).length}/{MAX_COURSE_LECTURERS})
+                          </button>
+                          {assignOwnerCourseId === String(c._id) ? (
+                            <div className="course-owner-picker__panel">
+                              <input
+                                className="input"
+                                placeholder="Search lecturer email..."
+                                value={assignOwnerQuery}
+                                onChange={(e) => setAssignOwnerQuery(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              <div className="course-owner-picker__list">
+                                {assignOwnerRows.map((lec) => {
+                                  const selectedIds = new Set((c.lecturers || []).map((x) => String(x?._id || x)));
+                                  const selected = selectedIds.has(String(lec._id));
+                                  return (
+                                    <button
+                                      key={lec._id}
+                                      type="button"
+                                      className={`course-owner-picker__option ${selected ? 'is-selected' : ''}`}
+                                      onClick={() => onToggleCourseLecturer(c, lec._id)}
+                                      disabled={working}
+                                    >
+                                      <span className="course-owner-picker__option-main">{lec.email}</span>
+                                      <span className="course-owner-picker__option-sub">{lec.name || 'Lecturer'}</span>
+                                      <span className="course-owner-picker__option-icon" aria-hidden>{selected ? '✓' : '+'}</span>
+                                    </button>
+                                  );
+                                })}
+                                {assignOwnerRows.length === 0 ? (
+                                  <p className="course-owner-picker__empty">No lecturers match this search.</p>
+                                ) : null}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
                       ) : null}
                       {c.active ? (
                         <button type="button" className="pill-btn warning" onClick={(e) => { e.stopPropagation(); onDisableCourse(c._id); }}>Disable</button>

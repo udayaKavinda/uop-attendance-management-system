@@ -19,8 +19,8 @@ Role-based web application for lecture attendance at the University of Peradeniy
 | Area | Capabilities |
 |------|----------------|
 | **Students** | Google sign-in; pick a **running** course; enter PIN from class; **PIN validated first**, then **periodic GPS samples** call `record-attendance` until success or timeout; if PIN is valid but geofence fails, retry in the **same live session** can skip PIN re-entry; attendance status polling per course. |
-| **Lecturers** | Staff console: courses they own, session CRUD, polygons (presets), live PIN, attendance matrix, presentation route for PIN, and **live attendance gating** (`attendancePaused`) using the blinking **Live** badge. |
-| **Admins** | Same as lecturers for any course, plus lecturer directory,draw polygon presets, course assign, full course lifecycle. |
+| **Lecturers** | Staff console: courses assigned to them (multi-owner supported), session CRUD, polygons (presets), live PIN, attendance matrix, presentation route for PIN, and **live attendance gating** (`attendancePaused`) using the blinking **Live** badge. |
+| **Admins** | Same as lecturers for any course, plus lecturer directory, draw polygon presets, multi-lecturer course assignment, full course lifecycle. |
 | **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence with **5 m** edge buffer cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M` in `server/index.js`); non-recurring session auto-deactivate via background job; date-sensitive server keys use **local Colombo Y-M-D** (not UTC slices). |
 
 ---
@@ -226,13 +226,13 @@ Example: `deploy/nginx-app-domain.conf`.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/api/lecture-code?courseId=` | Live PIN for active session (staff; lecturer owns course) |
+| GET | `/api/lecture-code?courseId=` | Live PIN for active session (staff; lecturer must be assigned to the course) |
 | GET | `/api/admin/courses` | Staff course list |
-| POST | `/api/admin/courses` | Create |
+| POST | `/api/admin/courses` | Create (admins send `lecturerIds` array with 1..5 lecturer IDs) |
 | DELETE | `/api/admin/courses/:courseId` | Delete |
 | PATCH | `/api/admin/courses/:courseId/disable` | |
 | PATCH | `/api/admin/courses/:courseId/enable` | |
-| PATCH | `/api/admin/courses/:courseId/assign-lecturer` | Admin |
+| PATCH | `/api/admin/courses/:courseId/assign-lecturer` | Admin (body: `lecturerIds` array, 1..5 unique lecturer IDs) |
 | GET | `/api/admin/courses/:courseId/sessions` | |
 | POST | `/api/admin/courses/:courseId/sessions` | Create session |
 | GET | `/api/admin/sessions` | |
@@ -400,6 +400,7 @@ Staff live control notes:
 **Naming**
 
 - Mongo: `Person` model, `people` collection historically; routes under `/api/admin/…`.
+- Course ownership is stored in `Course.lecturers` (1..5 assigned lecturers per course).
 - Session cookie name: **`attendance.sid`**.
 
 **Sensitive / high-impact areas (edit carefully)**
@@ -432,6 +433,7 @@ This table is the quick reference for facts the rest of the README depends on. U
 | PIN storage | **In-process memory** only (Map). Server restart drops rotation state. | `server/lib/lectureCode.js` |
 | Sessions persistence | `express-session` + **`connect-mongo`** (collection `sessions`, TTL 7 d). Survives Node restarts and horizontal scaling. | `server/index.js` |
 | Security middleware | **`helmet`** with **production-only CSP** (allow-list of OSM/Esri tiles, Google Fonts; everything else `'self'`; `frame-ancestors 'none'`; toggleable via `CSP_REPORT_ONLY` and extendable via `CSP_EXTRA_CONNECT_SRC`); **`cors`** (allow-list, credentialed); **`express-rate-limit`** (per-user via `limiterKeyByUserOrIp`; IP fallback wraps `req.ip` with `rateLimit.ipKeyGenerator()` so IPv6 clients can't bypass limits by rotating addresses — required by `express-rate-limit` v8 `ERR_ERL_KEY_GEN_IPV6` validator). | `server/index.js` |
+| Course ownership | Multi-owner: each course stores `lecturers` (array of 1..5 unique lecturer IDs), and any assigned lecturer has course-scoped staff access. | `server/models/Course.js`, `server/index.js` |
 | Duplicate attendance | `/api/record-attendance` returns `{ success: true, duplicate: true }` for same-day re-records (pre-check **and** unique-index race), never 500. | `server/index.js` |
 | Public discovery | `/api/courses` and `/api/courses/running` require an authenticated session. | `server/index.js` |
 | Removed | `POST /api/login` (unauthenticated user-enumeration oracle) and the `login()` helper in `src/api.js`. | — |

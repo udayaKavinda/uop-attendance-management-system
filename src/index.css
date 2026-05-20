@@ -526,6 +526,90 @@ body.present-pin-mode {
   justify-content: flex-end;
 }
 
+.course-owner-picker {
+  position: relative;
+  min-width: 180px;
+}
+
+.course-owner-picker__panel {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  width: min(320px, 80vw);
+  padding: 0.55rem;
+  border-radius: 12px;
+  border: 1px solid #d8dce6;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+  z-index: 20;
+}
+
+.course-owner-picker__list {
+  margin-top: 0.45rem;
+  display: grid;
+  gap: 0.35rem;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.course-owner-picker__option {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #0f172a;
+  padding: 0.45rem 0.55rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.15rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.course-owner-picker__option-main {
+  grid-column: 1 / 2;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.course-owner-picker__option-sub {
+  grid-column: 1 / 2;
+  font-size: 0.76rem;
+  color: #64748b;
+}
+
+.course-owner-picker__option-icon {
+  grid-column: 2 / 3;
+  grid-row: 1 / 3;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-weight: 800;
+}
+
+.course-owner-picker__option.is-selected {
+  border-color: #22c55e;
+  background: #ecfdf3;
+}
+
+.course-owner-picker__option.is-selected .course-owner-picker__option-icon {
+  background: #16a34a;
+  color: #fff;
+}
+
+.course-owner-picker__empty {
+  margin: 0.2rem 0;
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
 .pill-btn {
   border: 0;
   border-radius: var(--radius-pill);

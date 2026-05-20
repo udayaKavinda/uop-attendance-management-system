@@ -23,6 +23,7 @@ const DAY_INDEX = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 const MAX_POLYGONS_PER_SESSION = 50;
 const MAX_POLYGON_POINTS = 1000;
 const MAX_LECTURE_PIN_LENGTH = 16;
+const MAX_COURSE_LECTURERS = 5;
 
 const isProd = process.env.NODE_ENV === 'production';
 if (isProd && !process.env.SESSION_SECRET) {
@@ -317,7 +318,8 @@ async function assertCourseAccess(person, isAdmin, courseId) {
   if (!course) return { ok: false, status: 404, message: 'Course not found' };
   if (isAdmin) return { ok: true, course };
   if (person.role !== 'lecturer') return { ok: false, status: 403, message: 'Not allowed for this course' };
-  if (String(course.lecturer) !== String(person._id)) {
+  const courseLecturerIds = Array.isArray(course.lecturers) ? course.lecturers.map((id) => String(id)) : [];
+  if (!courseLecturerIds.includes(String(person._id))) {
     return { ok: false, status: 403, message: 'Not allowed for this course' };
   }
   return { ok: true, course };
@@ -326,12 +328,27 @@ async function assertCourseAccess(person, isAdmin, courseId) {
 async function staffSessionMatch(person, isAdmin) {
   if (isAdmin) return {};
   if (person.role !== 'lecturer') return { course: { $in: [] } };
-  const ids = await Course.find({ lecturer: person._id }).distinct('_id');
+  const ids = await Course.find({ lecturers: person._id }).distinct('_id');
   return { course: { $in: ids } };
 }
 
 function escapeRegex(s) {
   return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeLecturerIds(rawLecturerIds) {
+  if (!Array.isArray(rawLecturerIds)) return [];
+  const uniq = [];
+  const seen = new Set();
+  for (const value of rawLecturerIds) {
+    const id = String(value || '').trim();
+    if (!mongoose.isValidObjectId(id)) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    uniq.push(id);
+    if (uniq.length >= MAX_COURSE_LECTURERS) break;
+  }
+  return uniq;
 }
 
 function normalizePolygonsInput(polygons) {
@@ -661,7 +678,10 @@ mongoose
             });
             targetId = created._id;
           }
-          await Course.updateMany({ lecturer: L._id }, { $set: { lecturer: targetId } });
+          await Course.updateMany(
+            { lecturer: L._id },
+            { $set: { lecturers: [targetId] }, $unset: { lecturer: '' } },
+          );
         }
         await db.collection('lecturers').drop().catch(() => {});
         console.log('Merged lecturers collection into people');
@@ -679,14 +699,33 @@ mongoose
           deleted: false,
         });
       }
-      const rLec = await Course.updateMany(
-        { $or: [{ lecturer: { $exists: false } }, { lecturer: null }] },
-        { $set: { lecturer: legacyOwner._id } },
-      );
-      if (rLec.modifiedCount > 0) {
-        console.log(`Assigned legacy course owner to ${rLec.modifiedCount} course(s)`);
+      const legacyCourses = await Course.find({
+        $or: [
+          { lecturers: { $exists: false } },
+          { lecturers: null },
+          { lecturers: { $size: 0 } },
+        ],
+      }).select('_id lecturer lecturers');
+      let migratedOwnerCount = 0;
+      for (const courseDoc of legacyCourses) {
+        const migratedIds = normalizeLecturerIds(
+          Array.isArray(courseDoc.lecturers) && courseDoc.lecturers.length > 0
+            ? courseDoc.lecturers
+            : (courseDoc.lecturer ? [courseDoc.lecturer] : [legacyOwner._id]),
+        );
+        const finalIds = migratedIds.length > 0 ? migratedIds : [legacyOwner._id];
+        courseDoc.lecturers = finalIds;
+        courseDoc.lecturer = undefined;
+        await courseDoc.save();
+        migratedOwnerCount += 1;
       }
+      const rLec = { modifiedCount: migratedOwnerCount };
+      if (rLec.modifiedCount > 0) {
+        console.log(`Migrated course owner list on ${rLec.modifiedCount} course(s)`);
+      }
+      await Course.updateMany({}, { $unset: { lecturer: '' } }).catch(() => {});
       await Person.syncIndexes();
+      await Course.syncIndexes();
       await PolygonPreset.syncIndexes();
     } catch (e) {
       console.warn('People / course ownership migration:', e.message);
@@ -790,8 +829,8 @@ app.get('/api/admin/courses', async (req, res) => {
   try {
     const auth = await sessionStaffAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const filter = auth.isAdmin ? {} : { lecturer: auth.person._id };
-    const items = await Course.find(filter).populate('lecturer', 'name email phone').sort({ code: 1, batch: 1 });
+    const filter = auth.isAdmin ? {} : { lecturers: auth.person._id };
+    const items = await Course.find(filter).populate('lecturers', 'name email phone').sort({ code: 1, batch: 1 });
     return res.json({ items });
   } catch (err) {
     return respondError(res, err);
@@ -805,24 +844,36 @@ app.post('/api/admin/courses', async (req, res) => {
     const code = lectureCode.normalizeCourseCode(req.body.code);
     const name = String(req.body.name || '').trim();
     const batch = String(req.body.batch ?? '').trim();
-    const lecturerIdBody = req.body.lecturerId;
+    const lecturerIdsBody = normalizeLecturerIds(req.body.lecturerIds);
     if (!code || !name) return res.status(400).json({ error: 'name and code are required' });
     if (!batch) return res.status(400).json({ error: 'batch is required' });
-    let lecturerToAssign;
+    let lecturerIdsToAssign;
     if (auth.isAdmin) {
-      if (!mongoose.isValidObjectId(String(lecturerIdBody || ''))) {
-        return res.status(400).json({ error: 'lecturerId is required for admins' });
+      if (lecturerIdsBody.length === 0 || lecturerIdsBody.length > MAX_COURSE_LECTURERS) {
+        return res.status(400).json({ error: `lecturerIds must include 1 to ${MAX_COURSE_LECTURERS} lecturers` });
       }
-      const lec = await Person.findOne({ _id: lecturerIdBody, role: 'lecturer', deleted: false });
-      if (!lec) return res.status(400).json({ error: 'Invalid lecturer' });
-      lecturerToAssign = lec._id;
+      const validLecturers = await Person.find({
+        _id: { $in: lecturerIdsBody },
+        role: 'lecturer',
+        deleted: false,
+      }).select('_id');
+      if (validLecturers.length !== lecturerIdsBody.length) {
+        return res.status(400).json({ error: 'Invalid lecturerIds' });
+      }
+      lecturerIdsToAssign = lecturerIdsBody;
     } else {
-      lecturerToAssign = auth.person._id;
+      lecturerIdsToAssign = [String(auth.person._id)];
     }
     const existing = await Course.findOne({ code, batch });
     if (existing) return res.status(400).json({ error: 'A course with this code and batch already exists' });
-    const course = await Course.create({ name, code, batch, active: true, lecturer: lecturerToAssign });
-    await course.populate('lecturer', 'name email phone');
+    const course = await Course.create({
+      name,
+      code,
+      batch,
+      active: true,
+      lecturers: lecturerIdsToAssign,
+    });
+    await course.populate('lecturers', 'name email phone');
     return res.json({ success: true, course });
   } catch (err) {
     if (err && err.code === 11000) {
@@ -887,17 +938,21 @@ app.patch('/api/admin/courses/:courseId/assign-lecturer', async (req, res) => {
   try {
     const auth = await sessionAdminAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const lecturerIdBody = req.body.lecturerId;
-    if (!mongoose.isValidObjectId(String(lecturerIdBody || ''))) {
-      return res.status(400).json({ error: 'lecturerId is required' });
+    const lecturerIds = normalizeLecturerIds(req.body.lecturerIds);
+    if (lecturerIds.length === 0 || lecturerIds.length > MAX_COURSE_LECTURERS) {
+      return res.status(400).json({ error: `lecturerIds must include 1 to ${MAX_COURSE_LECTURERS} lecturers` });
     }
-    const lec = await Person.findOne({ _id: lecturerIdBody, role: 'lecturer', deleted: false });
-    if (!lec) return res.status(400).json({ error: 'Invalid lecturer' });
+    const validLecturers = await Person.find({
+      _id: { $in: lecturerIds },
+      role: 'lecturer',
+      deleted: false,
+    }).select('_id');
+    if (validLecturers.length !== lecturerIds.length) return res.status(400).json({ error: 'Invalid lecturerIds' });
     const course = await Course.findById(req.params.courseId);
     if (!course) return res.status(404).json({ error: 'Course not found' });
-    course.lecturer = lec._id;
+    course.lecturers = lecturerIds;
     await course.save();
-    await course.populate('lecturer', 'name email phone');
+    await course.populate('lecturers', 'name email phone');
     return res.json({ success: true, course });
   } catch (err) {
     return respondError(res, err);
