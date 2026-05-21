@@ -1,4 +1,5 @@
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
 import Login from './components/Login';
 import LectureEntry from './components/LectureEntry';
 import GoogleSuccess from './components/GoogleSuccess';
@@ -8,47 +9,86 @@ import SessionPinPresentPage from './components/SessionPinPresentPage';
 import MarketingLayout from './layouts/MarketingLayout';
 import StudentLayout from './layouts/StudentLayout';
 import AdminLayout from './layouts/AdminLayout';
+import { getMe } from './api';
+import { readStoredStudent } from './utils/safeStorage';
 
-function isLoggedIn() {
+function isStaffRole(role) {
+  return role === 'admin' || role === 'lecturer';
+}
+
+function storeSessionUser(payload) {
   try {
-    const raw = localStorage.getItem('student');
-    if (!raw) return false;
-    const parsed = JSON.parse(raw);
-    return Boolean(parsed && parsed.studentId);
+    localStorage.setItem('student', JSON.stringify(payload));
   } catch {
-    return false;
+    // ignore localStorage write failures
   }
 }
 
-function roleOfCurrentUser() {
+function clearSessionUser() {
   try {
-    const raw = localStorage.getItem('student');
-    if (!raw) return 'student';
-    const parsed = JSON.parse(raw);
-    return parsed?.role || 'student';
+    localStorage.removeItem('student');
   } catch {
-    return 'student';
+    // ignore localStorage write failures
   }
 }
 
-function isStaffRole() {
-  const r = roleOfCurrentUser();
-  return r === 'admin' || r === 'lecturer';
+function LoadingGate() {
+  return (
+    <div className="marketing-card page-fade">
+      <div className="card-content status-wrap">
+        <h2 className="card-title">Checking session...</h2>
+        <p className="card-subtitle">Please wait.</p>
+      </div>
+    </div>
+  );
 }
 
-function RequireAuth() {
-  return isLoggedIn() ? <Outlet /> : <Navigate to="/" replace />;
-}
-
-function RequireStudent() {
-  return !isStaffRole() ? <Outlet /> : <Navigate to="/admin" replace />;
-}
-
-function RequireStaff() {
-  return isStaffRole() ? <Outlet /> : <Navigate to="/lecture" replace />;
+function RequireAuth({ sessionReady, user }) {
+  if (!sessionReady) return <LoadingGate />;
+  return user ? <Outlet /> : <Navigate to="/" replace />;
 }
 
 function App() {
+  const [sessionReady, setSessionReady] = useState(false);
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function hydrateSession() {
+      const me = await getMe();
+      if (cancelled) return;
+      if (me && !me.error && me.studentId) {
+        const role = me.role || 'student';
+        const sessionUser = {
+          studentId: String(me.studentId),
+          role,
+          email: me.email || '',
+          lecturerId: me.lecturerId || null,
+        };
+        storeSessionUser(sessionUser);
+        setUser(sessionUser);
+      } else {
+        clearSessionUser();
+        setUser(null);
+      }
+      setSessionReady(true);
+    }
+    const cached = readStoredStudent();
+    if (cached && cached.studentId) {
+      setUser(cached);
+    }
+    hydrateSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const staff = useMemo(() => isStaffRole(user?.role), [user?.role]);
+
+  if (!sessionReady && window.location.pathname !== '/login/success') {
+    return <LoadingGate />;
+  }
+
   return (
     <div className="App">
       <Routes>
@@ -57,14 +97,14 @@ function App() {
           <Route path="/login/success" element={<GoogleSuccess />} />
         </Route>
 
-        <Route element={<RequireAuth />}>
-          <Route element={<RequireStudent />}>
+        <Route element={<RequireAuth sessionReady={sessionReady} user={user} />}>
+          <Route element={!staff ? <Outlet /> : <Navigate to="/admin" replace />}>
             <Route path="/lecture" element={<StudentLayout />}>
               <Route index element={<LectureEntry />} />
             </Route>
           </Route>
 
-          <Route element={<RequireStaff />}>
+          <Route element={staff ? <Outlet /> : <Navigate to="/lecture" replace />}>
             <Route path="/admin" element={<AdminLayout />}>
               <Route index element={<AdminDashboard />} />
               <Route path="present/session/:sessionId" element={<SessionPinPresentPage />} />
