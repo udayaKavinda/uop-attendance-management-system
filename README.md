@@ -21,7 +21,7 @@ Role-based web application for lecture attendance at the University of Peradeniy
 | **Students** | Google sign-in; pick a **running** course; enter PIN from class; **PIN validated first**, then **periodic GPS samples** call `record-attendance` until success or timeout; if PIN is valid but geofence fails, retry in the **same live session** can skip PIN re-entry; attendance status polling per course. |
 | **Lecturers** | Staff console: courses assigned to them (multi-owner supported), session CRUD, polygons (presets), live PIN, attendance matrix, presentation route for PIN, and **live attendance gating** (`attendancePaused`) using the blinking **Live** badge. |
 | **Admins** | Same as lecturers for any course, plus lecturer directory, draw polygon presets, multi-lecturer course assignment, full course lifecycle. |
-| **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence with **5 m** edge buffer cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M` in `server/index.js`); non-recurring session auto-deactivate via background job; date-sensitive server keys use **host-local Y-M-D** (not UTC slices, unless you force `TZ`). |
+| **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence edge buffer cap is runtime-configurable (**0–30 m**, default **5 m**) from admin Settings and stored in server memory; non-recurring session auto-deactivate via background job; date-sensitive server keys use **host-local Y-M-D** (not UTC slices, unless you force `TZ`). |
 
 ---
 
@@ -231,6 +231,8 @@ Example: `deploy/nginx-app-domain.conf`.
 | PATCH | `/api/admin/courses/:courseId/disable` | |
 | PATCH | `/api/admin/courses/:courseId/enable` | |
 | PATCH | `/api/admin/courses/:courseId/assign-lecturer` | Admin (body: `lecturerIds` array, 1..5 unique lecturer IDs) |
+| GET | `/api/admin/settings` | Admin runtime settings (includes `geofenceBufferCapM`) |
+| PATCH | `/api/admin/settings/geofence-buffer` | Admin; set `geofenceBufferCapM` integer `0..30` |
 | GET | `/api/admin/courses/:courseId/sessions` | |
 | POST | `/api/admin/courses/:courseId/sessions` | Create session (rejects same-course same-day overlapping time windows). |
 | GET | `/api/admin/sessions` | |
@@ -423,7 +425,7 @@ This table is the quick reference for facts the rest of the README depends on. U
 |------|---------------|--------|
 | Student flow | **PIN-first** (`/api/verify-lecture-pin`) → **GPS polling** every 5 s for ~3 min calling `/api/record-attendance` until success / duplicate / timeout. | `src/components/LectureEntry.jsx` |
 | Server-side PIN trust | After a successful PIN verify, `record-attendance` skips PIN re-validation for the same `(user, session, occurrence)` so rotation mid-window does not break the location loop. | `server/index.js` (`rememberSessionPinTrust`, `hasSessionPinTrust`) |
-| Geofence buffer | **5 m** edge cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M`). Reported accuracy > 5 m falls back to the 5 m cap. | `server/index.js` |
+| Geofence buffer | Runtime-configurable edge cap in memory (`geofenceAccuracyBufferCapM`), default **5 m**, allowed range **0..30 m**. Reported accuracy above cap uses the configured cap. | `server/index.js`, `src/components/AdminDashboard.jsx` |
 | PIN rotation | **30 s** window when rotation is active (`ROTATION_MS`); rotation can be paused independently of attendance acceptance. | `server/lib/lectureCode.js` |
 | PIN storage | **In-process memory** only (Map). Server restart drops rotation state. | `server/lib/lectureCode.js` |
 | Sessions persistence | `express-session` + **`connect-mongo`** (collection `sessions`, TTL 7 d). Survives Node restarts and horizontal scaling. | `server/index.js` |

@@ -88,10 +88,10 @@ async function ensureBootstrapAdmin() {
 }
 
 /**
- * Geofence edge buffer cap (metres). Inside any polygon still passes. Outside passes only
- * if distance to the nearest polygon edge ≤ this (or ≤ reported accuracy when 0 < accuracy ≤ cap).
+ * Geofence edge buffer cap (metres). Runtime configurable in-memory via admin settings.
+ * Default is 5m and resets on server restart.
  */
-const GEOFENCE_ACCURACY_BUFFER_CAP_M = 5;
+let geofenceAccuracyBufferCapM = 5;
 
 /** First segment of email before @; otherwise fallback (e.g. stored studentId). */
 function studentDisplayIdFromEmail(email, fallbackStudentId) {
@@ -211,7 +211,7 @@ function minDistanceToAnyPolygonEdgeMeters(lat, lng, polygons = []) {
 function isWithinGeofenceWithAccuracy(lat, lng, accuracy, polygons = []) {
   const inside = isPointInsideAnyPolygon(lat, lng, polygons);
   const accuracyMeters = Number(accuracy);
-  const cap = GEOFENCE_ACCURACY_BUFFER_CAP_M;
+  const cap = geofenceAccuracyBufferCapM;
   const edgeBufferMeters = (
     Number.isFinite(accuracyMeters) && accuracyMeters > 0 && accuracyMeters <= cap
   )
@@ -378,6 +378,14 @@ function normalizeLecturerIds(rawLecturerIds) {
     if (uniq.length >= MAX_COURSE_LECTURERS) break;
   }
   return uniq;
+}
+
+function normalizeGeofenceBufferCap(rawValue) {
+  const n = Number(rawValue);
+  if (!Number.isFinite(n)) return null;
+  const rounded = Math.round(n);
+  if (rounded < 0 || rounded > 30) return null;
+  return rounded;
 }
 
 function normalizePolygonsInput(polygons) {
@@ -763,6 +771,33 @@ app.get('/api/admin/courses', async (req, res) => {
     const filter = auth.isAdmin ? {} : { lecturers: auth.person._id };
     const items = await Course.find(filter).populate('lecturers', 'name email phone').sort({ code: 1, batch: 1 });
     return res.json({ items });
+  } catch (err) {
+    return respondError(res, err);
+  }
+});
+
+app.get('/api/admin/settings', async (req, res) => {
+  try {
+    const auth = await sessionAdminAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    return res.json({
+      geofenceBufferCapM: geofenceAccuracyBufferCapM,
+    });
+  } catch (err) {
+    return respondError(res, err);
+  }
+});
+
+app.patch('/api/admin/settings/geofence-buffer', async (req, res) => {
+  try {
+    const auth = await sessionAdminAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const nextCap = normalizeGeofenceBufferCap(req.body?.geofenceBufferCapM);
+    if (nextCap === null) {
+      return res.status(400).json({ error: 'geofenceBufferCapM must be an integer between 0 and 30' });
+    }
+    geofenceAccuracyBufferCapM = nextCap;
+    return res.json({ success: true, geofenceBufferCapM: geofenceAccuracyBufferCapM });
   } catch (err) {
     return respondError(res, err);
   }
