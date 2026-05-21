@@ -89,15 +89,13 @@ flowchart LR
 │   └── utils/              # safeStorage, authRedirect, matrixExcel
 ├── server/
 │   ├── index.js            # Express app, OAuth, index sync, all API routes
-│   ├── models/             # Person, Course, LectureSession, Attendance, PolygonPreset, CourseConfig*
-│   └── lib/                # lectureCode.js, sessionExpiry.js
+│   ├── models/             # Person, Course, LectureSession, Attendance, PolygonPreset
+│   └── lib/                # lectureCode.js, schedule.js, sessionExpiry.js
 ├── deploy/
 │   └── nginx-app-domain.conf   # Example reverse-proxy (API + auth + SPA)
 ├── package.json
 └── README.md
 ```
-
-\* **`CourseConfig`** (`server/models/CourseConfig.js`) defines a Mongoose model but is **not referenced** by `server/index.js` or the current API—treat as **legacy / unused** unless you wire it in.
 
 ---
 
@@ -219,7 +217,6 @@ Example: `deploy/nginx-app-domain.conf`.
 |--------|------|--------|
 | GET | `/api/attendance-status?courseId=` | Same-day attendance for session-in-window |
 | POST | `/api/verify-lecture-pin` | PIN + schedule + active session **only** (no geolocation)—used before GPS phase. **Rate-limited** (~30 req/min per authenticated user; IP fallback). |
-| POST | `/api/verify-lecture` | **Combined** PIN + schedule + **GPS/geofence** in one call (deprecated; SPA does not call it). **Rate-limited**. |
 | POST | `/api/record-attendance` | PIN + schedule + GPS + geofence; persists attendance; trusts **session user** for student id. **Rate-limited** (~60 req/min per authenticated user; IP fallback). Returns `{ success: true, duplicate: true }` for same-day re-records (no longer 500 on race). |
 
 ### Staff (`lecturer` or `admin`; course-scoped for lecturers)
@@ -346,7 +343,6 @@ Staff live control notes:
 | **PIN storage** | In-memory per server process; **not** durable across restarts or horizontal scaling without redesign. |
 | **Geofence** | Polygons on the **session**; point-in-polygon plus **edge buffer** capped at **5 m** (see `GEOFENCE_ACCURACY_BUFFER_CAP_M`). Polygons are validated server-side (max **50** polygons per session, max **1000** points per polygon). |
 | **PIN rotation** | **30 s** window in `lectureCode.js` when rotation is active (`ROTATION_MS`). |
-| **CourseConfig model** | Defined on disk but **not used** by current routes—verify before deleting. |
 | **Public discovery** | `/api/courses` and `/api/courses/running` now require an authenticated session. |
 | **Client guards** | Route protection is server-authoritative via **`/api/me`**; localStorage is cache-only and must not be trusted for authorization. |
 | **Tests** | CRA test stack present; **no comprehensive API integration tests** in repo were verified for this README. |
@@ -385,7 +381,7 @@ Staff live control notes:
 
 **Architecture patterns**
 
-- Monolithic Express file with inline helpers (`resolveActiveSessionForCourse`, geofence, schedule checks).
+- Monolithic Express file with inline helpers (`resolveActiveSessionForCourse`, geofence, schedule checks) plus shared scheduling helpers in `server/lib/schedule.js`.
 - Mongoose models in `server/models/`.
 - React SPA with **layout routes** and **role gates** in `App.js` (localStorage snapshot of `/api/me`).
 
@@ -408,10 +404,6 @@ Staff live control notes:
 - **`server/index.js`**: OAuth strategy, session cookie flags, CORS, startup index sync, attendance and geofence logic.
 - **`server/lib/lectureCode.js`**: PIN generation and validation contract with clients.
 - **`src/utils/authRedirect.js`**, **`src/api.js`**: session invalidation and base URL logic.
-
-**Likely obsolete**
-
-- **`POST /api/verify-lecture`** for the **current** SPA path (`LectureEntry` uses **verify-lecture-pin** + **record-attendance**); kept on the server for any external clients but rate-limited.
 
 **Files with temporary debug**
 
@@ -438,9 +430,10 @@ This table is the quick reference for facts the rest of the README depends on. U
 | Duplicate attendance | `/api/record-attendance` returns `{ success: true, duplicate: true }` for same-day re-records (pre-check **and** unique-index race), never 500. | `server/index.js` |
 | Public discovery | `/api/courses` and `/api/courses/running` require an authenticated session. | `server/index.js` |
 | Removed | `POST /api/login` (unauthenticated user-enumeration oracle) and the `login()` helper in `src/api.js`. | — |
+| Removed | Legacy one-shot endpoint `POST /api/verify-lecture` (superseded by `verify-lecture-pin` + `record-attendance`). | `server/index.js`, `src/api.js` |
 | Timezone | Server date/day logic uses host system local time (`localYmd`) unless `TZ` is explicitly set in the environment; Excel filename date uses system-local Y-M-D (`systemLocalYmd`). | `server/index.js`, `src/utils/matrixExcel.js` |
 | Live attendance gating | Per-session `attendancePaused` flag toggled via the **blinking Live badge** in Session control or the projector view. Auto-clears when a new daily occurrence rolls over. | `server/models/LectureSession.js`, `src/components/AdminDashboard.jsx`, `src/components/SessionPinPresentPage.jsx` |
-| `CourseConfig` model | **Defined but unused** by current routes — verify before deleting. | `server/models/CourseConfig.js` |
+| Schedule helpers | Shared scheduling/day helpers are centralized in `server/lib/schedule.js` and reused by API + expiry job. | `server/lib/schedule.js`, `server/index.js`, `server/lib/sessionExpiry.js` |
 | License | **No `LICENSE` file**; package is `"private": true` in `package.json`. | `package.json` |
 
 ---

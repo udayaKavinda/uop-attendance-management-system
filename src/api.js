@@ -50,14 +50,6 @@ export async function verifyLecturePin(payload) {
   });
 }
 
-export async function verifyLecture(payload) {
-  return safeFetchJson(`${apiBase()}/api/verify-lecture`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-}
-
 export async function recordAttendance(payload) {
   return safeFetchJson(`${apiBase()}/api/record-attendance`, {
     method: 'POST',

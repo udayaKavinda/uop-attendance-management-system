@@ -16,9 +16,13 @@ const Course = require('./models/Course');
 const LectureSession = require('./models/LectureSession');
 const PolygonPreset = require('./models/PolygonPreset');
 const lectureCode = require('./lib/lectureCode');
-const { startNonRecurringExpiryJob, isNonRecurringExpired } = require('./lib/sessionExpiry');
-
-const DAY_INDEX = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const { startNonRecurringExpiryJob } = require('./lib/sessionExpiry');
+const {
+  DAY_INDEX,
+  toMinutes,
+  hasScheduleOverlap,
+  isNonRecurringExpired,
+} = require('./lib/schedule');
 
 const MAX_POLYGONS_PER_SESSION = 50;
 const MAX_POLYGON_POINTS = 1000;
@@ -53,12 +57,6 @@ function respondError(res, err, fallbackStatus = 500) {
  * if distance to the nearest polygon edge ≤ this (or ≤ reported accuracy when 0 < accuracy ≤ cap).
  */
 const GEOFENCE_ACCURACY_BUFFER_CAP_M = 5;
-
-function toMinutes(hhmm) {
-  const [h, m] = String(hhmm || '').split(':').map((v) => parseInt(v, 10));
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
-  return h * 60 + m;
-}
 
 /** First segment of email before @; otherwise fallback (e.g. stored studentId). */
 function studentDisplayIdFromEmail(email, fallbackStudentId) {
@@ -124,10 +122,6 @@ function checkScheduleWindow(sessionConfig) {
     return { ok: false, reason: 'Attendance allowed only within the configured lecture time' };
   }
   return { ok: true };
-}
-
-function hasScheduleOverlap(aStart, aEnd, bStart, bEnd) {
-  return aStart < bEnd && bStart < aEnd;
 }
 
 function isPointInsideAnyPolygon(lat, lng, polygons = []) {
@@ -1177,44 +1171,6 @@ app.get('/api/attendance-status', async (req, res) => {
       attendanceId: attendance?._id || null,
       attendedAt: attendance?.timestamp || null,
     });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
-
-app.post('/api/verify-lecture', studentRecordLimiter, async (req, res) => {
-  const {
-    lectureCode: submitted, courseId, lat, lng, accuracy,
-  } = req.body || {};
-  try {
-    const auth = await sessionStudentAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    if (!isValidPin(submitted)) return res.status(400).json({ error: 'Invalid lecture code' });
-    if (!mongoose.isValidObjectId(String(courseId || ''))) {
-      return res.status(400).json({ error: 'Invalid courseId' });
-    }
-    if (!isValidLatLng(lat, lng)) {
-      return res.status(400).json({ error: 'Valid latitude and longitude are required' });
-    }
-    if (!isValidAccuracy(accuracy)) {
-      return res.status(400).json({ error: 'Invalid accuracy value' });
-    }
-    const resolved = await resolveActiveSessionForCourse(courseId);
-    if (resolved.error) return res.status(400).json({ error: resolved.error });
-    if (resolved.session.attendancePaused) {
-      return res.status(400).json({
-        error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.',
-      });
-    }
-    if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
-      return res.status(400).json({ error: 'Invalid or expired lecture code' });
-    }
-    const schedule = checkScheduleWindow(resolved.session);
-    if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    if (!isWithinGeofenceWithAccuracy(Number(lat), Number(lng), Number(accuracy), resolved.session.polygons || [])) {
-      return res.status(400).json({ error: 'You are outside the allowed attendance area' });
-    }
-    return res.json({ success: true, sessionId: resolved.session._id });
   } catch (err) {
     return respondError(res, err);
   }
