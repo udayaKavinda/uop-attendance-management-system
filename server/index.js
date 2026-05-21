@@ -815,37 +815,19 @@ app.post('/api/admin/courses', async (req, res) => {
 });
 
 app.delete('/api/admin/courses/:courseId', async (req, res) => {
-  let dbSession;
   try {
     const auth = await sessionStaffAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, req.params.courseId);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     const course = access.course;
-    let sessionIds = [];
-    dbSession = await mongoose.startSession();
-    await dbSession.withTransaction(async () => {
-      // Re-check existence in transaction to avoid partial deletes on races.
-      const exists = await Course.findOne({ _id: course._id }).session(dbSession).select('_id');
-      if (!exists) {
-        const notFound = new Error('Course not found');
-        notFound.status = 404;
-        throw notFound;
-      }
-      sessionIds = await LectureSession.find({ course: course._id })
-        .session(dbSession)
-        .distinct('_id');
-      await Attendance.deleteMany({ course: course._id }).session(dbSession);
-      await LectureSession.deleteMany({ course: course._id }).session(dbSession);
-      await Course.deleteOne({ _id: course._id }).session(dbSession);
-    });
-    await dbSession.endSession();
-    dbSession = null;
+    const sessionIds = await LectureSession.find({ course: course._id }).distinct('_id');
+    await Attendance.deleteMany({ course: course._id });
+    await LectureSession.deleteMany({ course: course._id });
+    await Course.deleteOne({ _id: course._id });
     sessionIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
     return res.json({ success: true });
   } catch (err) {
-    if (dbSession) await dbSession.endSession().catch(() => {});
-    if (err && err.status === 404) return res.status(404).json({ error: err.message });
     return respondError(res, err);
   }
 });
