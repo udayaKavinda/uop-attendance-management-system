@@ -619,116 +619,13 @@ mongoose
   .then(async () => {
     console.log('🗄  MongoDB connected');
     try {
-      const r = await LectureSession.updateMany({}, { $unset: { name: 1 } });
-      if (r.modifiedCount > 0) {
-        console.log(`Removed deprecated session "name" field from ${r.modifiedCount} document(s)`);
-      }
-    } catch (e) {
-      console.warn('LectureSession name cleanup:', e.message);
-    }
-    try {
-      await Course.updateMany({ $or: [{ batch: { $exists: false } }, { batch: null }] }, { $set: { batch: '' } });
-      await Course.syncIndexes();
-    } catch (e) {
-      console.warn('Course batch / index sync:', e.message);
-    }
-    try {
-      const db = mongoose.connection.db;
-      const colMeta = await db.listCollections().toArray();
-      const colNames = new Set(colMeta.map((c) => c.name));
-
-      if (colNames.has('students') && !colNames.has('people')) {
-        await db.collection('students').rename('people');
-        console.log('Renamed MongoDB collection students → people');
-      }
-
-      await Person.updateMany(
-        { lecturerProfile: { $exists: true } },
-        { $unset: { lecturerProfile: '' } },
-      ).catch(() => {});
-
-      if (colNames.has('lecturers')) {
-        const lecDocs = await db.collection('lecturers').find({}).toArray();
-        for (const L of lecDocs) {
-          const emailN = String(L.email || '').trim().toLowerCase();
-          let p = await Person.findOne({ email: emailN });
-          if (!p) {
-            p = await Person.findOne({
-              email: { $regex: new RegExp(`^${escapeRegex(emailN)}$`, 'i') },
-            });
-          }
-          let targetId;
-          if (p) {
-            p.role = 'lecturer';
-            p.name = L.name || p.name || emailN.split('@')[0];
-            p.phone = L.phone != null ? String(L.phone) : (p.phone || '');
-            p.active = L.active !== false;
-            p.deleted = Boolean(L.deleted);
-            await p.save();
-            targetId = p._id;
-          } else {
-            const created = await Person.create({
-              email: emailN,
-              studentId: `dir:${String(L._id)}`,
-              role: 'lecturer',
-              name: L.name || '',
-              phone: L.phone || '',
-              active: L.active !== false,
-              deleted: Boolean(L.deleted),
-            });
-            targetId = created._id;
-          }
-          await Course.updateMany(
-            { lecturer: L._id },
-            { $set: { lecturers: [targetId] }, $unset: { lecturer: '' } },
-          );
-        }
-        await db.collection('lecturers').drop().catch(() => {});
-        console.log('Merged lecturers collection into people');
-      }
-
-      let legacyOwner = await Person.findOne({ email: 'legacy-placeholder@uop-attendance.local' });
-      if (!legacyOwner) {
-        legacyOwner = await Person.create({
-          name: 'Legacy (unassigned)',
-          email: 'legacy-placeholder@uop-attendance.local',
-          studentId: 'legacy-placeholder-uop',
-          role: 'lecturer',
-          phone: '',
-          active: true,
-          deleted: false,
-        });
-      }
-      const legacyCourses = await Course.find({
-        $or: [
-          { lecturers: { $exists: false } },
-          { lecturers: null },
-          { lecturers: { $size: 0 } },
-        ],
-      }).select('_id lecturer lecturers');
-      let migratedOwnerCount = 0;
-      for (const courseDoc of legacyCourses) {
-        const migratedIds = normalizeLecturerIds(
-          Array.isArray(courseDoc.lecturers) && courseDoc.lecturers.length > 0
-            ? courseDoc.lecturers
-            : (courseDoc.lecturer ? [courseDoc.lecturer] : [legacyOwner._id]),
-        );
-        const finalIds = migratedIds.length > 0 ? migratedIds : [legacyOwner._id];
-        courseDoc.lecturers = finalIds;
-        courseDoc.lecturer = undefined;
-        await courseDoc.save();
-        migratedOwnerCount += 1;
-      }
-      const rLec = { modifiedCount: migratedOwnerCount };
-      if (rLec.modifiedCount > 0) {
-        console.log(`Migrated course owner list on ${rLec.modifiedCount} course(s)`);
-      }
-      await Course.updateMany({}, { $unset: { lecturer: '' } }).catch(() => {});
+      await LectureSession.syncIndexes();
+      await Attendance.syncIndexes();
       await Person.syncIndexes();
       await Course.syncIndexes();
       await PolygonPreset.syncIndexes();
     } catch (e) {
-      console.warn('People / course ownership migration:', e.message);
+      console.warn('Index sync:', e.message);
     }
     startNonRecurringExpiryJob();
   })

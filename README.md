@@ -88,7 +88,7 @@ flowchart LR
 │   ├── api.js              # All HTTP helpers; safeFetchJson; 401 → notifySessionInvalid
 │   └── utils/              # safeStorage, authRedirect, matrixExcel
 ├── server/
-│   ├── index.js            # Express app, OAuth, migrations, all API routes
+│   ├── index.js            # Express app, OAuth, index sync, all API routes
 │   ├── models/             # Person, Course, LectureSession, Attendance, PolygonPreset, CourseConfig*
 │   └── lib/                # lectureCode.js, sessionExpiry.js
 ├── deploy/
@@ -129,7 +129,7 @@ Create a **`.env`** file in the **project root** (not committed—verify with yo
 
 1. Install and start **MongoDB** locally or use Atlas / managed Mongo.
 2. Set `MONGO_URI` in `.env`.
-3. Start the server once: Mongoose creates/uses collections; **`server/index.js` runs startup migrations** (rename `students` → `people`, merge legacy `lecturers`, normalize courses, index sync, etc.). Review server logs on first boot.
+3. Start the server once: Mongoose creates/uses collections and syncs indexes on startup. Review server logs on first boot.
 
 **Important indexes:** `Attendance` has a **unique compound index** on `(student, session, attendanceDate)` for idempotent same-day recording.
 
@@ -405,7 +405,7 @@ Staff live control notes:
 
 **Sensitive / high-impact areas (edit carefully)**
 
-- **`server/index.js`**: OAuth strategy, session cookie flags, CORS, startup **migrations**, attendance and geofence logic.
+- **`server/index.js`**: OAuth strategy, session cookie flags, CORS, startup index sync, attendance and geofence logic.
 - **`server/lib/lectureCode.js`**: PIN generation and validation contract with clients.
 - **`src/utils/authRedirect.js`**, **`src/api.js`**: session invalidation and base URL logic.
 
