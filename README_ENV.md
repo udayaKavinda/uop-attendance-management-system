@@ -369,7 +369,7 @@ sudo mkdir -p /var/backups/attendance
 sudo mongodump --db attendance --archive=/var/backups/attendance/$(date +%F).gz --gzip
 ```
 
-For scheduled backups, add a cron entry under `attendance-admin` (or root), keep ≥7 daily archives, and ship them off‑host. **Always take a backup before any Mongo or app major upgrade** — the app runs collection‑rename migrations on first start.
+For scheduled backups, add a cron entry under `attendance-admin` (or root), keep ≥7 daily archives, and ship them off‑host. **Always take a backup before any Mongo or app major upgrade** — current startup syncs indexes on boot, but no longer runs legacy collection-rename/backfill migrations.
 
 ---
 

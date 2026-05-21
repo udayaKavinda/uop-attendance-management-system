@@ -229,7 +229,7 @@ Example: `deploy/nginx-app-domain.conf`.
 | GET | `/api/lecture-code?courseId=` | Live PIN for active session (staff; lecturer must be assigned to the course) |
 | GET | `/api/admin/courses` | Staff course list |
 | POST | `/api/admin/courses` | Create (admins send `lecturerIds` array with 1..5 lecturer IDs) |
-| DELETE | `/api/admin/courses/:courseId` | Delete |
+| DELETE | `/api/admin/courses/:courseId` | Delete (transactional: attendance, sessions, and course are removed atomically). |
 | PATCH | `/api/admin/courses/:courseId/disable` | |
 | PATCH | `/api/admin/courses/:courseId/enable` | |
 | PATCH | `/api/admin/courses/:courseId/assign-lecturer` | Admin (body: `lecturerIds` array, 1..5 unique lecturer IDs) |
@@ -305,8 +305,8 @@ If your deployment serves the SPA and the API on **different hostnames** (i.e. `
 
 1. User visits `/` → `Login` can redirect to **`/auth/google`** on the **API origin** (full URL depends on deployment).
 2. Google returns to **`/auth/google/callback`**; Passport establishes session (persisted in MongoDB via `connect-mongo`) and redirects to **`{FRONTEND_URL}/login/success`**.
-3. `GoogleSuccess` calls **`GET /api/me`** with credentials and writes **`localStorage`** key `student` (shape expected by `App.js` guards).
-4. **Routing:** `student` → `/lecture`; `lecturer` / `admin` → `/admin`. Guards are **client-side** (localStorage); **server routes enforce real roles**—never rely on the client alone.
+3. `GoogleSuccess` calls **`GET /api/me`** with credentials and writes **`localStorage`** key `student` as a cache snapshot.
+4. `App` re-validates session state via **`GET /api/me`** on load; this server response is the routing source of truth (`student` → `/lecture`; `lecturer` / `admin` → `/admin`).
 
 **Role source of truth:** `Person.role` in MongoDB (`student` | `lecturer` | `admin`). Google callback can **promote** to `lecturer` if email matches an active lecturer row (see `server/index.js` Google strategy).
 
@@ -348,7 +348,7 @@ Staff live control notes:
 | **PIN rotation** | **30 s** window in `lectureCode.js` when rotation is active (`ROTATION_MS`). |
 | **CourseConfig model** | Defined on disk but **not used** by current routes—verify before deleting. |
 | **Public discovery** | `/api/courses` and `/api/courses/running` now require an authenticated session. |
-| **Client guards** | Route protection uses **localStorage**; always mirror rules on the server (already done for attendance). |
+| **Client guards** | Route protection is server-authoritative via **`/api/me`**; localStorage is cache-only and must not be trusted for authorization. |
 | **Tests** | CRA test stack present; **no comprehensive API integration tests** in repo were verified for this README. |
 
 ---
@@ -362,7 +362,7 @@ Staff live control notes:
 | 401 after deploy | Sessions are persisted in Mongo (`connect-mongo`), so mass logout is no longer expected. Check `SESSION_SECRET`, cookie domain/protocol (`Secure`/`SameSite`), and whether deploy changed host/origin unexpectedly. |
 | PIN always invalid | Clock skew; session not “running” (day/time); rotation paused; wrong `courseId`; server restarted (new code). |
 | Geofence rejects on edge | **5 m** buffer; accuracy reported > 5 m uses 5 m buffer; verify polygon draws. |
-| Mongo migration errors | Inspect startup logs in `server/index.js` connect handler; backup DB before upgrades. |
+| Startup index sync errors | Inspect startup logs in `server/index.js` connect handler; ensure DB user has index-management permissions. |
 
 ---
 
@@ -434,6 +434,7 @@ This table is the quick reference for facts the rest of the README depends on. U
 | Sessions persistence | `express-session` + **`connect-mongo`** (collection `sessions`, TTL 7 d). Survives Node restarts and horizontal scaling. | `server/index.js` |
 | Security middleware | **`helmet`** with **production-only CSP** (allow-list of OSM/Esri tiles, Google Fonts; everything else `'self'`; `frame-ancestors 'none'`; toggleable via `CSP_REPORT_ONLY` and extendable via `CSP_EXTRA_CONNECT_SRC`); **`cors`** (allow-list, credentialed); **`express-rate-limit`** (per-user via `limiterKeyByUserOrIp`; IP fallback wraps `req.ip` with `rateLimit.ipKeyGenerator()` so IPv6 clients can't bypass limits by rotating addresses — required by `express-rate-limit` v8 `ERR_ERL_KEY_GEN_IPV6` validator). | `server/index.js` |
 | Course ownership | Multi-owner: each course stores `lecturers` (array of 1..5 unique lecturer IDs), and any assigned lecturer has course-scoped staff access. | `server/models/Course.js`, `server/index.js` |
+| Course delete consistency | `DELETE /api/admin/courses/:courseId` runs in a Mongo transaction so attendance, sessions, and course delete succeed/fail together. | `server/index.js` |
 | Duplicate attendance | `/api/record-attendance` returns `{ success: true, duplicate: true }` for same-day re-records (pre-check **and** unique-index race), never 500. | `server/index.js` |
 | Public discovery | `/api/courses` and `/api/courses/running` require an authenticated session. | `server/index.js` |
 | Removed | `POST /api/login` (unauthenticated user-enumeration oracle) and the `login()` helper in `src/api.js`. | — |
