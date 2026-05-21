@@ -21,7 +21,7 @@ Role-based web application for lecture attendance at the University of Peradeniy
 | **Students** | Google sign-in; pick a **running** course; enter PIN from class; **PIN validated first**, then **periodic GPS samples** call `record-attendance` until success or timeout; if PIN is valid but geofence fails, retry in the **same live session** can skip PIN re-entry; attendance status polling per course. |
 | **Lecturers** | Staff console: courses assigned to them (multi-owner supported), session CRUD, polygons (presets), live PIN, attendance matrix, presentation route for PIN, and **live attendance gating** (`attendancePaused`) using the blinking **Live** badge. |
 | **Admins** | Same as lecturers for any course, plus lecturer directory, draw polygon presets, multi-lecturer course assignment, full course lifecycle. |
-| **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence with **5 m** edge buffer cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M` in `server/index.js`); non-recurring session auto-deactivate via background job; date-sensitive server keys use **local Colombo Y-M-D** (not UTC slices). |
+| **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence with **5 m** edge buffer cap (`GEOFENCE_ACCURACY_BUFFER_CAP_M` in `server/index.js`); non-recurring session auto-deactivate via background job; date-sensitive server keys use **host-local Y-M-D** (not UTC slices, unless you force `TZ`). |
 
 ---
 
@@ -103,7 +103,7 @@ flowchart LR
 
 ## Environment variables
 
-Create a **`.env`** file in the **project root** (not committed—verify with your team). Names below match `server/index.js`, `sessionExpiry.js`, and `src/api.js`.
+Create a **`.env`** file in the **project root** (not committed—verify with your team). Most names below are consumed directly in `server/index.js`, `sessionExpiry.js`, or `src/api.js`; `TZ` affects Node's runtime timezone behavior even when not explicitly read in code.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -234,13 +234,13 @@ Example: `deploy/nginx-app-domain.conf`.
 | PATCH | `/api/admin/courses/:courseId/enable` | |
 | PATCH | `/api/admin/courses/:courseId/assign-lecturer` | Admin (body: `lecturerIds` array, 1..5 unique lecturer IDs) |
 | GET | `/api/admin/courses/:courseId/sessions` | |
-| POST | `/api/admin/courses/:courseId/sessions` | Create session |
+| POST | `/api/admin/courses/:courseId/sessions` | Create session (rejects same-course same-day overlapping time windows). |
 | GET | `/api/admin/sessions` | |
 | GET | `/api/admin/sessions/current-codes` | Includes `attendancePaused` and rotation state for live cards. |
 | GET | `/api/admin/sessions/:sessionId/current-code` | Also calls `syncSessionCodeMode` while the session is in its scheduled window; includes `attendancePaused` for presenter mode. |
 | PATCH | `/api/admin/sessions/:sessionId/activate` | |
 | PATCH | `/api/admin/sessions/:sessionId/deactivate` | |
-| DELETE | `/api/admin/sessions/:sessionId` | |
+| DELETE | `/api/admin/sessions/:sessionId` | Soft-delete (`deleted=true`, `active=false`); attendance rows are preserved for reporting. |
 | PATCH | `/api/admin/sessions/:sessionId/rotation/start` | Enable rotation and **resume** if paused (`rotationEnabled=true`, `rotationPaused=false`). |
 | PATCH | `/api/admin/sessions/:sessionId/rotation/stop` | Keep rotation enabled but **pause** it so the current PIN stays on screen (`rotationPaused=true`). |
 | PATCH | `/api/admin/sessions/:sessionId/attendance-paused` | Pause/resume student attendance for the **current** live window. Auto-clears for new occurrences (next live run starts unpaused). |
@@ -248,7 +248,7 @@ Example: `deploy/nginx-app-domain.conf`.
 | GET | `/api/admin/lecturers?q=` | Admin |
 | POST | `/api/admin/lecturers` | Admin |
 | PATCH | `/api/admin/lecturers/:id` | Admin |
-| DELETE | `/api/admin/lecturers/:id` | Admin |
+| DELETE | `/api/admin/lecturers/:id` | Admin. Removes lecturer from course owners; if that would leave a course with zero owners, reassigns a fallback active lecturer (otherwise returns 400). |
 | GET | `/api/admin/polygon-presets` | |
 | POST | `/api/admin/polygon-presets` | Admin |
 | PATCH | `/api/admin/polygon-presets/:id` | Admin |

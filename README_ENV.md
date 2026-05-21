@@ -6,6 +6,7 @@ This file documents the actual production environment of the UoP Attendance Mana
 - **Public hostname:** `attendance.eng.pdn.ac.lk`
 - **Repository (deploys from):** https://github.com/udayaKavinda/uop-attendance-management-system
 - **Last verified:** 2026-05-14
+- **Scope note:** API behavior details (attendance flow, session overlap rules, lecturer reassignment behavior) are maintained in the root `README.md`.
 
 ---
 
