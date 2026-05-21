@@ -128,6 +128,7 @@ Create a **`.env`** file in the **project root** (not committed—verify with yo
 1. Install and start **MongoDB** locally or use Atlas / managed Mongo.
 2. Set `MONGO_URI` in `.env`.
 3. Start the server once: Mongoose creates/uses collections and syncs indexes on startup. Review server logs on first boot.
+4. On startup, the server ensures a bootstrap admin record exists for `udayakavindadev@gmail.com` (idempotent role/active/deleted correction).
 
 **Important indexes:** `Attendance` has a **unique compound index** on `(student, session, attendanceDate)` for idempotent same-day recording.
 
@@ -307,6 +308,8 @@ If your deployment serves the SPA and the API on **different hostnames** (i.e. `
 
 **Role source of truth:** `Person.role` in MongoDB (`student` | `lecturer` | `admin`). Google callback can **promote** to `lecturer` if email matches an active lecturer row (see `server/index.js` Google strategy).
 
+**Bootstrap admin:** startup enforces `udayakavindadev@gmail.com` as an active, non-deleted `admin` record for emergency access in fresh databases.
+
 ---
 
 ## Student attendance flow (implementation)
@@ -434,6 +437,7 @@ This table is the quick reference for facts the rest of the README depends on. U
 | Timezone | Server date/day logic uses host system local time (`localYmd`) unless `TZ` is explicitly set in the environment; Excel filename date uses system-local Y-M-D (`systemLocalYmd`). | `server/index.js`, `src/utils/matrixExcel.js` |
 | Live attendance gating | Per-session `attendancePaused` flag toggled via the **blinking Live badge** in Session control or the projector view. Auto-clears when a new daily occurrence rolls over. | `server/models/LectureSession.js`, `src/components/AdminDashboard.jsx`, `src/components/SessionPinPresentPage.jsx` |
 | Schedule helpers | Shared scheduling/day helpers are centralized in `server/lib/schedule.js` and reused by API + expiry job. | `server/lib/schedule.js`, `server/index.js`, `server/lib/sessionExpiry.js` |
+| Bootstrap admin | Startup ensures `udayakavindadev@gmail.com` exists as active non-deleted `admin`; creates record if missing. | `server/index.js` |
 | License | **No `LICENSE` file**; package is `"private": true` in `package.json`. | `package.json` |
 
 ---

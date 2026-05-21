@@ -28,6 +28,7 @@ const MAX_POLYGONS_PER_SESSION = 50;
 const MAX_POLYGON_POINTS = 1000;
 const MAX_LECTURE_PIN_LENGTH = 16;
 const MAX_COURSE_LECTURERS = 5;
+const BOOTSTRAP_ADMIN_EMAIL = 'udayakavindadev@gmail.com';
 
 const isProd = process.env.NODE_ENV === 'production';
 if (isProd && !process.env.SESSION_SECRET) {
@@ -50,6 +51,40 @@ function respondError(res, err, fallbackStatus = 500) {
     return res.status(409).json({ error: 'Duplicate value' });
   }
   return res.status(fallbackStatus).json({ error: isProd ? 'Internal server error' : (err?.message || 'Internal server error') });
+}
+
+async function ensureBootstrapAdmin() {
+  const email = String(BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
+  if (!email) return;
+  let person = await Person.findOne({ email });
+  if (!person) {
+    person = await Person.create({
+      email,
+      studentId: `bootstrap:${email}`,
+      role: 'admin',
+      active: true,
+      deleted: false,
+    });
+    console.log(`Bootstrap admin created: ${email}`);
+    return;
+  }
+  let changed = false;
+  if (person.role !== 'admin') {
+    person.role = 'admin';
+    changed = true;
+  }
+  if (person.deleted) {
+    person.deleted = false;
+    changed = true;
+  }
+  if (!person.active) {
+    person.active = true;
+    changed = true;
+  }
+  if (changed) {
+    await person.save();
+    console.log(`Bootstrap admin updated: ${email}`);
+  }
 }
 
 /**
@@ -620,6 +655,11 @@ mongoose
       await PolygonPreset.syncIndexes();
     } catch (e) {
       console.warn('Index sync:', e.message);
+    }
+    try {
+      await ensureBootstrapAdmin();
+    } catch (e) {
+      console.warn('Bootstrap admin:', e.message);
     }
     startNonRecurringExpiryJob();
   })
