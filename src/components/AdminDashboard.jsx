@@ -113,6 +113,7 @@ export default function AdminDashboard() {
   const [ownerLecturerHighlight, setOwnerLecturerHighlight] = useState(-1);
   const ownerLecturerBlurTimer = useRef(null);
   const ownerLecturerComboboxRef = useRef(null);
+  const assignOwnerPanelRef = useRef(null);
   const [polygonPresets, setPolygonPresets] = useState([]);
   const [presetTabName, setPresetTabName] = useState('');
   const [presetDrawPolygons, setPresetDrawPolygons] = useState([[]]);
@@ -487,6 +488,29 @@ export default function AdminDashboard() {
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [presetMenuOpen]);
+
+  useEffect(() => {
+    if (!assignOwnerCourseId) return undefined;
+    function handlePointerDown(event) {
+      const el = assignOwnerPanelRef.current;
+      if (el && !el.contains(event.target)) {
+        setAssignOwnerCourseId('');
+        setAssignOwnerQuery('');
+      }
+    }
+    function handleEscape(event) {
+      if (event.key === 'Escape') {
+        setAssignOwnerCourseId('');
+        setAssignOwnerQuery('');
+      }
+    }
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [assignOwnerCourseId]);
 
   const onTogglePresetMenu = async () => {
     const nextOpen = !presetMenuOpen;
@@ -933,7 +957,7 @@ export default function AdminDashboard() {
                             Owners ({(c.lecturers || []).length}/{MAX_COURSE_LECTURERS})
                           </button>
                           {assignOwnerCourseId === String(c._id) ? (
-                            <div className="course-owner-picker__panel">
+                            <div className="course-owner-picker__panel" ref={assignOwnerPanelRef}>
                               <input
                                 className="input"
                                 placeholder="Search lecturer email..."
