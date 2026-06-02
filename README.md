@@ -574,7 +574,7 @@ form-action 'self' https://accounts.google.com;
 | Public discovery | `/api/courses` and `/api/courses/running` require auth. | `server/index.js` |
 | Timezone | Server uses host local time (`localYmd`) unless `TZ` is set. | `server/index.js` |
 | Bootstrap admin | Startup ensures `udayakavindadev@gmail.com` is an active admin. | `server/index.js` |
-| Capacitor app ID | `lk.uop.attendance` | `capacitor.config.ts` |
+| Capacitor app ID | `lk.ac.pdn.eng.attendance` | `capacitor.config.ts` |
 | Android BLE permissions | `BLUETOOTH_SCAN` (neverForLocation) + `BLUETOOTH_CONNECT` for API 31+; legacy permissions for API ≤ 30. | `android/app/src/main/AndroidManifest.xml` |
 
 ---

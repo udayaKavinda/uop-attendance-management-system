@@ -1,36 +1,37 @@
 import { useState, useEffect, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { BleClient } from '@capacitor-community/bluetooth-le';
 import {
   getCourses, getActiveSessions, startSession, endSession,
-  getCurrentBlePayload, getAttendance, exportAttendanceUrl, getSessions,
+  getLecturerBroadcastToken, enableSessionBluetooth, disableSessionBluetooth,
+  getAttendance, exportAttendanceUrl, getSessions,
+  patchAdminSessionAttendancePaused,
 } from '../api';
 
+// Manufacturer company ID — must match LectureEntry.jsx
 const BLE_COMPANY_ID = 0xFFFF;
-const POLL_INTERVAL_MS = 10_000;
-
-function isBleAdvertisingSupported() {
-  return (
-    typeof navigator !== 'undefined' &&
-    'bluetooth' in navigator &&
-    typeof navigator.bluetooth.advertise === 'function'
-  );
-}
+// BLE poll interval — re-fetch token before it rotates (bluetoothCode rotates every 15s)
+const POLL_INTERVAL_MS = 8_000;
+const IS_NATIVE = Capacitor.isNativePlatform();
 
 export default function LecturerDashboard() {
   const [tab, setTab]               = useState('sessions');
   const [courses, setCourses]       = useState([]);
   const [activeSession, setActive]  = useState(null);
-  const [bleState, setBleState]     = useState(null);
+  const [bleState, setBleState]     = useState(null); // { deviceName, token, rotatesIn }
   const [countdown, setCountdown]   = useState(null);
-  const [adHandle, setAdHandle]     = useState(null);
-  const [adError, setAdError]       = useState('');
   const [broadcasting, setBroadcasting] = useState(false);
+  const [adError, setAdError]       = useState('');
+  const [bleEnabled, setBleEnabled] = useState(false);
   const [sessionHistory, setHistory]    = useState([]);
   const [attendance, setAttendance]     = useState([]);
   const [selectedSession, setSelected] = useState(null);
   const [loading, setLoading]           = useState(true);
+  const [error, setError]               = useState('');
 
   const pollRef  = useRef(null);
   const timerRef = useRef(null);
+  const isAdvertising = useRef(false);
 
   useEffect(() => {
     Promise.all([fetchCourses(), fetchActive()]).finally(() => setLoading(false));
@@ -39,47 +40,65 @@ export default function LecturerDashboard() {
 
   useEffect(() => {
     if (activeSession) {
-      pollPayload(activeSession.id);
-      pollRef.current = setInterval(() => pollPayload(activeSession.id), POLL_INTERVAL_MS);
+      pollToken(activeSession._id || activeSession.id);
+      pollRef.current = setInterval(() => pollToken(activeSession._id || activeSession.id), POLL_INTERVAL_MS);
     }
     return () => { clearInterval(pollRef.current); clearInterval(timerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSession?.id]);
+  }, [activeSession?._id || activeSession?.id]);
 
+  // Countdown timer based on rotatesIn from server
   useEffect(() => {
     clearInterval(timerRef.current);
-    if (bleState) {
+    if (bleState?.rotatesIn) {
       setCountdown(bleState.rotatesIn);
       timerRef.current = setInterval(() => setCountdown(c => (c > 0 ? c - 1 : 0)), 1000);
     }
     return () => clearInterval(timerRef.current);
-  }, [bleState?.rotatedAt]);
+  }, [bleState?.token]); // reset countdown when token changes
+
+  // Update BLE advertisement when token rotates (while broadcasting)
+  useEffect(() => {
+    if (broadcasting && bleState?.token && bleState?.deviceName) {
+      updateAdvertisement(bleState.deviceName, bleState.token);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bleState?.token]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    clearInterval(pollRef.current);
+    clearInterval(timerRef.current);
+    if (isAdvertising.current) stopBroadcast();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function fetchCourses() {
-    const { courses } = await getCourses();
-    setCourses(courses || []);
+    const { courses: c } = await getCourses();
+    setCourses(c || []);
   }
 
   async function fetchActive() {
-    const { sessions } = await getActiveSessions();
-    setActive((sessions || [])[0] || null);
+    const data = await getActiveSessions();
+    if (!data.error) setActive((data.sessions || [])[0] || null);
   }
 
   async function fetchHistory() {
-    const { sessions } = await getSessions();
-    setHistory(sessions || []);
+    const data = await getSessions();
+    if (!data.error) setHistory(data.sessions || []);
   }
 
-  async function pollPayload(sessionId) {
-    try {
-      const data = await getCurrentBlePayload(sessionId);
-      setBleState(data);
-      if (broadcasting) await updateBroadcast(data.payload);
-    } catch (_) {}
+  async function pollToken(sessionId) {
+    if (!sessionId) return;
+    const data = await getLecturerBroadcastToken(sessionId);
+    if (data.error) return; // session may not have BLE enabled yet
+    setBleState(data);
   }
 
   async function handleStart(courseId) {
-    await startSession(courseId);
+    setError('');
+    const res = await startSession(courseId);
+    if (res.error) { setError(res.error); return; }
     await fetchActive();
     await fetchHistory();
     setTab('sessions');
@@ -89,220 +108,241 @@ export default function LecturerDashboard() {
   async function handleEnd() {
     if (!activeSession) return;
     await stopBroadcast();
-    await endSession(activeSession.id);
+    const sid = activeSession._id || activeSession.id;
+    await disableSessionBluetooth(sid);
+    await endSession(sid);
     setActive(null);
     setBleState(null);
+    setBleEnabled(false);
     setCountdown(null);
     await fetchHistory();
   }
 
+  async function handleEnableBluetooth() {
+    const sid = activeSession?._id || activeSession?.id;
+    if (!sid) return;
+    setAdError('');
+    const res = await enableSessionBluetooth(sid);
+    if (res.error) { setAdError(res.error); return; }
+    setBleEnabled(true);
+    // Fetch token immediately
+    const data = await getLecturerBroadcastToken(sid);
+    if (!data.error) setBleState(data);
+    // Start polling
+    clearInterval(pollRef.current);
+    pollRef.current = setInterval(() => pollToken(sid), POLL_INTERVAL_MS);
+  }
+
   async function startBroadcast() {
-    if (!isBleAdvertisingSupported()) {
-      setAdError(
-        'navigator.bluetooth.advertise() is not available. ' +
-        'Enable "Experimental Web Platform features" in chrome://flags on Android Chrome, ' +
-        'or use the token below with a dedicated BLE beacon device.'
-      );
+    if (!bleState?.token || !bleState?.deviceName) {
+      setAdError('Enable Bluetooth first to get the broadcast token.');
       return;
     }
-    if (!bleState?.payload) return;
-    try {
-      const handle = await navigator.bluetooth.advertise({
-        type: 'manufacturer',
-        manufacturerData: [{ companyIdentifier: BLE_COMPANY_ID, data: new TextEncoder().encode(bleState.payload) }],
-      });
-      setAdHandle(handle);
-      setBroadcasting(true);
-      setAdError('');
-    } catch (err) {
-      setAdError(`Broadcast failed: ${err.message}`);
+    setAdError('');
+
+    if (IS_NATIVE) {
+      // ── Capacitor native path (Android) ──────────────────────────────────
+      try {
+        await BleClient.initialize();
+        const tokenBytes = new TextEncoder().encode(bleState.token);
+        await BleClient.startAdvertising({
+          name: bleState.deviceName,
+          manufacturerData: { [BLE_COMPANY_ID]: tokenBytes },
+        });
+        isAdvertising.current = true;
+        setBroadcasting(true);
+      } catch (err) {
+        setAdError('BLE advertising failed: ' + err.message);
+      }
+    } else {
+      // ── Web Bluetooth fallback (desktop/browser) ──────────────────────────
+      if (!navigator.bluetooth?.advertise) {
+        setAdError(
+          'BLE advertising requires the native Android app. ' +
+          'In browser, enable "Experimental Web Platform features" at chrome://flags on Android Chrome.'
+        );
+        return;
+      }
+      try {
+        const tokenBytes = new TextEncoder().encode(bleState.token);
+        const handle = await navigator.bluetooth.advertise({
+          type: 'manufacturer',
+          manufacturerData: [{ companyIdentifier: BLE_COMPANY_ID, data: tokenBytes }],
+        });
+        isAdvertising.current = handle;
+        setBroadcasting(true);
+      } catch (err) {
+        setAdError('Broadcast failed: ' + err.message);
+      }
     }
   }
 
   async function stopBroadcast() {
-    if (adHandle) {
-      try { await adHandle.stop(); } catch (_) {}
-      setAdHandle(null);
+    if (IS_NATIVE) {
+      try { await BleClient.stopAdvertising(); } catch (_) {}
+    } else {
+      if (isAdvertising.current && typeof isAdvertising.current.stop === 'function') {
+        try { await isAdvertising.current.stop(); } catch (_) {}
+      }
     }
+    isAdvertising.current = false;
     setBroadcasting(false);
   }
 
-  async function updateBroadcast(newPayload) {
-    if (!adHandle) return;
+  async function updateAdvertisement(deviceName, token) {
+    if (!isAdvertising.current) return;
     try {
-      await adHandle.updateData({
-        manufacturerData: [{ companyIdentifier: BLE_COMPANY_ID, data: new TextEncoder().encode(newPayload) }],
-      });
+      const tokenBytes = new TextEncoder().encode(token);
+      if (IS_NATIVE) {
+        // Restart advertising with new token
+        await BleClient.stopAdvertising();
+        await BleClient.startAdvertising({
+          name: deviceName,
+          manufacturerData: { [BLE_COMPANY_ID]: tokenBytes },
+        });
+      } else if (typeof isAdvertising.current === 'object' && isAdvertising.current.updateData) {
+        await isAdvertising.current.updateData({
+          manufacturerData: [{ companyIdentifier: BLE_COMPANY_ID, data: tokenBytes }],
+        });
+      }
     } catch (err) {
-      setAdHandle(null);
+      isAdvertising.current = false;
       setBroadcasting(false);
-      setAdError(`Broadcast interrupted: ${err.message}. Please restart.`);
+      setAdError('Broadcast interrupted — token rotated. Please restart: ' + err.message);
     }
   }
 
   async function viewAttendance(session) {
     setSelected(session);
-    const { records } = await getAttendance(session.id);
+    const { records } = await getAttendance(session._id || session.id);
     setAttendance(records || []);
     setTab('attendance');
   }
 
   if (loading) return <div className="page"><p className="text-muted">Loading…</p></div>;
 
+  const sid = activeSession?._id || activeSession?.id;
+
   return (
     <div className="page">
-      <div className="tabs">
-        {['sessions', 'history', 'attendance'].map(t => (
-          <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
-            {t.charAt(0).toUpperCase() + t.slice(1)}
-          </button>
-        ))}
-      </div>
+      <h1 className="page-title">Lecturer Dashboard</h1>
+      {error && <p className="error-banner">{error}</p>}
 
+      <nav className="tab-nav">
+        <button className={"tab-btn" + (tab === 'sessions' ? ' active' : '')} onClick={() => setTab('sessions')}>Sessions</button>
+        <button className={"tab-btn" + (tab === 'history' ? ' active' : '')} onClick={() => setTab('history')}>History</button>
+        {selectedSession && (
+          <button className={"tab-btn" + (tab === 'attendance' ? ' active' : '')} onClick={() => setTab('attendance')}>Attendance</button>
+        )}
+      </nav>
+
+      {/* ── Active session panel ─────────────────────────────────────────── */}
       {tab === 'sessions' && (
-        activeSession ? (
-          <ActiveSessionPanel
-            session={activeSession}
-            bleState={bleState}
-            countdown={countdown}
-            broadcasting={broadcasting}
-            adError={adError}
-            onStartBroadcast={startBroadcast}
-            onStopBroadcast={stopBroadcast}
-            onEnd={handleEnd}
-          />
-        ) : (
-          <div className="card">
-            <h2>No active session</h2>
-            <p className="text-muted" style={{ marginBottom: 16 }}>
-              Select a course to start a session and begin broadcasting your beacon.
-            </p>
-            {courses.length === 0 && <p className="text-muted">No assigned courses. Contact an admin.</p>}
-            {courses.map(c => (
-              <div key={c.id} className="row" style={{ marginBottom: 8 }}>
-                <div><strong>{c.code}</strong> — {c.name}</div>
-                <div className="spacer" />
-                <button className="btn btn-primary" onClick={() => handleStart(c.id)}>Start Session</button>
+        <div className="panel">
+          <h2>Active Session</h2>
+          {activeSession ? (
+            <div className="session-card active-session">
+              <p className="session-label">
+                {activeSession.courseCode || activeSession.course?.code} — {activeSession.lectureDay} {activeSession.startTime}–{activeSession.endTime}
+              </p>
+
+              {/* BLE Enable */}
+              {!bleEnabled && (
+                <button className="primary-btn" onClick={handleEnableBluetooth}>
+                  📡 Enable Bluetooth Attendance
+                </button>
+              )}
+
+              {/* BLE token + broadcast controls */}
+              {bleState && (
+                <div className="ble-panel">
+                  <p className="ble-label">Device name: <strong>{bleState.deviceName}</strong></p>
+                  <p className="ble-token">Token: <code>{bleState.token}</code></p>
+                  <div className="ble-countdown">
+                    <div className="countdown-bar" style={{ width: countdown ? (countdown / 15) * 100 + '%' : '100%' }} />
+                    <span>{countdown ?? bleState.rotatesIn}s until next token</span>
+                  </div>
+
+                  {adError && <p className="error-text">{adError}</p>}
+
+                  {broadcasting ? (
+                    <button className="danger-btn" onClick={stopBroadcast}>⏹ Stop Broadcasting</button>
+                  ) : (
+                    <button className="primary-btn" onClick={startBroadcast}>📡 Start Broadcasting</button>
+                  )}
+                  {broadcasting && <p className="broadcasting-badge">● Broadcasting</p>}
+                </div>
+              )}
+
+              <div className="session-actions">
+                <button className="secondary-btn" onClick={() => viewAttendance(activeSession)}>View Attendance</button>
+                {exportAttendanceUrl && (
+                  <a className="secondary-btn" href={exportAttendanceUrl(sid)} download>⬇ Export Excel</a>
+                )}
+                <button className="danger-btn" onClick={handleEnd}>End Session</button>
               </div>
-            ))}
-          </div>
-        )
+            </div>
+          ) : (
+            <div>
+              <p className="text-muted">No active session. Start one from a course below.</p>
+              <h3>Your Courses</h3>
+              <ul className="course-list">
+                {courses.map(c => (
+                  <li key={c._id}>
+                    <span>{c.code} — {c.name}</span>
+                    <button className="primary-btn small" onClick={() => handleStart(c._id)}>Start Session</button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       )}
 
+      {/* ── Session history ──────────────────────────────────────────────── */}
       {tab === 'history' && (
-        <div className="card">
+        <div className="panel">
           <h2>Session History</h2>
-          {sessionHistory.length === 0 && <p className="text-muted">No sessions yet.</p>}
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr><th>Course</th><th>Started</th><th>Ended</th><th>Status</th><th></th></tr>
-              </thead>
+          {sessionHistory.length === 0 ? (
+            <p className="text-muted">No sessions yet.</p>
+          ) : (
+            <ul className="session-list">
+              {sessionHistory.map(s => (
+                <li key={s._id || s.id} className="session-item">
+                  <span>{s.courseCode || s.course?.code} — {s.lectureDay} {s.startTime}–{s.endTime}</span>
+                  <button className="secondary-btn small" onClick={() => viewAttendance(s)}>View Attendance</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* ── Attendance view ──────────────────────────────────────────────── */}
+      {tab === 'attendance' && selectedSession && (
+        <div className="panel">
+          <h2>Attendance — {selectedSession.courseCode || selectedSession.course?.code}</h2>
+          {exportAttendanceUrl && (
+            <a className="secondary-btn" href={exportAttendanceUrl(selectedSession._id || selectedSession.id)} download>⬇ Export Excel</a>
+          )}
+          {attendance.length === 0 ? (
+            <p className="text-muted">No attendance records yet.</p>
+          ) : (
+            <table className="attendance-table">
+              <thead><tr><th>Student ID</th><th>Email</th><th>Time</th></tr></thead>
               <tbody>
-                {sessionHistory.map(s => (
-                  <tr key={s.id}>
-                    <td>{s.course_code} — {s.course_name}</td>
-                    <td>{new Date(s.started_at).toLocaleString()}</td>
-                    <td>{s.ended_at ? new Date(s.ended_at).toLocaleString() : '—'}</td>
-                    <td><span className={`badge ${s.status === 'active' ? 'badge-green' : 'badge-gray'}`}>{s.status}</span></td>
-                    <td>
-                      <button className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '.8rem' }}
-                        onClick={() => viewAttendance(s)}>Attendance</button>
-                    </td>
+                {attendance.map(r => (
+                  <tr key={r._id}>
+                    <td>{r.student?.studentId || '—'}</td>
+                    <td>{r.student?.email || '—'}</td>
+                    <td>{r.timestamp ? new Date(r.timestamp).toLocaleTimeString() : '—'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {tab === 'attendance' && (
-        <div className="card">
-          {selectedSession ? (
-            <>
-              <div className="row" style={{ marginBottom: 12 }}>
-                <h2 style={{ margin: 0 }}>Attendance — {selectedSession.course_code}</h2>
-                <div className="spacer" />
-                <a href={exportAttendanceUrl(selectedSession.id)} download
-                  className="btn btn-success" style={{ textDecoration: 'none' }}>
-                  Export Excel
-                </a>
-              </div>
-              <p className="text-muted mb-8">
-                Session {selectedSession.id} · {new Date(selectedSession.started_at).toLocaleString()}
-              </p>
-              {attendance.length === 0 && <p className="text-muted">No records yet.</p>}
-              <div className="table-wrap">
-                <table>
-                  <thead><tr><th>#</th><th>Student</th><th>Email</th><th>Recorded At</th></tr></thead>
-                  <tbody>
-                    {attendance.map((r, i) => (
-                      <tr key={r.id}>
-                        <td>{i + 1}</td><td>{r.student_name}</td>
-                        <td>{r.student_email}</td>
-                        <td>{new Date(r.recorded_at).toLocaleString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          ) : (
-            <p className="text-muted">Select a session from History to view attendance.</p>
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function ActiveSessionPanel({ session, bleState, countdown, broadcasting, adError, onStartBroadcast, onStopBroadcast, onEnd }) {
-  const pct = countdown != null ? Math.round((countdown / 10) * 100) : 100;
-
-  return (
-    <div className="card">
-      <div className="row" style={{ marginBottom: 16 }}>
-        <div>
-          <h2 style={{ margin: 0 }}>{session.course_name}</h2>
-          <span className="text-muted">{session.course_code} · Session #{session.id}</span>
-        </div>
-        <div className="spacer" />
-        <span className="badge badge-green">Live</span>
-        <button className="btn btn-danger" onClick={onEnd}>End Session</button>
-      </div>
-
-      <div style={{ background: '#f8f9ff', borderRadius: 10, padding: '16px 20px', marginBottom: 16 }}>
-        <p style={{ fontWeight: 600, fontSize: '.85rem', color: '#6b7280', marginBottom: 4 }}>Current Beacon Token</p>
-        <div className="ble-token">{bleState?.payload ?? '——'}</div>
-        {countdown != null && (
-          <>
-            <div className="progress-bar-wrap">
-              <div className="progress-bar" style={{ width: `${pct}%` }} />
-            </div>
-            <div className="ble-countdown">Rotates in {countdown}s</div>
-          </>
-        )}
-      </div>
-
-      <div className="row">
-        {!broadcasting
-          ? <button className="btn btn-primary" onClick={onStartBroadcast}>📡 Start Broadcasting</button>
-          : <button className="btn btn-danger" onClick={onStopBroadcast}>⏹ Stop Broadcasting</button>
-        }
-        {broadcasting && (
-          <span className="badge badge-green" style={{ padding: '8px 14px', fontSize: '.85rem' }}>Broadcasting</span>
-        )}
-      </div>
-
-      {adError && (
-        <div className="status-banner status-error" style={{ marginTop: 12 }}>⚠ {adError}</div>
-      )}
-
-      <p className="text-muted" style={{ marginTop: 12, fontSize: '.8rem', lineHeight: 1.5 }}>
-        Token rotates every 10 seconds. Students scan passively — no pairing required.
-        Broadcasting requires Chrome on Android with Experimental Web Platform features enabled.
-      </p>
     </div>
   );
 }

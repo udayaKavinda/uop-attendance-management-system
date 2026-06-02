@@ -273,6 +273,15 @@ export default function AdminDashboard() {
     }
   };
 
+  const loadRunningCodes = async () => {
+    const data = await getAdminCurrentSessionCodes();
+    if (!data.error) {
+      setRunningSessionCodes(
+        Object.fromEntries((data.items || []).map(item => [String(item.sessionId), item]))
+      );
+    }
+  };
+
   useEffect(() => {
     if (!isAdmin) return;
     const pool = newCourseLecturerId
@@ -518,11 +527,11 @@ export default function AdminDashboard() {
   const onStartRotation = async (sessionId) => {
     setWorking(true);
     setError('');
-    const resp = { success: true };
+    const resp = await startAdminSessionRotation(sessionId);
     if (resp.error) setError(resp.error);
     else {
-      setMessage('Code rotation started.');
-      await loadSessions();
+      setMessage('Code rotation started');
+      await loadRunningCodes();
     }
     setWorking(false);
   };
@@ -530,11 +539,11 @@ export default function AdminDashboard() {
   const onStopRotation = async (sessionId) => {
     setWorking(true);
     setError('');
-    const resp = { success: true };
+    const resp = await stopAdminSessionRotation(sessionId);
     if (resp.error) setError(resp.error);
     else {
-      setMessage('Code rotation paused.');
-      await loadSessions();
+      setMessage('Code rotation stopped');
+      await loadRunningCodes();
     }
     setWorking(false);
   };

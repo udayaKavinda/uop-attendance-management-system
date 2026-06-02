@@ -1012,10 +1012,12 @@ app.get('/api/admin/sessions/:sessionId/bluetooth-broadcast', async (req, res) =
     if (!sessionItem.bluetoothEnabled) return res.status(400).json({ error: 'Bluetooth not enabled for this session' });
     const { token, rotatesIn } = bluetoothCode.getToken(String(sessionItem._id));
     return res.json({
+      sessionId: sessionItem._id,
       deviceName: sessionItem.bluetoothDeviceName,
       token,
       rotatesIn,
       rotationMs: bluetoothCode.ROTATION_MS,
+      attendancePaused: Boolean(sessionItem.attendancePaused),
     });
   } catch (err) {
     return respondError(res, err);

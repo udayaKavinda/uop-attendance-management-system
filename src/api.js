@@ -261,3 +261,18 @@ export async function patchAdminStudentDomainRestriction(restrictStudentGoogleDo
     body: JSON.stringify({ restrictStudentGoogleDomain }),
   });
 }
+
+/** Lecturer: get device name + current rotating token for BLE broadcast. */
+export async function getLecturerBroadcastToken(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/bluetooth-broadcast`);
+}
+
+/** Lecturer: enable BLE for a session (generates device name if not set). */
+export async function enableSessionBluetooth(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/bluetooth/start`, { method: 'PATCH' });
+}
+
+/** Lecturer: disable BLE for a session. */
+export async function disableSessionBluetooth(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/bluetooth/stop`, { method: 'PATCH' });
+}

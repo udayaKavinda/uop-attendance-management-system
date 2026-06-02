@@ -242,9 +242,10 @@ export default function LectureEntry() {
         clearTimeout(timeout);
         await stopScan();
 
-        const token = Array.from(new Uint8Array(mfData.buffer))
-          .map((b) => b.toString(16).padStart(2, '0'))
-          .join('');
+        // Decode manufacturer bytes as UTF-8 string (matches how lecturer encodes the token)
+        const token = new TextDecoder().decode(
+          mfData.buffer ? new Uint8Array(mfData.buffer) : mfData,
+        ).replace(/\0/g, '').trim();
 
         setBtPhase('submitting');
         const resp = await submitBluetoothAttendance({ courseId, token });
