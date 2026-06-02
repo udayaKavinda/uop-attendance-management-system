@@ -125,18 +125,6 @@ export async function getAdminCourses() {
   return { ...data, items: Array.isArray(raw) ? raw : [] };
 }
 
-export async function getAdminSettings() {
-  return safeFetchJson(`${apiBase()}/api/admin/settings`);
-}
-
-export async function patchAdminGeofenceBufferCap(geofenceBufferCapM) {
-  return safeFetchJson(`${apiBase()}/api/admin/settings/geofence-buffer`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ geofenceBufferCapM }),
-  });
-}
-
 export async function createAdminCourse(payload) {
   return safeFetchJson(`${apiBase()}/api/admin/courses`, {
     method: 'POST',

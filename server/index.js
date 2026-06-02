@@ -88,12 +88,6 @@ async function ensureBootstrapAdmin() {
   }
 }
 
-/**
- * Geofence edge buffer cap (metres). Runtime configurable in-memory via admin settings.
- * Default is 5m and resets on server restart.
- */
-let geofenceAccuracyBufferCapM = 5;
-
 /** First segment of email before @; otherwise fallback (e.g. stored studentId). */
 function studentDisplayIdFromEmail(email, fallbackStudentId) {
   if (!email || typeof email !== 'string') return String(fallbackStudentId || '').trim();
@@ -165,64 +159,6 @@ function isPointInsideAnyPolygon(lat, lng, polygons = []) {
   return polygons.some((polygon) => isPointInsidePolygon(lat, lng, polygon));
 }
 
-function latLngToXYMeters(lat, lng, originLat, originLng) {
-  const R = 6371000;
-  const x = (lng - originLng) * (Math.PI / 180) * R * Math.cos((originLat * Math.PI) / 180);
-  const y = (lat - originLat) * (Math.PI / 180) * R;
-  return { x, y };
-}
-
-function pointToSegmentDistanceMeters(pointLat, pointLng, a, b) {
-  const originLat = pointLat;
-  const originLng = pointLng;
-  const p = latLngToXYMeters(pointLat, pointLng, originLat, originLng);
-  const p1 = latLngToXYMeters(a.lat, a.lng, originLat, originLng);
-  const p2 = latLngToXYMeters(b.lat, b.lng, originLat, originLng);
-  const dx = p2.x - p1.x;
-  const dy = p2.y - p1.y;
-  const len2 = dx * dx + dy * dy;
-  if (len2 === 0) {
-    const ddx = p.x - p1.x;
-    const ddy = p.y - p1.y;
-    return Math.sqrt(ddx * ddx + ddy * ddy);
-  }
-  let t = ((p.x - p1.x) * dx + (p.y - p1.y) * dy) / len2;
-  t = Math.max(0, Math.min(1, t));
-  const projX = p1.x + t * dx;
-  const projY = p1.y + t * dy;
-  const ddx = p.x - projX;
-  const ddy = p.y - projY;
-  return Math.sqrt(ddx * ddx + ddy * ddy);
-}
-
-function minDistanceToAnyPolygonEdgeMeters(lat, lng, polygons = []) {
-  let min = Number.POSITIVE_INFINITY;
-  for (const polygon of polygons || []) {
-    if (!Array.isArray(polygon) || polygon.length < 2) continue;
-    for (let i = 0; i < polygon.length; i += 1) {
-      const a = polygon[i];
-      const b = polygon[(i + 1) % polygon.length];
-      const d = pointToSegmentDistanceMeters(lat, lng, a, b);
-      if (d < min) min = d;
-    }
-  }
-  return min;
-}
-
-function isWithinGeofenceWithAccuracy(lat, lng, accuracy, polygons = []) {
-  const inside = isPointInsideAnyPolygon(lat, lng, polygons);
-  const accuracyMeters = Number(accuracy);
-  const cap = geofenceAccuracyBufferCapM;
-  const edgeBufferMeters = (
-    Number.isFinite(accuracyMeters) && accuracyMeters > 0 && accuracyMeters <= cap
-  )
-    ? accuracyMeters
-    : cap;
-
-  if (inside) return true;
-  const edgeDistance = minDistanceToAnyPolygonEdgeMeters(lat, lng, polygons);
-  return edgeDistance <= edgeBufferMeters;
-}
 
 function sessionCodeKey(sessionId) {
   return `session:${sessionId}`;
@@ -381,13 +317,6 @@ function normalizeLecturerIds(rawLecturerIds) {
   return uniq;
 }
 
-function normalizeGeofenceBufferCap(rawValue) {
-  const n = Number(rawValue);
-  if (!Number.isFinite(n)) return null;
-  const rounded = Math.round(n);
-  if (rounded < 0 || rounded > 30) return null;
-  return rounded;
-}
 
 function normalizePolygonsInput(polygons) {
   if (!Array.isArray(polygons)) return [];
@@ -777,33 +706,6 @@ app.get('/api/admin/courses', async (req, res) => {
   }
 });
 
-app.get('/api/admin/settings', async (req, res) => {
-  try {
-    const auth = await sessionAdminAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    return res.json({
-      geofenceBufferCapM: geofenceAccuracyBufferCapM,
-    });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
-
-app.patch('/api/admin/settings/geofence-buffer', async (req, res) => {
-  try {
-    const auth = await sessionAdminAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const nextCap = normalizeGeofenceBufferCap(req.body?.geofenceBufferCapM);
-    if (nextCap === null) {
-      return res.status(400).json({ error: 'geofenceBufferCapM must be an integer between 0 and 30' });
-    }
-    geofenceAccuracyBufferCapM = nextCap;
-    return res.json({ success: true, geofenceBufferCapM: geofenceAccuracyBufferCapM });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
-
 app.post('/api/admin/courses', async (req, res) => {
   try {
     const auth = await sessionStaffAuth(req);
@@ -1142,6 +1044,7 @@ app.patch('/api/admin/sessions/:sessionId/bluetooth/start', async (req, res) => 
     }
     sessionItem.bluetoothEnabled = true;
     await sessionItem.save();
+    bluetoothCode.getToken(String(sessionItem._id)); // seed so auto-rotation starts immediately
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
     return respondError(res, err);
@@ -1363,7 +1266,7 @@ app.post('/api/record-attendance', studentRecordLimiter, async (req, res) => {
     }
     const schedule = checkScheduleWindow(resolved.session);
     if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    if (!isWithinGeofenceWithAccuracy(Number(lat), Number(lng), Number(accuracy), resolved.session.polygons || [])) {
+    if (!isPointInsideAnyPolygon(Number(lat), Number(lng), resolved.session.polygons || [])) {
       return res.status(400).json({ error: 'You are outside the allowed attendance area' });
     }
 

@@ -1,8 +1,18 @@
 const crypto = require('crypto');
 
-const ROTATION_MS = 30000;
+const ROTATION_MS = 15000;
 
 const store = new Map(); // sessionId -> { token, generatedAt }
+
+// Automatically rotate every active token once its window expires.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of store.entries()) {
+    if (now - entry.generatedAt >= ROTATION_MS) {
+      store.set(key, { token: crypto.randomBytes(8).toString('hex'), generatedAt: now });
+    }
+  }
+}, 1000);
 
 function generateDeviceName() {
   return 'UOP-' + crypto.randomBytes(4).toString('hex').toUpperCase();
@@ -28,7 +38,6 @@ function verifyToken(sessionId, token) {
   const key = String(sessionId || '').trim();
   const existing = store.get(key);
   if (!existing) return false;
-  if (Date.now() - existing.generatedAt >= ROTATION_MS) return false;
   return existing.token === String(token || '').trim().toLowerCase();
 }
 

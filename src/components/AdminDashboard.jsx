@@ -19,8 +19,6 @@ import {
   stopAdminSessionRotation,
   patchAdminSessionAttendancePaused,
   patchCourseAssignLecturer,
-  getAdminSettings,
-  patchAdminGeofenceBufferCap,
   getAdminLecturers,
   createAdminLecturer,
   deleteAdminLecturer,
@@ -125,9 +123,6 @@ export default function AdminDashboard() {
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [presetPickerLoading, setPresetPickerLoading] = useState(false);
   const [presetPickerError, setPresetPickerError] = useState('');
-  const [geofenceBufferCapM, setGeofenceBufferCapM] = useState(5);
-  const [geofenceBufferDraftM, setGeofenceBufferDraftM] = useState(5);
-  const [settingsLoading, setSettingsLoading] = useState(false);
   const presetDropdownRef = useRef(null);
 
   const student = useMemo(() => readStoredStudent(), []);
@@ -218,21 +213,6 @@ export default function AdminDashboard() {
     if (!isAdmin) return;
     if (activeTab === 'lecturers') loadLecturers();
     if (activeTab === 'presets') loadPolygonPresets();
-    if (activeTab === 'settings') {
-      (async () => {
-        setSettingsLoading(true);
-        const resp = await getAdminSettings();
-        if (resp.error) {
-          setError(resp.error);
-        } else {
-          const value = Number(resp.geofenceBufferCapM);
-          const safe = Number.isFinite(value) ? Math.max(0, Math.min(30, Math.round(value))) : 5;
-          setGeofenceBufferCapM(safe);
-          setGeofenceBufferDraftM(safe);
-        }
-        setSettingsLoading(false);
-      })();
-    }
   }, [activeTab, isAdmin, loadLecturers, loadPolygonPresets]);
 
   const sortedFilteredSessions = useMemo(() => {
@@ -761,21 +741,6 @@ export default function AdminDashboard() {
     setWorking(false);
   };
 
-  const onSaveGeofenceBuffer = async () => {
-    setWorking(true);
-    setError('');
-    const resp = await patchAdminGeofenceBufferCap(geofenceBufferDraftM);
-    if (resp.error) {
-      setError(resp.error);
-    } else {
-      const value = Number(resp.geofenceBufferCapM);
-      const safe = Number.isFinite(value) ? Math.max(0, Math.min(30, Math.round(value))) : geofenceBufferDraftM;
-      setGeofenceBufferCapM(safe);
-      setGeofenceBufferDraftM(safe);
-      setMessage('Geofence buffer updated.');
-    }
-    setWorking(false);
-  };
 
   const presetDrawAddPoint = (point) => {
     setPresetDrawPolygons((prev) => prev.map((poly, idx) => (idx === presetDrawActiveIdx ? [...poly, point] : poly)));
@@ -890,7 +855,6 @@ export default function AdminDashboard() {
                 <>
                   <button type="button" className={`tab-btn ${activeTab === 'lecturers' ? 'active' : ''}`} onClick={() => setActiveTab('lecturers')}>Lecturers</button>
                   <button type="button" className={`tab-btn ${activeTab === 'presets' ? 'active' : ''}`} onClick={() => setActiveTab('presets')}>Presets</button>
-                  <button type="button" className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>Settings</button>
                 </>
               ) : null}
             </div>
@@ -1463,52 +1427,6 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {activeTab === 'settings' && isAdmin && (
-            <div className="tab-panel">
-              <header className="section-head">
-                <p className="section-kicker">System</p>
-                <h2 className="section-title">Settings</h2>
-                <p className="section-desc">
-                  Configure runtime geofence edge buffer (meters). This value is kept in server memory and resets to 5m on restart.
-                </p>
-              </header>
-
-              <div className="form-section">
-                <p className="form-section__label">Geofence edge buffer cap</p>
-                {settingsLoading ? (
-                  <p className="section-desc" style={{ marginTop: 0 }}>Loading current value…</p>
-                ) : (
-                  <>
-                    <label className="field-label" htmlFor="geofenceBufferSlider">
-                      Buffer cap: <strong>{geofenceBufferDraftM} m</strong> (current: {geofenceBufferCapM} m)
-                    </label>
-                    <input
-                      id="geofenceBufferSlider"
-                      className="input"
-                      type="range"
-                      min={0}
-                      max={30}
-                      step={1}
-                      value={geofenceBufferDraftM}
-                      onChange={(e) => setGeofenceBufferDraftM(parseInt(e.target.value, 10))}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.35rem', color: '#64748b', fontSize: '0.82rem' }}>
-                      <span>0m</span>
-                      <span>30m</span>
-                    </div>
-                    <button
-                      className="primary-btn"
-                      type="button"
-                      onClick={onSaveGeofenceBuffer}
-                      disabled={working || geofenceBufferDraftM === geofenceBufferCapM}
-                    >
-                      Save buffer value
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </>
