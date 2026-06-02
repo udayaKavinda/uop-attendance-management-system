@@ -224,7 +224,7 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: transparent;
+  background: var(--app-bg);
 }
 
 .admin-chrome {
