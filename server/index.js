@@ -161,7 +161,17 @@ function isSessionRunningNow(sessionItem, now = new Date()) {
   return currentMinutes >= start && currentMinutes <= end;
 }
 
+// 5 s cache cuts repeated Course + LectureSession reads under 100-student polling load.
+const _sessionResolveCache = new Map();
+const SESSION_RESOLVE_CACHE_TTL_MS = 5000;
+
 async function resolveActiveSessionForCourse(courseId) {
+  const cacheKey = String(courseId);
+  const cached = _sessionResolveCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < SESSION_RESOLVE_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
   const course = await Course.findById(courseId);
   if (!course || !course.active) return { error: 'Invalid course' };
   const now = new Date();
@@ -179,7 +189,9 @@ async function resolveActiveSessionForCourse(courseId) {
     return start !== null && end !== null && currentMinutes >= start && currentMinutes <= end;
   });
   if (!active) return { error: 'No active lecture session for this course now' };
-  return { course, session: active };
+  const result = { course, session: active };
+  _sessionResolveCache.set(cacheKey, { value: result, ts: Date.now() });
+  return result;
 }
 
 /** Staff API authorization: derived from Passport session (Google OAuth), not client headers. */
@@ -288,13 +300,7 @@ const cspDirectives = {
   scriptSrcAttr: ["'none'"],
   styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
   fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
-  imgSrc: [
-    "'self'",
-    'data:',
-    'blob:',
-    'https://*.tile.openstreetmap.org',
-    'https://server.arcgisonline.com',
-  ],
+  imgSrc: ["'self'", 'data:', 'blob:'],
   connectSrc: ["'self'", ...cspExtraConnect],
   frameAncestors: ["'none'"],
   formAction: ["'self'", 'https://accounts.google.com'],
@@ -365,6 +371,22 @@ if (process.env.NODE_ENV === 'test') {
     next();
   });
 }
+
+// CSRF mitigation: require X-Requested-With on all mutating API routes.
+// All browser fetch calls in api.js send this header; form-based cross-site
+// POSTs cannot, preventing exploitation of SameSite=None session cookies.
+app.use((req, res, next) => {
+  const method = req.method.toUpperCase();
+  if (
+    ['POST', 'PATCH', 'DELETE', 'PUT'].includes(method) &&
+    req.path.startsWith('/api/')
+  ) {
+    if (!req.headers['x-requested-with']) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+  next();
+});
 
 function limiterKeyByUserOrIp(req) {
   const uid = req?.user?._id ? String(req.user._id) : '';
@@ -781,11 +803,7 @@ app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
       lectureDay: String(lectureDay).toUpperCase(),
       deleted: false,
     });
-    const overlap = sameDaySessions.find((item) => {
-      const itemStart = toMinutes(item.startTime);
-      const itemEnd = toMinutes(item.endTime);
-      return hasScheduleOverlap(s, e, itemStart, itemEnd);
-    });
+    const overlap = hasScheduleOverlap(sameDaySessions, String(lectureDay).toUpperCase(), startTime, endTime);
     if (overlap) {
       return res.status(400).json({ error: 'This session overlaps with an existing session for the same course' });
     }

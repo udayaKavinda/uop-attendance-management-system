@@ -8,7 +8,15 @@ function apiBase() {
 
 async function safeFetchJson(url, init = {}) {
   try {
-    const resp = await fetch(url, { credentials: 'include', ...init, headers: { ...(init.headers || {}) } });
+    const resp = await fetch(url, {
+      credentials: 'include',
+      ...init,
+      headers: {
+        // Triggers CORS preflight for cross-origin requests, preventing CSRF via SameSite=None cookies.
+        'X-Requested-With': 'fetch',
+        ...(init.headers || {}),
+      },
+    });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
       if (resp.status === 401) notifySessionInvalid();

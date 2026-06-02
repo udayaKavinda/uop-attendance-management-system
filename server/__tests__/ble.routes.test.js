@@ -12,6 +12,21 @@ jest.mock('connect-mongo', () => ({
   },
 }));
 
+// BleToken in-memory store — lets bluetoothCode work without a real MongoDB connection
+const _bleTokenStore = {};
+jest.mock('../models/BleToken', () => ({
+  findOne: jest.fn(({ sessionId }) => Promise.resolve(_bleTokenStore[sessionId] ?? null)),
+  findOneAndUpdate: jest.fn(({ sessionId }, update) => {
+    const doc = { ...(_bleTokenStore[sessionId] || {}), sessionId, ...update };
+    _bleTokenStore[sessionId] = doc;
+    return Promise.resolve(doc);
+  }),
+  deleteOne: jest.fn(({ sessionId }) => {
+    delete _bleTokenStore[sessionId];
+    return Promise.resolve({ deletedCount: 1 });
+  }),
+}));
+
 // Mock models before loading the app
 jest.mock('../models/Person', () => ({ findById: jest.fn(), findOne: jest.fn() }));
 jest.mock('../models/Course', () => ({ findById: jest.fn(), findOne: jest.fn() }));
@@ -89,15 +104,28 @@ function makePerson(overrides = {}) {
   };
 }
 
-function headers(person) {
+/** Auth header only — for GET requests */
+function authHeader(person) {
   return { 'x-test-user': JSON.stringify({ _id: String(person._id) }) };
 }
+
+/** Auth + CSRF header — required for POST/PATCH/DELETE */
+const csrfHeader = { 'x-requested-with': 'fetch' };
+
+function headers(person) {
+  return { ...authHeader(person), ...csrfHeader };
+}
+
+// Clear the in-memory BleToken store before each test for isolation
+beforeEach(() => {
+  Object.keys(_bleTokenStore).forEach(k => delete _bleTokenStore[k]);
+});
 
 // ─── bluetooth/start and bluetooth/stop ──────────────────────────────────────
 
 describe('PATCH /api/admin/sessions/:id/bluetooth/start', () => {
   test('401 when not authenticated', async () => {
-    const res = await request(app).patch(`/api/admin/sessions/${makeId()}/bluetooth/start`);
+    const res = await request(app).patch(`/api/admin/sessions/${makeId()}/bluetooth/start`).set(csrfHeader);
     expect(res.status).toBe(401);
   });
 
@@ -162,10 +190,10 @@ describe('PATCH /api/admin/sessions/:id/bluetooth/start', () => {
     expect(session.bluetoothDeviceName).toMatch(/^UOP-[0-9A-F]{8}$/);
 
     // Token must be seeded in the in-memory store
-    const { token } = bluetoothCode.getToken(String(session._id));
+    const { token } = await bluetoothCode.getToken(String(session._id));
     expect(token).toMatch(/^[0-9a-f]{16}$/);
 
-    bluetoothCode.removeToken(String(session._id));
+    await bluetoothCode.removeToken(String(session._id));
   });
 
   test('200 — admin can enable BT for any session without course ownership', async () => {
@@ -184,13 +212,13 @@ describe('PATCH /api/admin/sessions/:id/bluetooth/start', () => {
     expect(res.status).toBe(200);
     expect(session.bluetoothEnabled).toBe(true);
 
-    bluetoothCode.removeToken(String(session._id));
+    await bluetoothCode.removeToken(String(session._id));
   });
 });
 
 describe('PATCH /api/admin/sessions/:id/bluetooth/stop', () => {
   test('401 when not authenticated', async () => {
-    const res = await request(app).patch(`/api/admin/sessions/${makeId()}/bluetooth/stop`);
+    const res = await request(app).patch(`/api/admin/sessions/${makeId()}/bluetooth/stop`).set(csrfHeader);
     expect(res.status).toBe(401);
   });
 
@@ -200,7 +228,7 @@ describe('PATCH /api/admin/sessions/:id/bluetooth/stop', () => {
     const session = makeSession({ course: course._id });
 
     // Pre-seed a token
-    bluetoothCode.getToken(String(session._id));
+    await bluetoothCode.getToken(String(session._id));
 
     Person.findById.mockResolvedValue(lecturer);
     LectureSession.findOne.mockResolvedValue(session);
@@ -213,7 +241,7 @@ describe('PATCH /api/admin/sessions/:id/bluetooth/stop', () => {
     expect(res.status).toBe(200);
     expect(session.bluetoothEnabled).toBe(false);
     // Token removed
-    expect(bluetoothCode.verifyToken(String(session._id), 'anytoken')).toBe(false);
+    expect(await bluetoothCode.verifyToken(String(session._id), 'anytoken')).toBe(false);
   });
 
   test('200 — admin can stop BT for any session', async () => {
@@ -264,7 +292,7 @@ describe('GET /api/admin/sessions/:id/bluetooth-broadcast', () => {
     const course = makeCourse({ lecturers: [String(lecturer._id)] });
     const session = makeSession({ course: course._id });
 
-    bluetoothCode.getToken(String(session._id)); // seed
+    await bluetoothCode.getToken(String(session._id)); // seed
 
     Person.findById.mockResolvedValue(lecturer);
     LectureSession.findOne.mockResolvedValue(session);
@@ -280,7 +308,7 @@ describe('GET /api/admin/sessions/:id/bluetooth-broadcast', () => {
     expect(typeof res.body.rotatesIn).toBe('number');
     expect(res.body.rotationMs).toBe(15000);
 
-    bluetoothCode.removeToken(String(session._id));
+    await bluetoothCode.removeToken(String(session._id));
   });
 
   test('200 — admin can read broadcast token for any session', async () => {
@@ -288,7 +316,7 @@ describe('GET /api/admin/sessions/:id/bluetooth-broadcast', () => {
     const course = makeCourse();
     const session = makeSession({ course: course._id });
 
-    bluetoothCode.getToken(String(session._id));
+    await bluetoothCode.getToken(String(session._id));
 
     Person.findById.mockResolvedValue(admin);
     LectureSession.findOne.mockResolvedValue(session);
@@ -301,7 +329,7 @@ describe('GET /api/admin/sessions/:id/bluetooth-broadcast', () => {
     expect(res.status).toBe(200);
     expect(res.body.token).toMatch(/^[0-9a-f]{16}$/);
 
-    bluetoothCode.removeToken(String(session._id));
+    await bluetoothCode.removeToken(String(session._id));
   });
 });
 
@@ -388,7 +416,7 @@ describe('GET /api/bluetooth-target', () => {
 
 describe('POST /api/bluetooth-attendance', () => {
   test('401 when not authenticated', async () => {
-    const res = await request(app).post('/api/bluetooth-attendance').send({});
+    const res = await request(app).post('/api/bluetooth-attendance').set(csrfHeader).send({});
     expect(res.status).toBe(401);
   });
 
@@ -468,7 +496,7 @@ describe('POST /api/bluetooth-attendance', () => {
     Course.findById.mockResolvedValue(course);
     LectureSession.find.mockResolvedValue([session]);
 
-    bluetoothCode.getToken(String(session._id));
+    await bluetoothCode.getToken(String(session._id));
 
     const res = await request(app)
       .post('/api/bluetooth-attendance')
@@ -477,7 +505,7 @@ describe('POST /api/bluetooth-attendance', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/paused/i);
 
-    bluetoothCode.removeToken(String(session._id));
+    await bluetoothCode.removeToken(String(session._id));
   });
 
   test('400 when token is wrong', async () => {
@@ -491,7 +519,7 @@ describe('POST /api/bluetooth-attendance', () => {
     Attendance.findOne.mockResolvedValue(null);
 
     // Seed a real token but submit a wrong one
-    bluetoothCode.getToken(String(session._id));
+    await bluetoothCode.getToken(String(session._id));
 
     const res = await request(app)
       .post('/api/bluetooth-attendance')
@@ -500,7 +528,7 @@ describe('POST /api/bluetooth-attendance', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid or expired/i);
 
-    bluetoothCode.removeToken(String(session._id));
+    await bluetoothCode.removeToken(String(session._id));
   });
 
   test('200 — records attendance with correct token (student role)', async () => {
@@ -513,7 +541,7 @@ describe('POST /api/bluetooth-attendance', () => {
     LectureSession.find.mockResolvedValue([session]);
     Attendance.findOne.mockResolvedValue(null);
 
-    const { token } = bluetoothCode.getToken(String(session._id));
+    const { token } = await bluetoothCode.getToken(String(session._id));
 
     const mockAttendance = {
       _id: makeId(),
@@ -536,7 +564,7 @@ describe('POST /api/bluetooth-attendance', () => {
       lectureCode: token,
     }));
 
-    bluetoothCode.removeToken(String(session._id));
+    await bluetoothCode.removeToken(String(session._id));
   });
 
   test('200 with duplicate:true when attendance already recorded today', async () => {
@@ -550,7 +578,7 @@ describe('POST /api/bluetooth-attendance', () => {
     LectureSession.find.mockResolvedValue([session]);
     Attendance.findOne.mockResolvedValue(existingAttendance);
 
-    const { token } = bluetoothCode.getToken(String(session._id));
+    const { token } = await bluetoothCode.getToken(String(session._id));
 
     const res = await request(app)
       .post('/api/bluetooth-attendance')
@@ -561,6 +589,6 @@ describe('POST /api/bluetooth-attendance', () => {
     expect(res.body.duplicate).toBe(true);
     expect(Attendance.create).not.toHaveBeenCalled();
 
-    bluetoothCode.removeToken(String(session._id));
+    await bluetoothCode.removeToken(String(session._id));
   });
 });

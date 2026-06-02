@@ -6,8 +6,17 @@ function toMinutes(hhmm) {
   return h * 60 + m;
 }
 
-function hasScheduleOverlap(aStart, aEnd, bStart, bEnd) {
-  return aStart < bEnd && bStart < aEnd;
+function hasScheduleOverlap(existingSessions, day, startTime, endTime) {
+  const newStart = toMinutes(startTime);
+  const newEnd = toMinutes(endTime);
+  if (newStart === null || newEnd === null) return false;
+  return existingSessions.some((s) => {
+    if (s.lectureDay !== day) return false;
+    const sStart = toMinutes(s.startTime);
+    const sEnd = toMinutes(s.endTime);
+    if (sStart === null || sEnd === null) return false;
+    return sStart < newEnd && newStart < sEnd;
+  });
 }
 
 function isNonRecurringExpired(sessionItem, now = new Date()) {
