@@ -5,7 +5,8 @@ This file documents the actual production environment of the UoP Attendance Mana
 - **Server hostname (OS):** `attendance-vm`
 - **Public hostname:** `attendance.eng.pdn.ac.lk`
 - **Repository (deploys from):** https://github.com/udayaKavinda/uop-attendance-management-system
-- **Last verified:** 2026-05-14
+- **Last verified:** 2026-06-02
+- **Active feature branch:** `feature/bluetooth` (BLE token attendance; see `README.md` → Student attendance flow)
 - **Scope note:** API behavior details (attendance flow, session overlap rules, lecturer reassignment behavior) are maintained in the root `README.md`.
 
 ---
@@ -282,10 +283,10 @@ should return `404` (the directory exists but the file does not) — anything ot
 
 ### Deploy workflow (`.github/workflows/deploy.yml`)
 
-Triggers on every `push` to `main` and on manual `workflow_dispatch`. The workflow:
+Triggers on every `push` to **`main`**, **`feature/gps-pin-rotation`**, or **`feature/bluetooth`**, and on manual `workflow_dispatch`. `claude/*` development branches are **never** deployed. All three production branches overwrite the same `/opt/attendance/app` directory, so only one branch is live at a time. The workflow:
 
 1. `cd /opt/attendance/app`
-2. `git fetch && git reset --hard origin/main && git clean -fdx -e .env -e build -e node_modules`
+2. `git fetch && git reset --hard origin/<pushed-branch> && git clean -fdx -e .env -e build -e node_modules`
 3. `node --check server/index.js`
 4. `npm install --no-audit --no-fund`
 5. `REACT_APP_API_BASE="" CI=false npm run build`
@@ -294,14 +295,23 @@ Triggers on every `push` to `main` and on manual `workflow_dispatch`. The workfl
 
 End‑to‑end deploy time observed: ~30–60 seconds.
 
+### Branch strategy
+
+| Branch | Purpose | Auto-deploys |
+|---|---|---|
+| `main` | Stable production baseline | yes |
+| `feature/gps-pin-rotation` | PIN + GPS geofence attendance | yes |
+| `feature/bluetooth` | BLE token attendance (current production) | yes |
+| `claude/*` | AI development branches | **no** |
+
 ### Manual triggers
 
-- **Push:** any commit on `main` triggers it automatically.
+- **Push:** any commit on `main`, `feature/gps-pin-rotation`, or `feature/bluetooth` triggers it automatically.
 - **GitHub UI:** Actions → "Deploy to attendance.eng.pdn.ac.lk" → "Run workflow".
-- **From this server (no GitHub):** simulate locally:
+- **From this server (no GitHub):** simulate locally (replace `<branch>` with the target branch name):
   ```bash
   cd /opt/attendance/app
-  git fetch && git reset --hard origin/main
+  git fetch && git reset --hard origin/<branch>
   PATH=/usr/bin:$PATH npm install --no-audit --no-fund
   PATH=/usr/bin:$PATH REACT_APP_API_BASE="" CI=false npm run build
   sudo systemctl restart attendance

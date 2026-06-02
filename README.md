@@ -1,6 +1,6 @@
 # UOP Attendance Management System
 
-Role-based web application for lecture attendance at the University of Peradeniya. Students mark attendance for **live** sessions using a **rotating PIN** and **browser geolocation**; **lecturers** and **admins** manage courses, sessions, geofences, and reporting.
+Role-based web application for lecture attendance at the University of Peradeniya. Students mark attendance for **live** sessions by scanning a **rotating BLE token** broadcast from the classroom Bluetooth beacon; **lecturers** and **admins** manage courses, sessions, and reporting.
 
 **Repository type:** private application (`package.json` → `"private": true`). **No `LICENSE` file** is present in this repo—treat usage and distribution as defined by your institution.
 
@@ -9,8 +9,8 @@ Role-based web application for lecture attendance at the University of Peradeniy
 ## Purpose
 
 - Give students a single place to record attendance when a session is **actively running** (same calendar day and clock time as the session slot).
-- Tie attendance to **verified identity** (Google OAuth + server session), **session PIN**, **schedule window**, and **campus geofence** (polygons + GPS accuracy buffer).
-- Let staff create and operate sessions, display live PINs, export matrices, and maintain reusable map presets.
+- Tie attendance to **verified identity** (Google OAuth + server session), a **rotating BLE token** broadcast by the classroom Bluetooth beacon, and the active **schedule window**.
+- Let staff create and operate sessions, control BLE broadcasting, export matrices, and maintain reusable map presets.
 
 ---
 
@@ -18,10 +18,10 @@ Role-based web application for lecture attendance at the University of Peradeniy
 
 | Area | Capabilities |
 |------|----------------|
-| **Students** | Google sign-in; pick a **running** course; enter PIN from class; **PIN validated first**, then **periodic GPS samples** call `record-attendance` until success or timeout; if PIN is valid but geofence fails, retry in the **same live session** can skip PIN re-entry; attendance status polling per course. |
-| **Lecturers** | Staff console: courses assigned to them (multi-owner supported), session CRUD, polygons (presets), live PIN, attendance matrix, presentation route for PIN, and **live attendance gating** (`attendancePaused`) using the blinking **Live** badge. |
+| **Students** | Google sign-in; pick a **running** course from the combobox; tap **Scan for Bluetooth Attendance** (requires Chrome on Android); browser BLE picker opens filtered to the session's `UOP-XXXXXXXX` device; device advertises a rotating 8-byte token in manufacturer data (`0xFFFF`); client submits hex token to `/api/bluetooth-attendance`; attendance status polling per course. |
+| **Lecturers** | Staff console: courses assigned to them (multi-owner supported), session CRUD, **BLE broadcasting control** (start/stop per session card), live PIN, attendance matrix, presentation route for PIN, and **live attendance gating** (`attendancePaused`) using the blinking **Live** badge. |
 | **Admins** | Same as lecturers for any course, plus lecturer directory, draw polygon presets, multi-lecturer course assignment, full course lifecycle. |
-| **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); geofence edge buffer cap is runtime-configurable (**0–30 m**, default **5 m**) from admin Settings and stored in server memory; non-recurring session auto-deactivate via background job; date-sensitive server keys use **host-local Y-M-D** (not UTC slices, unless you force `TZ`). |
+| **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** rotation when enabled); **in-memory BLE token** per session (`server/lib/bluetoothCode.js`, **30 s** rotation while BT is enabled); non-recurring session auto-deactivate via background job; date-sensitive server keys use **host-local Y-M-D** (not UTC slices, unless you force `TZ`). |
 
 ---
 
@@ -69,7 +69,7 @@ flowchart LR
 
 - **Single-process API** in `server/index.js` (large file: models, geofence math, auth helpers, and HTTP handlers).
 - **Session-based auth**: Passport serializes `Person._id`; staff vs student routes use `sessionStaffAuth` / `sessionStudentAuth` after reloading `Person` from MongoDB.
-- **PIN state** lives in **process memory** (`lectureCode.js` `Map`), not MongoDB—**server restarts** drop rotation state (codes re-materialize on next access).
+- **PIN and BLE token state** lives in **process memory** (`lectureCode.js` and `bluetoothCode.js` `Map` stores), not MongoDB—**server restarts** drop rotation state (codes and tokens re-materialize on next access).
 - **Local dev split**: default CRA dev is `http://localhost:3000`; API defaults to port **5000**. `src/api.js` points `REACT_APP_API_BASE` or `localhost:5000` when the app runs on port 3000.
 
 ---
@@ -90,7 +90,7 @@ flowchart LR
 ├── server/
 │   ├── index.js            # Express app, OAuth, index sync, all API routes
 │   ├── models/             # Person, Course, LectureSession, Attendance, PolygonPreset
-│   └── lib/                # lectureCode.js, schedule.js, sessionExpiry.js
+│   └── lib/                # lectureCode.js, bluetoothCode.js, schedule.js, sessionExpiry.js
 ├── deploy/
 │   └── nginx-app-domain.conf   # Example reverse-proxy (API + auth + SPA)
 ├── package.json
@@ -217,8 +217,10 @@ Example: `deploy/nginx-app-domain.conf`.
 | Method | Path | Notes |
 |--------|------|--------|
 | GET | `/api/attendance-status?courseId=` | Same-day attendance for session-in-window |
-| POST | `/api/verify-lecture-pin` | PIN + schedule + active session **only** (no geolocation)—used before GPS phase. **Rate-limited** (~30 req/min per authenticated user; IP fallback). |
-| POST | `/api/record-attendance` | PIN + schedule + GPS + geofence; persists attendance; trusts **session user** for student id. **Rate-limited** (~60 req/min per authenticated user; IP fallback). Returns `{ success: true, duplicate: true }` for same-day re-records (no longer 500 on race). |
+| GET | `/api/bluetooth-target?courseId=` | Returns `{ deviceName, sessionId }` when BT is enabled for the active session. Client uses `deviceName` to filter the BLE picker. |
+| POST | `/api/bluetooth-attendance` | Body: `{ courseId, token }`. Validates 16-char hex token against the session's rotating store (`bluetoothCode.verifyToken()`); creates `Attendance` with `method: 'bluetooth'`. Returns `{ success: true }` or `{ duplicate: true }` for same-session re-records. |
+
+> **Legacy (unused by current frontend):** `/api/verify-lecture-pin` and `/api/record-attendance` (PIN + GPS geofence flow) still exist in `server/index.js` but are no longer called by `LectureEntry.jsx` on this branch.
 
 ### Staff (`lecturer` or `admin`; course-scoped for lecturers)
 
@@ -244,6 +246,9 @@ Example: `deploy/nginx-app-domain.conf`.
 | PATCH | `/api/admin/sessions/:sessionId/rotation/start` | Enable rotation and **resume** if paused (`rotationEnabled=true`, `rotationPaused=false`). |
 | PATCH | `/api/admin/sessions/:sessionId/rotation/stop` | Keep rotation enabled but **pause** it so the current PIN stays on screen (`rotationPaused=true`). |
 | PATCH | `/api/admin/sessions/:sessionId/attendance-paused` | Pause/resume student attendance for the **current** live window. Auto-clears for new occurrences (next live run starts unpaused). |
+| PATCH | `/api/admin/sessions/:sessionId/bluetooth/start` | Enable BLE broadcasting mode; generates `bluetoothDeviceName` (`UOP-XXXXXXXX`) on first call and persists it to DB; sets `bluetoothEnabled=true`. |
+| PATCH | `/api/admin/sessions/:sessionId/bluetooth/stop` | Disable BLE broadcasting; sets `bluetoothEnabled=false`; clears the in-memory token via `bluetoothCode.removeToken()`. |
+| GET | `/api/admin/sessions/:sessionId/bluetooth-broadcast` | **For native broadcaster app only.** Returns `{ deviceName, token, rotatesIn, rotationMs }` so an external app can advertise the current rotating token over BLE. Staff auth required. |
 | GET | `/api/admin/courses/:courseId/attendance-matrix` | |
 | GET | `/api/admin/lecturers?q=` | Admin |
 | POST | `/api/admin/lecturers` | Admin |
@@ -316,19 +321,23 @@ If your deployment serves the SPA and the API on **different hostnames** (i.e. `
 
 ## Student attendance flow (implementation)
 
-This supersedes older “single submit with GPS” descriptions.
+Attendance is recorded via **Web Bluetooth** — no PIN entry or GPS required.
 
-1. `GET /api/courses/running` populates the combobox.
-2. On submit: **`POST /api/verify-lecture-pin`** with `courseId` + `lectureCode` (no coordinates).
-3. On success, the **server** marks the user's Passport session as PIN-verified for `(sessionId, today's occurrence)`, and the client starts a **location phase**: **`getCurrentPosition`** immediately and then every **5 s**, each calling **`POST /api/record-attendance`** with `method: 'google'` and coordinates until **`success`** or **`duplicate`**, or **~3 minutes** elapse.
-4. While the user has a valid server-side trust marker for the current session occurrence, `/api/record-attendance` **skips PIN re-validation** so the location loop is not interrupted by **PIN rotation** mid-window. Schedule window, attendance-paused, and **geofence** are still enforced on every call.
-5. If the 3-minute location phase times out, retrying in the same session reuses the trust — no PIN re-entry. When the active session changes (next week / different lecture), the trust marker auto-expires and PIN is required again.
+1. `GET /api/courses/running` populates the course combobox (polling every 10 s).
+2. Student picks a running course and taps **📡 Scan for Bluetooth Attendance**.
+3. Client calls `GET /api/bluetooth-target?courseId=…` to fetch `{ deviceName, sessionId }`. If the active session has BT disabled, the API returns an error and the scan is aborted.
+4. `navigator.bluetooth.requestDevice({ filters: [{ name: deviceName }], optionalManufacturerData: [0xFFFF] })` opens the OS BLE picker, pre-filtered to the session's `UOP-XXXXXXXX` beacon.
+5. `device.watchAdvertisements({ signal: abortController.signal })` begins listening for BLE advertisements. A 30 s timeout fires `AbortController.abort()` if no packet arrives.
+6. On `advertisementreceived`: manufacturer data for company ID `0xFFFF` is read as 8 bytes → 16-char hex token.
+7. `POST /api/bluetooth-attendance` `{ courseId, token }` — server calls `bluetoothCode.verifyToken(sessionId, token)` (constant-time compare against the current window's token). On match, creates an `Attendance` record with `method: 'bluetooth'`.
+8. On `{ success }` or `{ duplicate }`, `recorded=true` is set and the success screen is shown.
 
 Staff live control notes:
-- The **blinking Live badge** in Session control toggles `attendancePaused` (pause/resume student submissions) for the running window.
-- PIN rotation remains a separate control (`↻` / `⟳`) and can be paused independently of attendance acceptance.
+- **📡 BT on / BT off** pill buttons on each session card control `bluetoothEnabled`. When enabled, the device badge (`UOP-XXXXXXXX`) is shown.
+- The **blinking Live badge** (`attendancePaused`) pauses/resumes student submissions independently of BLE broadcasting.
+- A separate **native broadcaster app** must call `GET /api/admin/sessions/:id/bluetooth-broadcast` and advertise the returned token; the web dashboard controls only enable/disable.
 
-**Optional debug UI:** `LectureEntry.jsx` may show a **fixed GPS accuracy HUD** and related CSS—intended for temporary debugging; safe to remove for production polish.
+**Browser support:** Web Bluetooth (`navigator.bluetooth.requestDevice` + `watchAdvertisements`) is available on **Chrome for Android** (and Chrome OS). It is **not** available in Safari, Firefox, or Chrome on iOS. Students on unsupported browsers see an error message.
 
 ---
 
@@ -345,10 +354,12 @@ Staff live control notes:
 
 | Topic | Detail |
 |-------|--------|
-| **PIN storage** | In-memory per server process; **not** durable across restarts or horizontal scaling without redesign. |
-| **Geofence** | Polygons on the **session**; point-in-polygon plus **edge buffer** capped at **5 m** (see `GEOFENCE_ACCURACY_BUFFER_CAP_M`). Polygons are validated server-side (max **50** polygons per session, max **1000** points per polygon). |
-| **PIN rotation** | **30 s** window in `lectureCode.js` when rotation is active (`ROTATION_MS`). |
-| **Public discovery** | `/api/courses` and `/api/courses/running` now require an authenticated session. |
+| **BLE browser support** | `navigator.bluetooth.requestDevice` + `watchAdvertisements` is only available on **Chrome for Android** (and Chrome OS). Safari, Firefox, and Chrome on iOS will fail. Students on unsupported browsers see an explicit error message. |
+| **BLE broadcaster** | The web dashboard cannot advertise BLE—browsers have no BLE peripheral API. A **separate native app** must call `GET /api/admin/sessions/:id/bluetooth-broadcast` and broadcast the returned token. Without the broadcaster running, students cannot record attendance. |
+| **Token storage** | In-memory per server process (`bluetoothCode.js` `Map`); **not** durable across restarts or horizontal scaling without redesign. |
+| **PIN storage** | In-memory per server process (`lectureCode.js` `Map`); **not** durable across restarts or horizontal scaling without redesign. |
+| **Token / PIN rotation** | **30 s** window when rotation is active (`ROTATION_MS` in both `lectureCode.js` and `bluetoothCode.js`). |
+| **Public discovery** | `/api/courses` and `/api/courses/running` require an authenticated session. |
 | **Client guards** | Route protection is server-authoritative via **`/api/me`**; localStorage is cache-only and must not be trusted for authorization. |
 | **Tests** | CRA test stack present; **no comprehensive API integration tests** in repo were verified for this README. |
 
@@ -362,7 +373,10 @@ Staff live control notes:
 | OAuth redirect mismatch | Google Console redirect URI matches **`APP_BASE_URL` + `/auth/google/callback`** (or relative path if relative callback is registered, which is uncommon). |
 | 401 after deploy | Sessions are persisted in Mongo (`connect-mongo`), so mass logout is no longer expected. Check `SESSION_SECRET`, cookie domain/protocol (`Secure`/`SameSite`), and whether deploy changed host/origin unexpectedly. |
 | PIN always invalid | Clock skew; session not “running” (day/time); rotation paused; wrong `courseId`; server restarted (new code). |
-| Geofence rejects on edge | **5 m** buffer; accuracy reported > 5 m uses 5 m buffer; verify polygon draws. |
+| “Scan” button missing / disabled | Web Bluetooth is not supported on this browser — student must use Chrome on Android. Chrome on iOS does not support it. |
+| BLE device not found in picker | Student is too far from the broadcaster; broadcaster app is not running; session does not have BT enabled (staff must tap **📡 BT on**); device name mismatch (unlikely — server returns the exact name stored in DB). |
+| “No Bluetooth signal received in 30 s” | Broadcaster is running but student is out of BLE range (typically < 10 m in open air, less through walls); move closer to the classroom. Also check that `advertisementreceived` fires with manufacturer data — some OS/browser combos drop packets. |
+| Token validation fails (“Verification failed”) | Token arrived at the edge of a 30 s rotation window and expired before the HTTP request completed. Student should retry immediately; the new window's token is already in the next advertisement. |
 | Startup index sync errors | Inspect startup logs in `server/index.js` connect handler; ensure DB user has index-management permissions. |
 
 ---
@@ -406,14 +420,10 @@ Staff live control notes:
 
 **Sensitive / high-impact areas (edit carefully)**
 
-- **`server/index.js`**: OAuth strategy, session cookie flags, CORS, startup index sync, attendance and geofence logic.
+- **`server/index.js`**: OAuth strategy, session cookie flags, CORS, startup index sync, attendance logic.
 - **`server/lib/lectureCode.js`**: PIN generation and validation contract with clients.
+- **`server/lib/bluetoothCode.js`**: BLE token generation, rotation, and verification; token lifetime and in-memory store.
 - **`src/utils/authRedirect.js`**, **`src/api.js`**: session invalidation and base URL logic.
-
-**Files with temporary debug**
-
-- **`src/components/LectureEntry.jsx`** — GPS accuracy HUD (remove if not wanted).
-- **`src/index.css`** — `.lecture-entry__debug-gps`
 
 ---
 
@@ -423,16 +433,17 @@ This table is the quick reference for facts the rest of the README depends on. U
 
 | Item | Current state | Source |
 |------|---------------|--------|
-| Student flow | **PIN-first** (`/api/verify-lecture-pin`) → **GPS polling** every 5 s for ~3 min calling `/api/record-attendance` until success / duplicate / timeout. | `src/components/LectureEntry.jsx` |
-| Server-side PIN trust | After a successful PIN verify, `record-attendance` skips PIN re-validation for the same `(user, session, occurrence)` so rotation mid-window does not break the location loop. | `server/index.js` (`rememberSessionPinTrust`, `hasSessionPinTrust`) |
-| Geofence buffer | Runtime-configurable edge cap in memory (`geofenceAccuracyBufferCapM`), default **5 m**, allowed range **0..30 m**. Reported accuracy above cap uses the configured cap. | `server/index.js`, `src/components/AdminDashboard.jsx` |
+| Student flow | **BLE scan** — student taps "Scan for Bluetooth Attendance", browser BLE picker opens, device advertises 8-byte token in manufacturer data (`0xFFFF`), client calls `/api/bluetooth-attendance` with hex token; no PIN entry, no GPS. | `src/components/LectureEntry.jsx` |
+| BLE token | 8 random bytes = 16-char hex, generated fresh on each 30 s rotation window while BT is enabled. Verified by `bluetoothCode.verifyToken(sessionId, token)`. | `server/lib/bluetoothCode.js` |
+| BLE device name | Fixed per session lifetime — `'UOP-' + 4 random hex bytes uppercase` (e.g. `UOP-A3F7C201`). Generated once on first `bluetooth/start` call and persisted in `LectureSession.bluetoothDeviceName`. | `server/lib/bluetoothCode.js`, `server/models/LectureSession.js` |
+| Attendance method enum | `['google', 'bluetooth']` — `'bluetooth'` added for BLE-recorded rows. | `server/models/Attendance.js` |
 | PIN rotation | **30 s** window when rotation is active (`ROTATION_MS`); rotation can be paused independently of attendance acceptance. | `server/lib/lectureCode.js` |
-| PIN storage | **In-process memory** only (Map). Server restart drops rotation state. | `server/lib/lectureCode.js` |
+| Token / PIN storage | **In-process memory** only (Map). Server restart drops both PIN rotation state and BLE tokens. | `server/lib/lectureCode.js`, `server/lib/bluetoothCode.js` |
 | Sessions persistence | `express-session` + **`connect-mongo`** (collection `sessions`, TTL 7 d). Survives Node restarts and horizontal scaling. | `server/index.js` |
 | Security middleware | **`helmet`** with **production-only CSP** (allow-list of OSM/Esri tiles, Google Fonts; everything else `'self'`; `frame-ancestors 'none'`; toggleable via `CSP_REPORT_ONLY` and extendable via `CSP_EXTRA_CONNECT_SRC`); **`cors`** (allow-list, credentialed); **`express-rate-limit`** (per-user via `limiterKeyByUserOrIp`; IP fallback wraps `req.ip` with `rateLimit.ipKeyGenerator()` so IPv6 clients can't bypass limits by rotating addresses — required by `express-rate-limit` v8 `ERR_ERL_KEY_GEN_IPV6` validator). | `server/index.js` |
 | Course ownership | Multi-owner: each course stores `lecturers` (array of 1..5 unique lecturer IDs), and any assigned lecturer has course-scoped staff access. | `server/models/Course.js`, `server/index.js` |
 | Course delete consistency | `DELETE /api/admin/courses/:courseId` runs in a Mongo transaction so attendance, sessions, and course delete succeed/fail together. | `server/index.js` |
-| Duplicate attendance | `/api/record-attendance` returns `{ success: true, duplicate: true }` for same-day re-records (pre-check **and** unique-index race), never 500. | `server/index.js` |
+| Duplicate attendance | `/api/bluetooth-attendance` returns `{ success: true, duplicate: true }` for same-session re-records (pre-check **and** unique-index catch on `11000`), never 500. | `server/index.js` |
 | Public discovery | `/api/courses` and `/api/courses/running` require an authenticated session. | `server/index.js` |
 | Removed | `POST /api/login` (unauthenticated user-enumeration oracle) and the `login()` helper in `src/api.js`. | — |
 | Removed | Legacy one-shot endpoint `POST /api/verify-lecture` (superseded by `verify-lecture-pin` + `record-attendance`). | `server/index.js`, `src/api.js` |
