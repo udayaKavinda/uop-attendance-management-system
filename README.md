@@ -87,8 +87,8 @@ flowchart LR
 │   └── utils/              # safeStorage, authRedirect, matrixExcel
 ├── server/
 │   ├── index.js            # Express app, OAuth, all API routes
-│   ├── models/             # Person, Course, LectureSession, Attendance
-│   └── lib/                # bluetoothCode.js, schedule.js, sessionExpiry.js
+│   ├── models/             # Person, Course, LectureSession, Attendance, BleToken
+│   └── lib/                # bluetoothCode.js, schedule.js, sessionExpiry.js, sessionExpiry.js
 ├── deploy/
 │   └── nginx-app-domain.conf
 ├── package.json
@@ -134,6 +134,11 @@ npm run dev
 ```
 - Frontend: `http://localhost:3000`
 - API: `http://localhost:5000`
+
+**Run server unit tests:**
+```bash
+npm run test:server
+```
 
 **Production web build:**
 ```bash
@@ -272,21 +277,40 @@ form-action 'self' https://accounts.google.com;
 
 ---
 
+## Testing
+
+### Server unit tests
+
+Run with:
+```bash
+npm run test:server
+```
+
+Covers:
+- `bluetoothCode.js` — token generation, rotation, grace window, case-insensitivity, removeToken (13 tests)
+- `schedule.js` — `toMinutes`, `hasScheduleOverlap`, `isNonRecurringExpired` (6 tests)
+
+### Frontend tests
+
+CRA includes Jest via `react-scripts test`. Run with:
+```bash
+npm test
+```
+
+### What's not yet covered
+- API integration tests (routes, auth, full BLE attendance flow end-to-end)
+- Concurrent student submission stress tests
+- BLE scan simulation in JSDOM
+
 ## Known limitations
 
 | Topic | Detail |
 |-------|--------|
 | **Web Bluetooth browser support** | Only Chrome on Android (and desktop Chrome with a flag). Firefox and Safari are not supported. |
-| **BLE advertising from browser** | `navigator.bluetooth.advertise()` is experimental — requires Chrome flags. Use a dedicated BLE beacon device or the `capacitor-bluetooth` branch for reliable lecturer broadcasting. |
-| **BLE token storage** | In-process memory only. Server restarts drop all active tokens — students mid-session must re-scan. |
-| **Single VM** | No failover or horizontal scaling without redesign of BLE token state. |
-| **No integration test suite** | CRA test stack present; no comprehensive API integration tests. |
-
----
-
-
-
----
+| **BLE advertising from browser** | `navigator.bluetooth.advertise()` is experimental — requires "Experimental Web Platform features" flag in Chrome. Use a dedicated BLE beacon device or the `capacitor-bluetooth` branch for reliable lecturer broadcasting. |
+| **BLE token storage** | Tokens are persisted to MongoDB (`BleToken` collection) and survive server restarts. TTL index auto-expires tokens after 1 hour of inactivity. |
+| **Single VM** | No failover or horizontal scaling without redesign. |
+| **No comprehensive integration test suite** | Unit tests cover BLE token and schedule logic (`npm run test:server`). API integration tests are not yet written. |
 
 ## Contributing
 
