@@ -23,7 +23,7 @@ Role-based application for lecture attendance at the University of Peradeniya. S
 | Area | Capabilities |
 |------|----------------|
 | **Students** | Google sign-in; pick a **running** course; tap **📡 Scan for Bluetooth Attendance**. On the **native Android app** (this branch): `BleClient.requestLEScan` scans directly for the `UOP-XXXXXXXX` beacon — no device picker dialog. In a **browser**: Web Bluetooth picker (Chrome on Android only). Either path reads the rotating 8-byte token from manufacturer data (`0xFFFF`) and posts to `/api/bluetooth-attendance`. |
-| **Lecturers** | Staff console: assigned courses, session CRUD, **BLE broadcasting control** (start/stop per session card), live PIN display, attendance matrix export, projector view, and live attendance gating via the blinking **Live** badge. |
+| **Lecturers** | Staff console: assigned courses, session CRUD, **BLE broadcasting control** (start/stop per session card), live BLE token display, attendance matrix export, projector view, and live attendance gating via the blinking **Live** badge. |
 | **Admins** | Everything lecturers can do for any course, plus lecturer directory and multi-lecturer course assignment. |
 | **System** | **in-memory BLE token** per session (`bluetoothCode.js`, automatic 15 s rotation via `setInterval`); non-recurring session auto-deactivate; date-sensitive keys use **host-local Y-M-D**. |
 
@@ -77,7 +77,7 @@ flowchart LR
 - **Native BLE path**: `Capacitor.isNativePlatform()` is checked at runtime in `LectureEntry.jsx`. On Android, `BleClient.requestLEScan` is used directly; on a browser, `navigator.bluetooth.requestDevice` is used as a fallback.
 - **Single-process API** in `server/index.js` (models, auth helpers, and HTTP handlers).
 - **Session-based auth**: Passport serializes `Person._id`; staff vs student routes use `sessionStaffAuth` / `sessionStudentAuth` after reloading from MongoDB.
-- **PIN and BLE token state** lives in **process memory** (`bluetoothCode.js` and `bluetoothCode.js` Map stores), not MongoDB — server restarts drop rotation state.
+- **BLE token state** lives in **process memory** (`bluetoothCode.js` Map store), not MongoDB — server restarts drop rotation state.
 - **Local dev split**: CRA dev is `http://localhost:3000`; API defaults to port **5000**.
 
 ---
