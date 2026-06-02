@@ -1,0 +1,22 @@
+import type { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: 'lk.uop.attendance',
+  appName: 'UOP Attendance',
+  webDir: 'build',
+  server: {
+    androidScheme: 'https',
+  },
+  plugins: {
+    BluetoothLe: {
+      displayStrings: {
+        scanning: 'Scanning for classroom signal…',
+        cancel: 'Cancel',
+        availableDevices: 'Available devices',
+        noDeviceFound: 'No classroom signal found.',
+      },
+    },
+  },
+};
+
+export default config;
