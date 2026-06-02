@@ -4,7 +4,7 @@ import {
   getCurrentBlePayload, getAttendance, exportAttendanceUrl, getSessions,
 } from '../api';
 
-const BLE_COMPANY_ID = 0x02e5;
+const BLE_COMPANY_ID = 0xFFFF;
 const POLL_INTERVAL_MS = 10_000;
 
 function isBleAdvertisingSupported() {

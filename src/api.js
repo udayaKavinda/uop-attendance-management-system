@@ -190,3 +190,74 @@ export async function verifyBlePayload(courseId, payload) {
     body: JSON.stringify({ courseId, payload }),
   });
 }
+
+/** Lecturer: get currently active/running sessions (staff-scoped). */
+export async function getActiveSessions() {
+  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions/current-codes`);
+  if (data.error) return { error: data.error, sessions: [] };
+  const raw = data.items ?? data.data;
+  const sessions = (Array.isArray(raw) ? raw : []).map((s) => ({
+    ...s,
+    id: s.sessionId || s._id,
+  }));
+  return { sessions };
+}
+
+/** Lecturer: get all sessions (history). */
+export async function getSessions() {
+  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions`);
+  if (data.error) return { error: data.error, sessions: [] };
+  const raw = data.items ?? data.data;
+  return { sessions: Array.isArray(raw) ? raw.map((s) => ({ ...s, id: s._id })) : [] };
+}
+
+/** Lecturer: activate a session (start it). */
+export async function startSession(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/activate`, {
+    method: 'PATCH',
+  });
+}
+
+/** Lecturer: deactivate a session (end it). */
+export async function endSession(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/deactivate`, {
+    method: 'PATCH',
+  });
+}
+
+/** Lecturer: get attendance records for a session. */
+export async function getAttendance(sessionId) {
+  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/attendance`);
+  if (data.error) return { error: data.error, records: [] };
+  const raw = data.records ?? data.items ?? data.data;
+  return { records: Array.isArray(raw) ? raw : [] };
+}
+
+/** Lecturer: returns a URL for downloading attendance as Excel. */
+export function exportAttendanceUrl(sessionId) {
+  return `${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/attendance/export`;
+}
+
+export async function startAdminSessionRotation(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/rotation/start`, { method: 'PATCH' });
+}
+
+export async function stopAdminSessionRotation(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/rotation/stop`, { method: 'PATCH' });
+}
+
+export async function getAdminCurrentSessionCodes() {
+  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions/current-codes`);
+  if (data.error) return { error: data.error, items: [] };
+  const raw = data.items ?? data.data;
+  return { items: Array.isArray(raw) ? raw : [] };
+}
+
+export async function getAdminSettings() { return safeFetchJson(`${apiBase()}/api/admin/settings`); }
+
+export async function patchAdminStudentDomainRestriction(restrictStudentGoogleDomain) {
+  return safeFetchJson(`${apiBase()}/api/admin/settings/student-domain-restriction`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ restrictStudentGoogleDomain }),
+  });
+}

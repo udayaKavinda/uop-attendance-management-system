@@ -20,6 +20,9 @@ import {
   deleteAdminLecturer,
   startSessionBluetooth,
   stopSessionBluetooth,
+  startAdminSessionRotation,
+  stopAdminSessionRotation,
+  getAdminCurrentSessionCodes,
 } from '../api';
 import { readStoredStudent } from '../utils/safeStorage';
 
@@ -59,21 +62,6 @@ export default function AdminDashboard() {
   const [rotationEnabled, setRotationEnabled] = useState(false);
   const [runningSessionCodes, setRunningSessionCodes] = useState({});
   const [loading, setLoading] = useState(true);
-  // ── Removed feature stubs (GPS/polygon/PIN) ──
-  const [polygonPresets] = useState([]);
-  const [sessionCodes] = useState([]);
-  const [geofenceBufferCapM] = useState(5);
-  const [geofenceBufferDraftM, setGeofenceBufferDraftM] = useState(5);
-  const [presetDrawPolygons] = useState([]);
-  const [presetDrawActiveIdx] = useState(0);
-  const setGeofenceBufferCapM = () => {};
-  const setPolygonPresets = () => {};
-  const loadPolygonPresets = () => {};
-  const onSaveGeofenceBuffer = async () => {};
-  const setPresetDrawActiveIdx = () => {};
-  const setPresetDrawPolygons = () => {};
-  const setPresetNewName = () => {};
-  // ─────────────────────────────────────────────
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');

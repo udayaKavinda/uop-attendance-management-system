@@ -60,6 +60,7 @@ export default function BleSessionPage() {
     try {
       const encoder = new TextEncoder();
       const data = encoder.encode(bleData?.payload || '');
+        // eslint-disable-next-line no-unused-vars
       const mfData = new Map([[BLE_MANUFACTURER_ID, data]]);
       // Note: navigator.bluetooth.getAvailability + advertise is experimental
       const ad = await navigator.bluetooth.requestLEScan({ acceptAllAdvertisements: false });

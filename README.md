@@ -506,7 +506,7 @@ form-action 'self' https://accounts.google.com;
 | **BLE in browser** | `navigator.bluetooth.requestDevice` + `watchAdvertisements` is only available on **Chrome for Android** (and Chrome OS). Not available in Safari, Firefox, or Chrome on iOS. Students on unsupported browsers see an explicit error message. |
 | **iOS** | Capacitor supports iOS with `@capacitor/ios`, but this branch only ships the Android project. An iOS build would require adding `npx cap add ios` on a Mac with Xcode. |
 | **BLE broadcaster** | The web dashboard cannot advertise BLE — browsers have no BLE peripheral API. A **separate native app** must call `GET /api/admin/sessions/:id/bluetooth-broadcast` and broadcast the returned token. |
-| **BLE token rotation** | Automatic every **15 s** via a `setInterval` in `bluetoothCode.js`. No poll required to trigger rotation. |
+| **BLE token rotation** | Automatic every **10 seconds** via a `setInterval` in `bluetoothCode.js`. No poll required to trigger rotation. |
 | **Token / PIN storage** | In-memory per server process; not durable across restarts or horizontal scaling. |
 | **Emulator BLE** | Android emulators do not support real Bluetooth hardware. BLE scanning requires a physical device. |
 
@@ -561,7 +561,7 @@ form-action 'self' https://accounts.google.com;
 |------|---------------|--------|
 | Student scan — native | `BleClient.initialize + requestLEScan` (no dialog); path activated by `Capacitor.isNativePlatform() === true` | `src/components/LectureEntry.jsx` |
 | Student scan — browser | `navigator.bluetooth.requestDevice + watchAdvertisements`; fallback when not native | `src/components/LectureEntry.jsx` |
-| BLE token | 8 random bytes = 16-char hex. Rotates every **15 s** via `setInterval` in `bluetoothCode.js`. Verified by string equality. Stored in `Attendance.lectureCode`. | `server/lib/bluetoothCode.js` |
+| BLE token | 8 random bytes = 16-char hex. Rotates every **10 seconds** via `setInterval` in `bluetoothCode.js`. Verified by string equality. Stored in `Attendance.lectureCode`. | `server/lib/bluetoothCode.js` |
 | BLE device name | `'UOP-' + 4 random hex bytes uppercase`. Generated once on first `bluetooth/start`, persisted in `LectureSession.bluetoothDeviceName`. | `server/lib/bluetoothCode.js` |
 | Attendance method | `['google', 'bluetooth']` — `'bluetooth'` for BLE-recorded rows. | `server/models/Attendance.js` |
 | PIN rotation | 30 s window when enabled. | `server/lib/lectureCode.js` |
