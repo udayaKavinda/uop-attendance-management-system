@@ -6,120 +6,38 @@ import React, {
   useState,
 } from 'react';
 import {
-  verifyLecturePin,
-  recordAttendance,
+  getBluetoothTarget,
+  submitBluetoothAttendance,
   getAttendanceStatus,
   getRunningCourses,
 } from '../api';
 import { readStoredStudent } from '../utils/safeStorage';
 
-const LOCATION_PHASE_MS = 180_000;
-const LOCATION_SAMPLE_MS = 5_000;
+const BT_PHASE_LABEL = {
+  fetching: 'Looking up session…',
+  requesting: 'Select the device in the browser dialog…',
+  watching: 'Receiving Bluetooth signal…',
+  submitting: 'Verifying attendance…',
+};
 
 function runningCourseLabel(item) {
   return `${item.code} — ${item.name}`;
 }
 
 export default function LectureEntry() {
-  const [code, setCode] = useState('');
   const [courseId, setCourseId] = useState('');
-  const [activeSessionId, setActiveSessionId] = useState('');
-  const [pinVerified, setPinVerified] = useState({ courseId: '', sessionId: '', code: '' });
-  const [courses, setCourses] = useState([]);
   const [courseQuery, setCourseQuery] = useState('');
   const [courseMenuOpen, setCourseMenuOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(-1);
+  const [courses, setCourses] = useState([]);
   const [error, setError] = useState(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [btPhase, setBtPhase] = useState('idle');
   const [recorded, setRecorded] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
-  const [locationPhase, setLocationPhase] = useState('idle');
-  /** Debug: last accuracy (meters) sent with record-attendance; remove when done debugging. */
-  const [debugGpsAccuracyM, setDebugGpsAccuracyM] = useState(null);
   const blurCloseTimer = useRef(null);
   const comboboxRef = useRef(null);
+  const abortRef = useRef(null);
   const listboxId = 'running-course-listbox';
-  const locationPhaseRef = useRef({ active: false, courseId: '', code: '' });
-  const locationIntervalRef = useRef(null);
-  const locationDeadlineRef = useRef(null);
-
-  const stopLocationPhase = useCallback((opts = {}) => {
-    const { silent } = opts;
-    locationPhaseRef.current = { active: false, courseId: '', code: '' };
-    if (locationIntervalRef.current) {
-      clearInterval(locationIntervalRef.current);
-      locationIntervalRef.current = null;
-    }
-    if (locationDeadlineRef.current) {
-      clearTimeout(locationDeadlineRef.current);
-      locationDeadlineRef.current = null;
-    }
-    setLocationPhase((prev) => {
-      if (prev === 'idle' && silent) return prev;
-      return 'idle';
-    });
-    setDebugGpsAccuracyM(null);
-  }, []);
-
-  const startLocationPhase = useCallback(
-    (phaseCourseId, lectureCode) => {
-      stopLocationPhase({ silent: true });
-      locationPhaseRef.current = {
-        active: true,
-        courseId: phaseCourseId,
-        code: lectureCode,
-      };
-      setLocationPhase('checking');
-
-      const runSample = () => {
-        if (!locationPhaseRef.current.active) return;
-        navigator.geolocation.getCurrentPosition(
-          async (pos) => {
-            if (!locationPhaseRef.current.active) return;
-            const { courseId: cid, code } = locationPhaseRef.current;
-            const { latitude, longitude, accuracy } = pos.coords;
-            setDebugGpsAccuracyM(
-              typeof accuracy === 'number' && Number.isFinite(accuracy) ? accuracy : null,
-            );
-            try {
-              const record = await recordAttendance({
-                courseId: cid,
-                lectureCode: code,
-                method: 'google',
-                lat: latitude,
-                lng: longitude,
-                accuracy,
-              });
-              if (!locationPhaseRef.current.active) return;
-              if (record.success || record.duplicate) {
-                stopLocationPhase();
-                setRecorded(true);
-                setCode('');
-                setError(null);
-              }
-            } catch {
-              /* keep sampling until deadline */
-            }
-          },
-          () => {
-            /* GPS denied or timeout; next interval retries */
-          },
-          { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 },
-        );
-      };
-
-      runSample();
-      locationIntervalRef.current = setInterval(runSample, LOCATION_SAMPLE_MS);
-      locationDeadlineRef.current = setTimeout(() => {
-        if (!locationPhaseRef.current.active) return;
-        stopLocationPhase();
-        setError(
-          'Could not verify your location inside the allowed area in time. Try again when you are on campus.',
-        );
-      }, LOCATION_PHASE_MS);
-    },
-    [stopLocationPhase],
-  );
 
   const clearBlurTimer = () => {
     if (blurCloseTimer.current) {
@@ -141,6 +59,7 @@ export default function LectureEntry() {
     }, 200);
   }, []);
 
+  // Poll running courses every 10 s
   useEffect(() => {
     let cancelled = false;
     let timer = null;
@@ -155,13 +74,9 @@ export default function LectureEntry() {
           setCourses(resp.items || []);
         }
       } catch (err) {
-        if (!cancelled) {
-          setError(err?.message || 'Could not load running courses. Check your connection.');
-        }
+        if (!cancelled) setError(err?.message || 'Could not load running courses.');
       } finally {
-        if (!cancelled) {
-          timer = setTimeout(loadCourses, 10000);
-        }
+        if (!cancelled) timer = setTimeout(loadCourses, 10000);
       }
     }
     loadCourses();
@@ -171,6 +86,7 @@ export default function LectureEntry() {
     };
   }, []);
 
+  // Drop selection if the course is no longer running
   useEffect(() => {
     if (!courseId) return;
     if (!courses.some((c) => c._id === courseId)) {
@@ -196,10 +112,7 @@ export default function LectureEntry() {
 
   useEffect(() => {
     const typed = courseQuery.trim().toLowerCase();
-    if (!typed) {
-      setCourseId('');
-      return;
-    }
+    if (!typed) { setCourseId(''); return; }
     const match = courses.find((item) => {
       const label = runningCourseLabel(item).toLowerCase();
       return label === typed || item.code.toLowerCase() === typed;
@@ -207,56 +120,28 @@ export default function LectureEntry() {
     setCourseId(match ? match._id : '');
   }, [courseQuery, courses]);
 
+  // Check if attendance already recorded when course selected
   useEffect(() => {
     let cancelled = false;
-
     async function syncStatus() {
-      if (!courseId) {
-        setRecorded(false);
-        setActiveSessionId('');
-        setCode('');
-        return;
-      }
+      if (!courseId) { setRecorded(false); return; }
       const student = readStoredStudent();
-      if (!student.studentId) {
-        setError('Not signed in. Please sign in again.');
-        setRecorded(false);
-        return;
-      }
-
+      if (!student?.studentId) { setError('Not signed in. Please sign in again.'); return; }
       setCheckingStatus(true);
       setError(null);
       try {
         const status = await getAttendanceStatus(courseId);
         if (cancelled) return;
-        if (status.error) {
-          setError(status.error);
-          setRecorded(false);
-          setActiveSessionId('');
-        } else {
-          setRecorded(Boolean(status.attended));
-          setActiveSessionId(String(status.sessionId || ''));
-          if (status.attended) setCode('');
-        }
+        if (status.error) { setError(status.error); setRecorded(false); }
+        else { setRecorded(Boolean(status.attended)); }
       } catch (err) {
-        if (!cancelled) {
-          setError(err.message || 'Failed to check attendance status');
-          setRecorded(false);
-          setActiveSessionId('');
-        }
+        if (!cancelled) { setError(err?.message || 'Failed to check status'); setRecorded(false); }
       }
       setCheckingStatus(false);
     }
-
     syncStatus();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [courseId]);
-
-  useEffect(() => {
-    return () => clearBlurTimer();
-  }, []);
 
   useEffect(() => {
     if (!courseMenuOpen) return;
@@ -268,31 +153,9 @@ export default function LectureEntry() {
     });
   }, [courseMenuOpen, filteredCourses.length]);
 
-  useEffect(() => {
-    if (recorded && locationPhaseRef.current.active) {
-      stopLocationPhase({ silent: true });
-    }
-  }, [recorded, stopLocationPhase]);
-
-  useEffect(() => {
-    // PIN trust is only valid for the currently active session of the selected course.
-    setPinVerified((prev) => {
-      if (!prev.code) return prev;
-      if (!courseId || !activeSessionId) return { courseId: '', sessionId: '', code: '' };
-      if (prev.courseId === courseId && prev.sessionId === activeSessionId) return prev;
-      return { courseId: '', sessionId: '', code: '' };
-    });
-  }, [courseId, activeSessionId]);
-
-  useEffect(() => {
-    if (!locationPhaseRef.current.active) return;
-    if (locationPhaseRef.current.courseId !== courseId) {
-      stopLocationPhase();
-      setError('Course changed; location check was cancelled.');
-    }
-  }, [courseId, stopLocationPhase]);
-
-  useEffect(() => () => stopLocationPhase(), [stopLocationPhase]);
+  // Abort BT watch on unmount
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
+  useEffect(() => () => clearBlurTimer(), []);
 
   const handleCourseKeyDown = (e) => {
     if (!courseMenuOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && courses.length > 0) {
@@ -302,27 +165,15 @@ export default function LectureEntry() {
       return;
     }
     if (!courseMenuOpen) return;
-
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      setCourseMenuOpen(false);
-      setHighlightIndex(-1);
-      return;
-    }
+    if (e.key === 'Escape') { e.preventDefault(); setCourseMenuOpen(false); setHighlightIndex(-1); return; }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setHighlightIndex((i) => {
-        const next = i < 0 ? 0 : i + 1;
-        return next >= filteredCourses.length ? filteredCourses.length - 1 : next;
-      });
+      setHighlightIndex((i) => Math.min(i < 0 ? 0 : i + 1, filteredCourses.length - 1));
       return;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setHighlightIndex((i) => {
-        const next = i <= 0 ? 0 : i - 1;
-        return next;
-      });
+      setHighlightIndex((i) => Math.max(i <= 0 ? 0 : i - 1, 0));
       return;
     }
     if (e.key === 'Enter' && highlightIndex >= 0 && filteredCourses[highlightIndex]) {
@@ -331,81 +182,114 @@ export default function LectureEntry() {
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (submitting || locationPhase === 'checking') return;
+  const startBtScan = useCallback(async () => {
+    if (!courseId) { setError('Select a course first.'); return; }
+
+    if (!navigator.bluetooth?.requestDevice) {
+      setError('Web Bluetooth is not supported on this browser. Please use Chrome on Android.');
+      return;
+    }
+
     setError(null);
-    if (!courseId) {
-      setError('Choose a course from the suggestions or type the full course code.');
-      return;
-    }
-    const hasTrustedPin = (
-      Boolean(pinVerified.code)
-      && pinVerified.courseId === courseId
-      && pinVerified.sessionId === activeSessionId
-    );
-    const trimmed = code.trim();
-    if (!hasTrustedPin && !trimmed) {
-      setError('Enter the lecture pin.');
+    setBtPhase('fetching');
+
+    const target = await getBluetoothTarget(courseId);
+    if (target.error) {
+      setError(target.error);
+      setBtPhase('idle');
       return;
     }
 
-    setSubmitting(true);
+    setBtPhase('requesting');
+    let device;
     try {
-      if (hasTrustedPin) {
-        startLocationPhase(courseId, pinVerified.code);
-      } else {
-        const verify = await verifyLecturePin({ courseId, lectureCode: trimmed });
-        if (!verify.success) {
-          setError(verify.error || 'Lecture verification failed');
-          return;
-        }
-        const verifiedSessionId = String(verify.sessionId || '');
-        setPinVerified({ courseId, sessionId: verifiedSessionId, code: trimmed });
-        setActiveSessionId(verifiedSessionId);
-        setCode('');
-        startLocationPhase(courseId, trimmed);
-      }
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ name: target.deviceName }],
+        optionalManufacturerData: [0xFFFF],
+      });
     } catch (err) {
-      setError(err?.message || 'Verification failed');
-    } finally {
-      setSubmitting(false);
+      setBtPhase('idle');
+      if (err.name === 'NotFoundError') return; // user cancelled picker — no error shown
+      setError(
+        err.name === 'SecurityError'
+          ? 'Bluetooth permission denied. Enable Bluetooth and try again.'
+          : err.message || 'Could not open Bluetooth scanner.',
+      );
+      return;
     }
-  };
 
+    setBtPhase('watching');
+    const ac = new AbortController();
+    abortRef.current = ac;
+    let tokenFound = false;
+
+    const timeout = setTimeout(() => {
+      if (!tokenFound) {
+        ac.abort();
+        setBtPhase('idle');
+        setError('No Bluetooth signal received in 30 s. Make sure you are near the room and the broadcaster is running.');
+      }
+    }, 30000);
+
+    const handleAdvertisement = async (evt) => {
+      if (tokenFound) return;
+      const mfData = evt.manufacturerData?.get(0xFFFF);
+      if (!mfData) return; // wait for a packet that carries our manufacturer data
+
+      tokenFound = true;
+      clearTimeout(timeout);
+      ac.abort();
+
+      const token = Array.from(new Uint8Array(mfData.buffer))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+
+      setBtPhase('submitting');
+      const result = await submitBluetoothAttendance({ courseId, token });
+      if (result.success || result.duplicate) {
+        setRecorded(true);
+        setError(null);
+      } else {
+        setError(result.error || 'Verification failed. Move closer and try again.');
+      }
+      setBtPhase('idle');
+    };
+
+    device.addEventListener('advertisementreceived', handleAdvertisement);
+
+    try {
+      await device.watchAdvertisements({ signal: ac.signal });
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err.name === 'AbortError') return;
+      setBtPhase('idle');
+      setError(err.message || 'Bluetooth watch failed.');
+    }
+  }, [courseId]);
+
+  const scanning = btPhase !== 'idle';
   const noRunning = courses.length === 0 && !error;
-  const isCheckingLocation = locationPhase === 'checking';
-  const hasTrustedPin = (
-    Boolean(pinVerified.code)
-    && pinVerified.courseId === courseId
-    && pinVerified.sessionId === activeSessionId
-  );
-  const formLocked = submitting || checkingStatus || isCheckingLocation;
+  const busy = scanning || checkingStatus;
 
   return (
-    <>
-      <div className="lecture-entry__debug-gps" title="Debug: accuracy sent to server">
-        GPS accuracy (sent):{' '}
-        {debugGpsAccuracyM != null ? `${Math.round(debugGpsAccuracyM)} m` : '—'}
-      </div>
-      <form className="student-panel page-fade" onSubmit={handleSubmit}>
+    <div className="student-panel page-fade">
       <div className="card-content">
-        {!recorded && (
-          <>
-            <h2 className="card-title">Lecture attendance</h2>
-            <p className="card-subtitle">
-              Select a running course and enter the pin from class. After the pin is accepted, we confirm you are on campus using your location for up to a few minutes—allow location when prompted.
-            </p>
-          </>
-        )}
-        {error && <p className="error">{error}</p>}
-        {recorded && (
+        {recorded ? (
           <div className="status-wrap">
             <div className="success-icon">✓</div>
             <h2 className="card-title">Attendance recorded</h2>
-            <p className="card-subtitle">Your attendance was saved for this session.</p>
+            <p className="card-subtitle">Your Bluetooth attendance was saved for this session.</p>
           </div>
+        ) : (
+          <>
+            <h2 className="card-title">Lecture attendance</h2>
+            <p className="card-subtitle">
+              Select your running course, then scan for the classroom Bluetooth signal.
+            </p>
+          </>
         )}
+
+        {error && <p className="error">{error}</p>}
 
         {noRunning ? (
           <div className="student-empty">
@@ -430,25 +314,15 @@ export default function LectureEntry() {
                 aria-expanded={courseMenuOpen}
                 aria-controls={listboxId}
                 aria-autocomplete="list"
-                onChange={(e) => {
-                  setCourseQuery(e.target.value);
-                  openCourseMenu();
-                }}
-                onFocus={() => {
-                  clearBlurTimer();
-                  openCourseMenu();
-                }}
+                onChange={(e) => { setCourseQuery(e.target.value); openCourseMenu(); }}
+                onFocus={() => { clearBlurTimer(); openCourseMenu(); }}
                 onBlur={scheduleCloseMenu}
                 onKeyDown={handleCourseKeyDown}
-                disabled={formLocked}
+                disabled={busy}
                 required
               />
               {courseMenuOpen && filteredCourses.length > 0 ? (
-                <ul
-                  id={listboxId}
-                  className="course-combobox__menu"
-                  role="listbox"
-                >
+                <ul id={listboxId} className="course-combobox__menu" role="listbox">
                   {filteredCourses.map((item, idx) => (
                     <li key={item._id} role="presentation">
                       <button
@@ -456,10 +330,7 @@ export default function LectureEntry() {
                         role="option"
                         className="course-combobox__option"
                         aria-selected={idx === highlightIndex}
-                        onMouseDown={(ev) => {
-                          ev.preventDefault();
-                          pickCourse(item);
-                        }}
+                        onMouseDown={(ev) => { ev.preventDefault(); pickCourse(item); }}
                         onMouseEnter={() => setHighlightIndex(idx)}
                       >
                         <span className="course-combobox__code">{item.code}</span>
@@ -470,46 +341,28 @@ export default function LectureEntry() {
                 </ul>
               ) : null}
             </div>
+
             {!recorded && (
               <>
-                {hasTrustedPin ? (
-                  <p className="card-subtitle" style={{ marginTop: '0.85rem' }}>
-                    PIN already verified for this live session. You can retry location check without entering PIN.
-                  </p>
-                ) : (
-                  <>
-                    <label className="field-label" htmlFor="lectureCode" style={{ marginTop: '0.85rem' }}>Pin code</label>
-                    <input
-                      id="lectureCode"
-                      className="input"
-                      type="text"
-                      placeholder="Code from lecturer"
-                      value={code}
-                      onChange={(e) => setCode(e.target.value)}
-                      disabled={formLocked}
-                      required
-                    />
-                  </>
+                {scanning && (
+                  <div className="bt-scan-status">
+                    <div className="bt-scan-icon" aria-hidden>📶</div>
+                    <p className="bt-scan-label">{BT_PHASE_LABEL[btPhase]}</p>
+                  </div>
                 )}
                 <button
-                  className={`primary-btn${isCheckingLocation ? ' primary-btn--location-check' : ''}`}
-                  type="submit"
-                  disabled={formLocked}
+                  className="primary-btn primary-btn--bt"
+                  type="button"
+                  onClick={startBtScan}
+                  disabled={busy || !courseId}
                 >
-                  {isCheckingLocation
-                    ? 'Checking location…'
-                    : submitting
-                      ? 'Submitting…'
-                      : hasTrustedPin
-                        ? 'Retry location check'
-                        : 'Submit attendance'}
+                  {scanning ? BT_PHASE_LABEL[btPhase] : '📡  Scan for Bluetooth Attendance'}
                 </button>
               </>
             )}
           </>
         )}
       </div>
-    </form>
-    </>
+    </div>
   );
 }

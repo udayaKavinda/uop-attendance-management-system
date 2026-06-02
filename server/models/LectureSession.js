@@ -20,6 +20,8 @@ const lectureSessionSchema = new mongoose.Schema({
   /** When true during a live window, students cannot verify PIN or record attendance (session stays active). */
   attendancePaused: { type: Boolean, default: false },
   rotationOccurrenceKey: { type: String, default: '' },
+  bluetoothEnabled: { type: Boolean, default: false },
+  bluetoothDeviceName: { type: String, default: null },
   polygons: { type: [[pointSchema]], default: [] },
   active: { type: Boolean, default: true, index: true },
   deleted: { type: Boolean, default: false, index: true },

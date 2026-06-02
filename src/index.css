@@ -1122,3 +1122,70 @@ body.present-pin-mode {
   line-height: 1.4;
   letter-spacing: 0.01em;
 }
+
+/* ── Bluetooth scan UI (student) ─────────────────────────────────────────── */
+
+.primary-btn--bt {
+  background: linear-gradient(95deg, #0369a1 0%, #0284c7 55%, #38bdf8 100%);
+  box-shadow: 0 10px 28px rgba(3, 105, 161, 0.3);
+}
+
+.primary-btn--bt:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.bt-scan-status {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.75rem 0.9rem;
+  margin: 0.85rem 0 0.5rem;
+  background: linear-gradient(135deg, #e0f2fe, #f0f9ff);
+  border: 1px solid #bae6fd;
+  border-radius: var(--radius-md);
+}
+
+.bt-scan-icon {
+  font-size: 1.35rem;
+  animation: btPulse 1.2s ease-in-out infinite;
+}
+
+.bt-scan-label {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #0369a1;
+}
+
+@keyframes btPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(1.12); }
+}
+
+/* ── Bluetooth controls (session card) ───────────────────────────────────── */
+
+.bt-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--app-border);
+}
+
+.bt-device-badge {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #0369a1;
+  background: #e0f2fe;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  padding: 0.25rem 0.55rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

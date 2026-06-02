@@ -16,6 +16,7 @@ const Course = require('./models/Course');
 const LectureSession = require('./models/LectureSession');
 const PolygonPreset = require('./models/PolygonPreset');
 const lectureCode = require('./lib/lectureCode');
+const bluetoothCode = require('./lib/bluetoothCode');
 const { startNonRecurringExpiryJob } = require('./lib/sessionExpiry');
 const {
   DAY_INDEX,
@@ -1126,6 +1127,68 @@ app.patch('/api/admin/sessions/:sessionId/rotation/stop', async (req, res) => {
   }
 });
 
+// ── Bluetooth admin routes ────────────────────────────────────────────────────
+
+app.patch('/api/admin/sessions/:sessionId/bluetooth/start', async (req, res) => {
+  try {
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
+    if (!sessionItem.bluetoothDeviceName) {
+      sessionItem.bluetoothDeviceName = bluetoothCode.generateDeviceName();
+    }
+    sessionItem.bluetoothEnabled = true;
+    await sessionItem.save();
+    return res.json({ success: true, session: sessionItem });
+  } catch (err) {
+    return respondError(res, err);
+  }
+});
+
+app.patch('/api/admin/sessions/:sessionId/bluetooth/stop', async (req, res) => {
+  try {
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
+    sessionItem.bluetoothEnabled = false;
+    await sessionItem.save();
+    bluetoothCode.removeToken(String(sessionItem._id));
+    return res.json({ success: true, session: sessionItem });
+  } catch (err) {
+    return respondError(res, err);
+  }
+});
+
+// For the lecturer's native broadcaster app: returns the device name + current rotating token.
+app.get('/api/admin/sessions/:sessionId/bluetooth-broadcast', async (req, res) => {
+  try {
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
+    if (!sessionItem.bluetoothEnabled) return res.status(400).json({ error: 'Bluetooth not enabled for this session' });
+    const { token, rotatesIn } = bluetoothCode.getToken(String(sessionItem._id));
+    return res.json({
+      deviceName: sessionItem.bluetoothDeviceName,
+      token,
+      rotatesIn,
+      rotationMs: bluetoothCode.ROTATION_MS,
+    });
+  } catch (err) {
+    return respondError(res, err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 app.patch('/api/admin/sessions/:sessionId/attendance-paused', async (req, res) => {
   try {
     const auth = await sessionStaffAuth(req);
@@ -1342,6 +1405,92 @@ app.post('/api/record-attendance', studentRecordLimiter, async (req, res) => {
     return respondError(res, err);
   }
 });
+
+// ── Bluetooth student routes ──────────────────────────────────────────────────
+
+// Returns the BLE device name for the active session — student needs this to
+// know which device to scan for.
+app.get('/api/bluetooth-target', async (req, res) => {
+  try {
+    const auth = await sessionStudentAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const courseId = String(req.query.courseId || '').trim();
+    if (!mongoose.isValidObjectId(courseId)) return res.status(400).json({ error: 'Invalid courseId' });
+    const resolved = await resolveActiveSessionForCourse(courseId);
+    if (resolved.error) return res.status(400).json({ error: resolved.error });
+    if (!resolved.session.bluetoothEnabled) {
+      return res.status(400).json({ error: 'Bluetooth attendance is not enabled for this session' });
+    }
+    return res.json({
+      deviceName: resolved.session.bluetoothDeviceName,
+      sessionId: resolved.session._id,
+    });
+  } catch (err) {
+    return respondError(res, err);
+  }
+});
+
+// Student submits the BT token scanned from the advertisement payload.
+app.post('/api/bluetooth-attendance', studentRecordLimiter, async (req, res) => {
+  const { courseId, token } = req.body || {};
+  try {
+    const auth = await sessionStudentAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    if (!mongoose.isValidObjectId(String(courseId || ''))) {
+      return res.status(400).json({ error: 'Invalid courseId' });
+    }
+    if (!token || typeof token !== 'string' || !/^[0-9a-f]{16}$/i.test(token.trim())) {
+      return res.status(400).json({ error: 'Invalid Bluetooth token' });
+    }
+    const resolved = await resolveActiveSessionForCourse(courseId);
+    if (resolved.error) return res.status(400).json({ error: resolved.error });
+    if (!resolved.session.bluetoothEnabled) {
+      return res.status(400).json({ error: 'Bluetooth attendance is not enabled for this session' });
+    }
+    if (resolved.session.attendancePaused) {
+      return res.status(400).json({ error: 'Attendance is paused. Please wait until your lecturer resumes.' });
+    }
+    const schedule = checkScheduleWindow(resolved.session);
+    if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
+    if (!bluetoothCode.verifyToken(String(resolved.session._id), token.trim().toLowerCase())) {
+      return res.status(400).json({ error: 'Invalid or expired Bluetooth token. Move closer and try again.' });
+    }
+    const studentPk = auth.person._id;
+    const attendanceDate = localYmd();
+    const existing = await Attendance.findOne({
+      student: studentPk,
+      session: resolved.session._id,
+      attendanceDate,
+    });
+    if (existing) return res.json({ success: true, attendance: existing, duplicate: true });
+    try {
+      const attendance = await Attendance.create({
+        student: studentPk,
+        course: resolved.course._id,
+        session: resolved.session._id,
+        courseCode: resolved.course.code,
+        lectureCode: token.trim().toLowerCase(),
+        attendanceDate,
+        method: 'bluetooth',
+      });
+      return res.json({ success: true, attendance });
+    } catch (err) {
+      if (err && err.code === 11000) {
+        const dup = await Attendance.findOne({
+          student: studentPk,
+          session: resolved.session._id,
+          attendanceDate,
+        });
+        return res.json({ success: true, attendance: dup, duplicate: true });
+      }
+      throw err;
+    }
+  } catch (err) {
+    return respondError(res, err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/api/admin/courses/:courseId/attendance-matrix', async (req, res) => {
   try {

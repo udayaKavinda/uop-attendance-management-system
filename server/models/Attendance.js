@@ -8,7 +8,7 @@ const attendanceSchema = new mongoose.Schema({
   lectureCode: { type: String, required: true },
   attendanceDate: { type: String, required: true, index: true },
   timestamp: { type: Date, default: Date.now },
-  method: { type: String, enum: ['google'], required: true },
+  method: { type: String, enum: ['google', 'bluetooth'], required: true },
   location: {
     lat: Number,
     lng: Number,

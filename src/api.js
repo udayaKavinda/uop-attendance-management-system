@@ -64,6 +64,38 @@ export async function getAttendanceStatus(courseId) {
   );
 }
 
+// ── Bluetooth ─────────────────────────────────────────────────────────────────
+
+export async function getBluetoothTarget(courseId) {
+  return safeFetchJson(
+    `${apiBase()}/api/bluetooth-target?courseId=${encodeURIComponent(courseId || '')}`,
+  );
+}
+
+export async function submitBluetoothAttendance(payload) {
+  return safeFetchJson(`${apiBase()}/api/bluetooth-attendance`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function startSessionBluetooth(sessionId) {
+  return safeFetchJson(
+    `${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/bluetooth/start`,
+    { method: 'PATCH' },
+  );
+}
+
+export async function stopSessionBluetooth(sessionId) {
+  return safeFetchJson(
+    `${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/bluetooth/stop`,
+    { method: 'PATCH' },
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /** Staff-only: live pin for an active session on this course (lecturer = own courses only). */
 export async function getLectureCode(courseId) {
   return safeFetchJson(

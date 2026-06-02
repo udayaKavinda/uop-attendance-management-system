@@ -27,6 +27,8 @@ import {
   getPolygonPresets,
   createPolygonPreset,
   deletePolygonPreset,
+  startSessionBluetooth,
+  stopSessionBluetooth,
 } from '../api';
 import { readStoredStudent } from '../utils/safeStorage';
 
@@ -672,6 +674,30 @@ export default function AdminDashboard() {
     setWorking(false);
   };
 
+  const onStartBluetooth = async (sessionId) => {
+    setWorking(true);
+    setError('');
+    const resp = await startSessionBluetooth(sessionId);
+    if (resp.error) setError(resp.error);
+    else {
+      setToast('Bluetooth attendance started.');
+      await loadSessions();
+    }
+    setWorking(false);
+  };
+
+  const onStopBluetooth = async (sessionId) => {
+    setWorking(true);
+    setError('');
+    const resp = await stopSessionBluetooth(sessionId);
+    if (resp.error) setError(resp.error);
+    else {
+      setToast('Bluetooth attendance stopped.');
+      await loadSessions();
+    }
+    setWorking(false);
+  };
+
   const onAssignLecturer = async (courseId, lecturerIds) => {
     setWorking(true);
     setError('');
@@ -1282,6 +1308,33 @@ export default function AdminDashboard() {
                         </div>
                         );
                       })()}
+                    </div>
+                    <div className="bt-row">
+                      {s.bluetoothEnabled ? (
+                        <>
+                          <span className="bt-device-badge" title="BLE device name for broadcaster">
+                            📡 {s.bluetoothDeviceName}
+                          </span>
+                          <button
+                            type="button"
+                            className="pill-btn warning"
+                            disabled={working}
+                            onClick={() => onStopBluetooth(s._id)}
+                          >
+                            BT off
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="pill-btn"
+                          disabled={working}
+                          onClick={() => onStartBluetooth(s._id)}
+                          title="Enable Bluetooth attendance for this session"
+                        >
+                          📡 BT on
+                        </button>
+                      )}
                     </div>
                     <div className="course-actions">
                       {s.active
