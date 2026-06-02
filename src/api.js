@@ -62,12 +62,6 @@ export async function stopSessionBluetooth(sessionId) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Staff-only: live pin for an active session on this course (lecturer = own courses only). */
-export async function getLectureCode(courseId) {
-  return safeFetchJson(
-    `${apiBase()}/api/lecture-code?courseId=${encodeURIComponent(courseId || '')}`,
-  );
-}
 
 export async function getCourses() {
   const data = await safeFetchJson(`${apiBase()}/api/courses`);
@@ -177,19 +171,7 @@ export async function getAdminAttendanceMatrix(courseId) {
   return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/attendance-matrix`);
 }
 
-/** Lecturer: poll the current rotating BLE payload for a session. */
-export async function getCurrentBlePayload(sessionId) {
-  return safeFetchJson(`${apiBase()}/api/ble/current-payload/${encodeURIComponent(sessionId)}`);
-}
 
-/** Student: submit a BLE-scanned payload to verify and mark attendance. */
-export async function verifyBlePayload(courseId, payload) {
-  return safeFetchJson(`${apiBase()}/api/ble/verify-payload`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ courseId, payload }),
-  });
-}
 
 /** Lecturer: get currently active/running sessions (staff-scoped). */
 export async function getActiveSessions() {
@@ -238,20 +220,8 @@ export function exportAttendanceUrl(sessionId) {
   return `${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/attendance/export`;
 }
 
-export async function startAdminSessionRotation(sessionId) {
-  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/rotation/start`, { method: 'PATCH' });
-}
 
-export async function stopAdminSessionRotation(sessionId) {
-  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/rotation/stop`, { method: 'PATCH' });
-}
 
-export async function getAdminCurrentSessionCodes() {
-  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions/current-codes`);
-  if (data.error) return { error: data.error, items: [] };
-  const raw = data.items ?? data.data;
-  return { items: Array.isArray(raw) ? raw : [] };
-}
 
 export async function getAdminSettings() { return safeFetchJson(`${apiBase()}/api/admin/settings`); }
 

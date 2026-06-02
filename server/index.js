@@ -15,7 +15,6 @@ const Person = require('./models/Person');
 const Attendance = require('./models/Attendance');
 const Course = require('./models/Course');
 const LectureSession = require('./models/LectureSession');
-const lectureCode = require('./lib/lectureCode');
 const bluetoothCode = require('./lib/bluetoothCode');
 const { startNonRecurringExpiryJob } = require('./lib/sessionExpiry');
 const {
@@ -25,7 +24,6 @@ const {
   isNonRecurringExpired,
 } = require('./lib/schedule');
 
-const MAX_LECTURE_PIN_LENGTH = 16;
 const MAX_COURSE_LECTURERS = 5;
 const BOOTSTRAP_ADMIN_EMAIL = 'udayakavindadev@gmail.com';
 
@@ -139,8 +137,6 @@ function checkScheduleWindow(sessionConfig) {
 }
 
 
-function sessionCodeKey(sessionId) {
-  return `session:${sessionId}`;
 }
 
 function localYmd(now = new Date()) {
@@ -384,14 +380,6 @@ function limiterKeyByUserOrIp(req) {
   return `ip:${rateLimit.ipKeyGenerator(req.ip)}`;
 }
 
-const studentPinLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 30,
-  keyGenerator: limiterKeyByUserOrIp,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many attempts, please slow down.' },
-});
 const studentRecordLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
@@ -647,7 +635,6 @@ app.post('/api/admin/courses', async (req, res) => {
   try {
     const auth = await sessionStaffAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const code = lectureCode.normalizeCourseCode(req.body.code);
     const name = String(req.body.name || '').trim();
     const batch = String(req.body.batch ?? '').trim();
     const lecturerIdsBody = normalizeLecturerIds(req.body.lecturerIds);
@@ -700,7 +687,7 @@ app.delete('/api/admin/courses/:courseId', async (req, res) => {
     await Attendance.deleteMany({ course: course._id });
     await LectureSession.deleteMany({ course: course._id });
     await Course.deleteOne({ _id: course._id });
-    sessionIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
+    sessionIds.forEach((id) => lectureCode.removeKey(""));
     return res.json({ success: true });
   } catch (err) {
     return respondError(res, err);
@@ -718,7 +705,7 @@ app.patch('/api/admin/courses/:courseId/disable', async (req, res) => {
     await course.save();
     await LectureSession.updateMany({ course: course._id }, { $set: { active: false } });
     const sessionIds = await LectureSession.find({ course: course._id }).distinct('_id');
-    sessionIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
+    sessionIds.forEach((id) => lectureCode.removeKey(""));
     return res.json({ success: true, course });
   } catch (err) {
     return respondError(res, err);
@@ -854,10 +841,6 @@ app.patch('/api/admin/sessions/:sessionId/activate', async (req, res) => {
     if (!sessionItem.course?.active) return res.status(400).json({ error: 'Course is disabled' });
     sessionItem.active = true;
     await sessionItem.save();
-    if (sessionItem.rotationEnabled) {
-      if (sessionItem.rotationPaused) lectureCode.pauseCode(sessionCodeKey(sessionItem._id));
-      else lectureCode.resumeCode(sessionCodeKey(sessionItem._id));
-    }
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
     return respondError(res, err);
@@ -875,7 +858,6 @@ app.patch('/api/admin/sessions/:sessionId/deactivate', async (req, res) => {
     sessionItem.active = false;
     sessionItem.attendancePaused = false;
     await sessionItem.save();
-    lectureCode.removeKey(sessionCodeKey(sessionItem._id));
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
     return respondError(res, err);
@@ -896,70 +878,8 @@ app.get('/api/admin/sessions', async (req, res) => {
   }
 });
 
-app.get('/api/admin/sessions/current-codes', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const scope = await staffSessionMatch(auth.person, auth.isAdmin);
-    const now = new Date();
-    const sessions = await LectureSession.find({ active: true, deleted: false, ...scope })
-      .populate('course', 'code active batch');
-    const running = sessions.filter((s) => s.course?.active && isSessionRunningNow(s, now));
-    const items = [];
-    for (const s of running) {
-      const codeKey = sessionCodeKey(s._id);
-      await syncSessionCodeMode(s, now);
 
-      items.push({
-        sessionId: s._id,
-        courseCode: s.course.code,
-        rotationEnabled: Boolean(s.rotationEnabled),
-        rotationPaused: Boolean(s.rotationPaused),
-        attendancePaused: Boolean(s.attendancePaused),
-        ...lectureCode.getCurrent(codeKey),
-      });
-    }
-    return res.json({ items });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
 
-app.patch('/api/admin/sessions/:sessionId/rotation/start', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
-    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
-    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
-    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    sessionItem.rotationEnabled = true;
-    sessionItem.rotationPaused = false;
-    await sessionItem.save();
-    lectureCode.resumeCode(sessionCodeKey(sessionItem._id));
-    return res.json({ success: true, session: sessionItem });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
-
-app.patch('/api/admin/sessions/:sessionId/rotation/stop', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
-    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
-    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
-    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    sessionItem.rotationEnabled = true;
-    sessionItem.rotationPaused = true;
-    await sessionItem.save();
-    lectureCode.pauseCode(sessionCodeKey(sessionItem._id));
-    return res.json({ success: true, session: sessionItem });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
 
 // ── Bluetooth admin routes ────────────────────────────────────────────────────
 
@@ -1043,54 +963,7 @@ app.patch('/api/admin/sessions/:sessionId/attendance-paused', async (req, res) =
   }
 });
 
-app.get('/api/admin/sessions/:sessionId/current-code', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
-    if (sessionItem) {
-      const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    }
-    if (sessionItem && isNonRecurringExpired(sessionItem)) {
-      sessionItem.active = false;
-      await sessionItem.save();
-      lectureCode.removeKey(sessionCodeKey(sessionItem._id));
-    }
-    if (!sessionItem || !sessionItem.active) return res.status(404).json({ error: 'Session not found' });
-    const now = new Date();
-    if (isSessionRunningNow(sessionItem, now)) {
-      await syncSessionCodeMode(sessionItem, now);
-    }
-    return res.json({
-      sessionId: sessionItem._id,
-      attendancePaused: Boolean(sessionItem.attendancePaused),
-      ...lectureCode.getCurrent(sessionCodeKey(sessionItem._id)),
-    });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
 
-app.get('/api/lecture-code', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const { courseId } = req.query;
-    if (!courseId) return res.status(400).json({ error: 'courseId query parameter is required' });
-    const access = await assertCourseAccess(auth.person, auth.isAdmin, courseId);
-    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    const resolved = await resolveActiveSessionForCourse(courseId);
-    if (resolved.error) return res.status(400).json({ error: resolved.error });
-    return res.json({
-      courseId: resolved.course._id,
-      sessionId: resolved.session._id,
-      ...lectureCode.getCurrent(sessionCodeKey(resolved.session._id)),
-    });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
 
 app.get('/api/attendance-status', async (req, res) => {
   try {
@@ -1115,30 +988,6 @@ app.get('/api/attendance-status', async (req, res) => {
 
 
 
-// ─── BLE Payload Rotation ─────────────────────────────────────────────────
-const BLE_ROTATION_INTERVAL_MS = 10_000; // 10-second rotation window
-
-function blePayloadForEpoch(sessionId, epoch) {
-  const secret = process.env.BLE_SECRET || 'ble-secret-change-in-prod';
-  return crypto.createHash('sha256').update(`${sessionId}:${epoch}:${secret}`).digest('hex').slice(0, 8).toUpperCase();
-}
-
-function currentBleState(sessionId) {
-  const now = Date.now();
-  const epoch = Math.floor(now / BLE_ROTATION_INTERVAL_MS);
-  return {
-    payload: blePayloadForEpoch(sessionId, epoch),
-    prevPayload: blePayloadForEpoch(sessionId, epoch - 1),
-    secondsRemaining: Math.round((BLE_ROTATION_INTERVAL_MS - (now % BLE_ROTATION_INTERVAL_MS)) / 1000),
-    rotationIntervalSeconds: BLE_ROTATION_INTERVAL_MS / 1000,
-  };
-}
-
-function isValidBlePayload(sessionId, submitted) {
-  const epoch = Math.floor(Date.now() / BLE_ROTATION_INTERVAL_MS);
-  return submitted === blePayloadForEpoch(sessionId, epoch) || submitted === blePayloadForEpoch(sessionId, epoch - 1);
-}
-// ─────────────────────────────────────────────────────────────────────────────
 
 
 // ─── BLE Routes ───────────────────────────────────────────────────────────────
@@ -1146,58 +995,8 @@ function isValidBlePayload(sessionId, submitted) {
 /** GET /api/ble/current-payload/:sessionId
  * Lecturer/Admin: returns the current rotating BLE payload for a session.
  */
-app.get('/api/ble/current-payload/:sessionId', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
-    if (!sessionItem || !sessionItem.active) return res.status(404).json({ error: 'Session not found or inactive' });
-    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
-    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    if (!isSessionRunningNow(sessionItem)) return res.status(400).json({ error: 'Session is not running now' });
-    const state = currentBleState(String(sessionItem._id));
-    return res.json({ sessionId: sessionItem._id, attendancePaused: Boolean(sessionItem.attendancePaused), ...state });
-  } catch (err) { return respondError(res, err); }
-});
 
-/** POST /api/ble/verify-payload
- * Student: submits a BLE-scanned payload to mark attendance.
- * Body: { courseId, payload }
- */
-app.post('/api/ble/verify-payload', async (req, res) => {
-  const { courseId, payload: submitted } = req.body || {};
-  try {
-    const auth = await sessionStudentAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    if (!mongoose.isValidObjectId(String(courseId || ''))) return res.status(400).json({ error: 'Invalid courseId' });
-    if (!submitted || typeof submitted !== 'string') return res.status(400).json({ error: 'payload is required' });
-    const resolved = await resolveActiveSessionForCourse(courseId);
-    if (resolved.error) return res.status(400).json({ error: resolved.error });
-    if (resolved.session.attendancePaused) return res.status(400).json({ error: 'Attendance is paused for this session.' });
-    const schedule = checkScheduleWindow(resolved.session);
-    if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    if (!isValidBlePayload(String(resolved.session._id), submitted.trim().toUpperCase())) {
-      return res.status(400).json({ error: 'Invalid or expired BLE payload. Ensure you are in the lecture room and try again.' });
-    }
-    const studentPk = auth.person._id;
-    const attendanceDate = localYmd();
-    const existing = await Attendance.findOne({ student: studentPk, session: resolved.session._id, attendanceDate });
-    if (existing) return res.json({ success: true, attendance: existing, duplicate: true });
-    try {
-      const attendance = await Attendance.create({
-        student: studentPk, course: resolved.course._id, session: resolved.session._id,
-        courseCode: resolved.course.code, lectureCode: 'ble-verified', attendanceDate, method: 'ble',
-      });
-      return res.json({ success: true, attendance });
-    } catch (err2) {
-      if (err2 && err2.code === 11000) {
-        const dup = await Attendance.findOne({ student: studentPk, session: resolved.session._id, attendanceDate });
-        return res.json({ success: true, attendance: dup, duplicate: true });
-      }
-      throw err2;
-    }
-  } catch (err) { return respondError(res, err); }
-});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Bluetooth student routes ──────────────────────────────────────────────────

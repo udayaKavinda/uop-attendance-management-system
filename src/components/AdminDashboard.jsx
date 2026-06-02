@@ -20,9 +20,6 @@ import {
   deleteAdminLecturer,
   startSessionBluetooth,
   stopSessionBluetooth,
-  startAdminSessionRotation,
-  stopAdminSessionRotation,
-  getAdminCurrentSessionCodes,
 } from '../api';
 import { readStoredStudent } from '../utils/safeStorage';
 
@@ -274,7 +271,7 @@ export default function AdminDashboard() {
   };
 
   const loadRunningCodes = async () => {
-    const data = await getAdminCurrentSessionCodes();
+    const data = { items: [] };
     if (!data.error) {
       setRunningSessionCodes(
         Object.fromEntries((data.items || []).map(item => [String(item.sessionId), item]))
@@ -520,30 +517,6 @@ export default function AdminDashboard() {
         prev[sid] ? { ...prev, [sid]: { ...prev[sid], attendancePaused: nextPaused } } : prev
       ));
       await loadSessions();
-    }
-    setWorking(false);
-  };
-
-  const onStartRotation = async (sessionId) => {
-    setWorking(true);
-    setError('');
-    const resp = await startAdminSessionRotation(sessionId);
-    if (resp.error) setError(resp.error);
-    else {
-      setMessage('Code rotation started');
-      await loadRunningCodes();
-    }
-    setWorking(false);
-  };
-
-  const onStopRotation = async (sessionId) => {
-    setWorking(true);
-    setError('');
-    const resp = await stopAdminSessionRotation(sessionId);
-    if (resp.error) setError(resp.error);
-    else {
-      setMessage('Code rotation stopped');
-      await loadRunningCodes();
     }
     setWorking(false);
   };
@@ -974,7 +947,7 @@ export default function AdminDashboard() {
                             type="button"
                             className="icon-btn"
                             disabled={working}
-                            onClick={() => (rc.rotationPaused ? onStartRotation(s._id) : onStopRotation(s._id))}
+                            onClick={() => {}}
                             title={rc.rotationPaused ? 'Resume PIN rotation' : 'Pause PIN rotation'}
                           >
                             {rc.rotationPaused ? '⟳' : '↻'}
