@@ -2,6 +2,7 @@ import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { MapContainer, TileLayer, Polygon, useMapEvents, LayersControl } from 'react-leaflet';
 import {
   getAdminCourses,
   createAdminCourse,
@@ -13,27 +14,58 @@ import {
   activateAdminSession,
   deactivateAdminSession,
   deleteAdminSession,
+  getAdminCurrentSessionCodes,
+  startAdminSessionRotation,
+  stopAdminSessionRotation,
   patchAdminSessionAttendancePaused,
   patchCourseAssignLecturer,
   getAdminSettings,
+  patchAdminGeofenceBufferCap,
   getAdminLecturers,
   createAdminLecturer,
   deleteAdminLecturer,
-  getCurrentBlePayload,
+  getPolygonPresets,
+  createPolygonPreset,
+  deletePolygonPreset,
 } from '../api';
 import { readStoredStudent } from '../utils/safeStorage';
 
 const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 const DAY_ORDER = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+const MAP_CENTER = [7.2548, 80.5974];
 const OWNER_ALL_LABEL = 'All lecturers — show every course';
 const OWNER_LISTBOX_ID = 'admin-catalog-owner-listbox';
 const MAX_COURSE_LECTURERS = 5;
 const ASSIGN_OWNER_SEARCH_LIMIT = 8;
 
+const OSM_TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
 /** Esri World Imagery — use per Esri terms of service for your deployment. */
+const SATELLITE_TILE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const SATELLITE_ATTRIBUTION = 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community';
 
+function BasemapLayerControl() {
+  return (
+    <LayersControl position="topright">
+      <LayersControl.BaseLayer checked name="Street map">
+        <TileLayer attribution={OSM_ATTRIBUTION} url={OSM_TILE_URL} />
+      </LayersControl.BaseLayer>
+      <LayersControl.BaseLayer name="Satellite">
+        <TileLayer attribution={SATELLITE_ATTRIBUTION} url={SATELLITE_TILE_URL} />
+      </LayersControl.BaseLayer>
+    </LayersControl>
+  );
+}
 
+function MapClickCapture({ onAddPoint }) {
+  useMapEvents({
+    click(e) {
+      onAddPoint({ lat: e.latlng.lat, lng: e.latlng.lng });
+    },
+  });
+  return null;
+}
 
 function sessionDistanceMinutes(session) {
   const now = new Date();
@@ -64,21 +96,6 @@ export default function AdminDashboard() {
   const [selectedPresetIds, setSelectedPresetIds] = useState([]);
   const [runningSessionCodes, setRunningSessionCodes] = useState({});
   const [loading, setLoading] = useState(true);
-  // ── Removed feature stubs (GPS/polygon/PIN) ──
-  const [polygonPresets] = useState([]);
-  const [sessionCodes] = useState([]);
-  const [geofenceBufferCapM] = useState(5);
-  const [geofenceBufferDraftM, setGeofenceBufferDraftM] = useState(5);
-  const [presetDrawPolygons] = useState([]);
-  const [presetDrawActiveIdx] = useState(0);
-  const setGeofenceBufferCapM = () => {};
-  const setPolygonPresets = () => {};
-  const loadPolygonPresets = () => {};
-  const onSaveGeofenceBuffer = async () => {};
-  const setPresetDrawActiveIdx = () => {};
-  const setPresetDrawPolygons = () => {};
-  const setPresetNewName = () => {};
-  // ─────────────────────────────────────────────
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -99,10 +116,15 @@ export default function AdminDashboard() {
   const ownerLecturerBlurTimer = useRef(null);
   const ownerLecturerComboboxRef = useRef(null);
   const assignOwnerPanelRef = useRef(null);
+  const [polygonPresets, setPolygonPresets] = useState([]);
   const [presetTabName, setPresetTabName] = useState('');
+  const [presetDrawPolygons, setPresetDrawPolygons] = useState([[]]);
+  const [presetDrawActiveIdx, setPresetDrawActiveIdx] = useState(0);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [presetPickerLoading, setPresetPickerLoading] = useState(false);
   const [presetPickerError, setPresetPickerError] = useState('');
+  const [geofenceBufferCapM, setGeofenceBufferCapM] = useState(5);
+  const [geofenceBufferDraftM, setGeofenceBufferDraftM] = useState(5);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const presetDropdownRef = useRef(null);
 
@@ -152,12 +174,21 @@ export default function AdminDashboard() {
     setLecturers(resp.items || []);
   }, [lecturerSearch, isAdmin]);
 
+  const loadPolygonPresets = useCallback(async () => {
+    const resp = await getPolygonPresets();
+    if (resp.error) {
+      setError(resp.error);
+      return;
+    }
+    setPolygonPresets(resp.items || []);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     async function bootstrap() {
       setLoading(true);
       try {
-        const tasks = [loadCourses(), loadSessions()()];
+        const tasks = [loadCourses(), loadSessions(), loadPolygonPresets()];
         if (isAdmin) {
           tasks.push(loadLecturers());
           tasks.push(loadLecturerDirectory());
@@ -173,7 +204,7 @@ export default function AdminDashboard() {
     }
     bootstrap();
     return () => { cancelled = true; };
-  }, [loadCourses, loadSessions, loadLecturers, loadLecturerDirectory, isAdmin]);
+  }, [loadCourses, loadSessions, loadPolygonPresets, loadLecturers, loadLecturerDirectory, isAdmin]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -184,6 +215,7 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!isAdmin) return;
     if (activeTab === 'lecturers') loadLecturers();
+    if (activeTab === 'presets') loadPolygonPresets();
     if (activeTab === 'settings') {
       (async () => {
         setSettingsLoading(true);
@@ -191,11 +223,15 @@ export default function AdminDashboard() {
         if (resp.error) {
           setError(resp.error);
         } else {
-          }
+          const value = Number(resp.geofenceBufferCapM);
+          const safe = Number.isFinite(value) ? Math.max(0, Math.min(30, Math.round(value))) : 5;
+          setGeofenceBufferCapM(safe);
+          setGeofenceBufferDraftM(safe);
+        }
         setSettingsLoading(false);
       })();
     }
-  }, [activeTab, isAdmin, loadLecturers]);
+  }, [activeTab, isAdmin, loadLecturers, loadPolygonPresets]);
 
   const sortedFilteredSessions = useMemo(() => {
     const q = sessionSearch.trim().toLowerCase();
@@ -325,7 +361,7 @@ export default function AdminDashboard() {
     async function refreshRunningCodes() {
       if (activeTab !== 'sessions') return;
       try {
-        const resp = { items: [] };
+        const resp = await getAdminCurrentSessionCodes();
         if (cancelled) return;
         if (!resp.error) {
           const next = {};
@@ -503,7 +539,7 @@ export default function AdminDashboard() {
       setPresetPickerError('');
       setPresetPickerLoading(true);
       try {
-        const resp = { items: [] };
+        const resp = await getPolygonPresets();
         if (resp.error) {
           setPresetPickerError(String(resp.error));
         } else {
@@ -615,7 +651,7 @@ export default function AdminDashboard() {
   const onStartRotation = async (sessionId) => {
     setWorking(true);
     setError('');
-    const resp = { success: true };
+    const resp = await startAdminSessionRotation(sessionId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Code rotation started.');
@@ -627,7 +663,7 @@ export default function AdminDashboard() {
   const onStopRotation = async (sessionId) => {
     setWorking(true);
     setError('');
-    const resp = { success: true };
+    const resp = await stopAdminSessionRotation(sessionId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Code rotation paused.');
@@ -690,11 +726,27 @@ export default function AdminDashboard() {
     if (!ok) return;
     setWorking(true);
     setError('');
-    const resp = { success: true };
+    const resp = await deletePolygonPreset(presetId);
     if (resp.error) setError(resp.error);
     else {
       setMessage('Preset deleted.');
       await loadPolygonPresets();
+    }
+    setWorking(false);
+  };
+
+  const onSaveGeofenceBuffer = async () => {
+    setWorking(true);
+    setError('');
+    const resp = await patchAdminGeofenceBufferCap(geofenceBufferDraftM);
+    if (resp.error) {
+      setError(resp.error);
+    } else {
+      const value = Number(resp.geofenceBufferCapM);
+      const safe = Number.isFinite(value) ? Math.max(0, Math.min(30, Math.round(value))) : geofenceBufferDraftM;
+      setGeofenceBufferCapM(safe);
+      setGeofenceBufferDraftM(safe);
+      setMessage('Geofence buffer updated.');
     }
     setWorking(false);
   };
@@ -738,7 +790,7 @@ export default function AdminDashboard() {
     }
     setWorking(true);
     setError('');
-    const resp = { success: true };
+    const resp = await createPolygonPreset({ name, polygons: rings });
     if (resp.error) setError(resp.error);
     else {
       setMessage('Preset created.');
@@ -1151,7 +1203,12 @@ export default function AdminDashboard() {
                   </div>
                 </div>
                 <div className="map-wrap map-wrap--below-preset-dropdown">
-                  <div className="map-disabled"><p style={{textAlign:"center",padding:"2rem",color:"#888"}}>Map view disabled</p></div>
+                  <MapContainer center={MAP_CENTER} zoom={16} scrollWheelZoom style={{ height: 320, width: '100%' }}>
+                    <BasemapLayerControl />
+                    {selectedPresetPolygons.map((poly, idx) => (poly.length >= 3 ? (
+                      <Polygon key={`selected-preset-poly-${idx}`} positions={poly.map((p) => [p.lat, p.lng])} pathOptions={{ color: idx % 2 === 0 ? '#2563eb' : '#7b61ff' }} />
+                    ) : null))}
+                  </MapContainer>
                 </div>
                 <button className="primary-btn" type="button" onClick={onCreateSession} disabled={working || !selectedCourseId}>Create session</button>
               </div>
@@ -1340,7 +1397,13 @@ export default function AdminDashboard() {
                   </div>
                 </div>
                 <div className="map-wrap">
-                  <div className="map-disabled"><p style={{textAlign:"center",padding:"2rem",color:"#888"}}>Map view disabled</p></div>
+                  <MapContainer center={MAP_CENTER} zoom={16} scrollWheelZoom style={{ height: 320, width: '100%' }}>
+                    <BasemapLayerControl />
+                    <MapClickCapture onAddPoint={presetDrawAddPoint} />
+                    {presetDrawPolygons.map((poly, idx) => (poly.length >= 3 ? (
+                      <Polygon key={`preset-draw-${idx}`} positions={poly.map((p) => [p.lat, p.lng])} pathOptions={{ color: idx === presetDrawActiveIdx ? '#7b61ff' : '#2563eb' }} />
+                    ) : null))}
+                  </MapContainer>
                 </div>
                 <button className="primary-btn" type="button" onClick={onSavePresetFromTab} disabled={working}>Save preset</button>
               </div>
