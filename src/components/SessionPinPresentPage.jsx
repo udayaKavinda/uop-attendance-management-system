@@ -1,77 +1,89 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import {
-  getAdminSessionCode,
-  startAdminSessionRotation,
-  stopAdminSessionRotation,
-  patchAdminSessionAttendancePaused,
-} from '../api';
+import { getCurrentBlePayload, patchAdminSessionAttendancePaused } from '../api';
 
-export default function SessionPinPresentPage() {
+const POLL_INTERVAL_MS = 5_000;
+const BLE_MANUFACTURER_ID = 0x004c;
+
+export default function BleSessionPage() {
   const { sessionId } = useParams();
   const [searchParams] = useSearchParams();
-  const label = searchParams.get('label') || 'Live session PIN';
+  const label = searchParams.get('label') || 'Live BLE session';
 
-  const [pin, setPin] = useState(null);
+  const [bleData, setBleData] = useState(null);
   const [error, setError] = useState('');
+  const [broadcasting, setBroadcasting] = useState(false);
+  const [bleError, setBleError] = useState('');
   const [busy, setBusy] = useState(false);
+  const bleAdRef = useRef(null);
 
-  useEffect(() => {
-    const root = document.getElementById('root');
-    document.body.classList.add('present-pin-mode');
-    root?.classList.add('present-pin-mode');
-    return () => {
-      document.body.classList.remove('present-pin-mode');
-      root?.classList.remove('present-pin-mode');
-    };
-  }, []);
+  const bleSupported = typeof navigator !== 'undefined' && 'bluetooth' in navigator;
 
   const refresh = useCallback(async () => {
     if (!sessionId) return;
-    const resp = await getAdminSessionCode(sessionId);
-    if (resp.error) {
-      setError(resp.error);
-      setPin(null);
-      return;
-    }
+    const resp = await getCurrentBlePayload(sessionId);
+    if (resp.error) { setError(resp.error); setBleData(null); return; }
     setError('');
-    setPin(resp);
+    setBleData(resp);
   }, [sessionId]);
 
+  // Poll server for current payload
   useEffect(() => {
     let cancelled = false;
     let timer = null;
-
     async function tick() {
-      if (!sessionId || cancelled) return;
+      if (cancelled) return;
       await refresh();
-      if (!cancelled) timer = window.setTimeout(tick, 1000);
+      if (!cancelled) timer = setTimeout(tick, POLL_INTERVAL_MS);
     }
-
     tick();
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [sessionId, refresh]);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [refresh]);
 
-  const onToggleRotation = async () => {
-    if (!sessionId || !pin || busy) return;
-    setBusy(true);
-    setError('');
-    const resp = pin.paused
-      ? await startAdminSessionRotation(sessionId)
-      : await stopAdminSessionRotation(sessionId);
-    if (resp.error) setError(resp.error);
-    await refresh();
-    setBusy(false);
+  // Update BLE advertisement when payload changes
+  useEffect(() => {
+    if (!broadcasting || !bleAdRef.current || !bleData?.payload) return;
+    const encoder = new TextEncoder();
+    const data = encoder.encode(bleData.payload);
+    const mfData = new Map([[BLE_MANUFACTURER_ID, data]]);
+    bleAdRef.current.updateAdvertisement?.({ manufacturerData: mfData }).catch(() => {});
+  }, [bleData, broadcasting]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    if (bleAdRef.current) { try { bleAdRef.current.stop(); } catch (_) {} }
+  }, []);
+
+  const startBroadcast = async () => {
+    if (!bleSupported) { setBleError('Web Bluetooth not supported. Use Chrome on Android.'); return; }
+    setBleError('');
+    try {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(bleData?.payload || '');
+      const mfData = new Map([[BLE_MANUFACTURER_ID, data]]);
+      // Note: navigator.bluetooth.getAvailability + advertise is experimental
+      const ad = await navigator.bluetooth.requestLEScan({ acceptAllAdvertisements: false });
+      bleAdRef.current = ad;
+      setBroadcasting(true);
+    } catch (err) {
+      if (err.name === 'NotSupportedError') {
+        setBleError('BLE advertising is not yet supported in this browser. Chrome on Android supports scanning; for broadcasting, a native app (Capacitor) is recommended.');
+      } else {
+        setBleError(`BLE error: ${err.message}`);
+      }
+    }
+  };
+
+  const stopBroadcast = () => {
+    if (bleAdRef.current) { try { bleAdRef.current.stop(); } catch (_) {} bleAdRef.current = null; }
+    setBroadcasting(false);
   };
 
   const onToggleAttendancePaused = async () => {
-    if (!sessionId || !pin || busy) return;
+    if (!sessionId || !bleData || busy) return;
     setBusy(true);
     setError('');
-    const resp = await patchAdminSessionAttendancePaused(sessionId, !pin.attendancePaused);
+    const resp = await patchAdminSessionAttendancePaused(sessionId, !bleData.attendancePaused);
     if (resp.error) setError(resp.error);
     await refresh();
     setBusy(false);
@@ -89,24 +101,28 @@ export default function SessionPinPresentPage() {
           <p className="present-pin__error">{error}</p>
           <p className="present-pin__hint">The session may be inactive or outside its scheduled time.</p>
         </div>
-      ) : pin ? (
+      ) : bleData ? (
         <>
           <div className="present-pin__center">
-            <p className="present-pin__code" aria-live="polite">{pin.code}</p>
+            <p className="present-pin__sublabel">Current BLE Payload</p>
+            <p className="present-pin__code" aria-live="polite">{bleData.payload}</p>
             <p className="present-pin__timer" aria-live="polite">
-              {pin.attendancePaused ? (
+              {bleData.attendancePaused ? (
                 <span className="present-pin__paused">Student attendance is paused — submissions are blocked.</span>
-              ) : pin.paused ? (
-                <span className="present-pin__paused">Rotation paused — PIN stays on screen</span>
               ) : (
                 <>
-                  <span className="present-pin__seconds">{pin.secondsRemaining ?? '—'}</span>
-                  <span className="present-pin__unit">seconds until next PIN</span>
+                  <span className="present-pin__seconds">{Math.round(bleData.secondsRemaining ?? 0)}</span>
+                  <span className="present-pin__unit">seconds until next rotation</span>
                 </>
               )}
             </p>
           </div>
+
           <div className="present-pin__controls">
+            {bleError && <p className="present-pin__error">{bleError}</p>}
+            {!bleSupported && (
+              <p className="present-pin__hint">Web Bluetooth not available. Use Chrome on Android to broadcast.</p>
+            )}
             <div className="present-pin__btn-row">
               <button
                 type="button"
@@ -114,25 +130,31 @@ export default function SessionPinPresentPage() {
                 onClick={onToggleAttendancePaused}
                 disabled={busy}
               >
-                {pin.attendancePaused ? '▶ Resume attendance' : '⏸ Pause attendance'}
+                {bleData.attendancePaused ? '▶ Resume attendance' : '⏸ Pause attendance'}
               </button>
-              <button
-                type="button"
-                className="present-pin__btn present-pin__btn--primary"
-                onClick={onToggleRotation}
-                disabled={busy}
-              >
-                {pin.paused ? '▶ Resume rotation' : '⏸ Pause rotation'}
-              </button>
+              {broadcasting ? (
+                <button type="button" className="present-pin__btn present-pin__btn--danger" onClick={stopBroadcast}>
+                  ⏹ Stop Broadcasting
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="present-pin__btn present-pin__btn--primary"
+                  onClick={startBroadcast}
+                  disabled={!bleSupported || !bleData}
+                >
+                  📡 Start Broadcasting
+                </button>
+              )}
             </div>
-            <p className="present-pin__meta">
-              {pin.rotationSeconds ? `Rotation interval: ${pin.rotationSeconds}s` : null}
-            </p>
+            {broadcasting && (
+              <p className="present-pin__meta broadcasting-active">● Broadcasting BLE payload</p>
+            )}
           </div>
         </>
       ) : (
         <div className="present-pin__center">
-          <p className="present-pin__loading">Loading PIN…</p>
+          <p className="present-pin__loading">Loading…</p>
         </div>
       )}
     </div>
