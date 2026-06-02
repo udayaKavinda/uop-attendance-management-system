@@ -1,17 +1,12 @@
 const LectureSession = require('../models/LectureSession');
-const lectureCode = require('./lectureCode');
 const { isNonRecurringExpired } = require('./schedule');
-
-function sessionCodeKey(sessionId) {
-  return `session:${sessionId}`;
-}
 
 async function deactivateExpiredNonRecurringSessions(filter = {}) {
   const candidates = await LectureSession.find({ ...filter, active: true, recurring: false, deleted: false });
   const expiredIds = candidates.filter((s) => isNonRecurringExpired(s)).map((s) => s._id);
   if (expiredIds.length === 0) return;
   await LectureSession.updateMany({ _id: { $in: expiredIds } }, { $set: { active: false } });
-  expiredIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
+  // BLE token rotation is stateless (epoch-based) — no in-memory state to clean up
 }
 
 /**
