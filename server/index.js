@@ -137,7 +137,6 @@ function checkScheduleWindow(sessionConfig) {
 }
 
 
-}
 
 function localYmd(now = new Date()) {
   const y = now.getFullYear();
