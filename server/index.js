@@ -14,7 +14,6 @@ const Person = require('./models/Person');
 const Attendance = require('./models/Attendance');
 const Course = require('./models/Course');
 const LectureSession = require('./models/LectureSession');
-const PolygonPreset = require('./models/PolygonPreset');
 const lectureCode = require('./lib/lectureCode');
 const bluetoothCode = require('./lib/bluetoothCode');
 const { startNonRecurringExpiryJob } = require('./lib/sessionExpiry');
@@ -25,8 +24,6 @@ const {
   isNonRecurringExpired,
 } = require('./lib/schedule');
 
-const MAX_POLYGONS_PER_SESSION = 50;
-const MAX_POLYGON_POINTS = 1000;
 const MAX_LECTURE_PIN_LENGTH = 16;
 const MAX_COURSE_LECTURERS = 5;
 const BOOTSTRAP_ADMIN_EMAIL = 'udayakavindadev@gmail.com';
@@ -125,20 +122,6 @@ function formatAttendanceTableColumnLabel(session, minAttendanceDateYmd) {
   return `${session.lectureDay} ${timeRangeForColumnLabel(session)}`.trim();
 }
 
-function isPointInsidePolygon(lat, lng, polygon) {
-  if (!Array.isArray(polygon) || polygon.length < 3) return false;
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i].lng;
-    const yi = polygon[i].lat;
-    const xj = polygon[j].lng;
-    const yj = polygon[j].lat;
-    const intersect = ((yi > lat) !== (yj > lat))
-      && (lng < ((xj - xi) * (lat - yi)) / ((yj - yi) || Number.EPSILON) + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
 
 function checkScheduleWindow(sessionConfig) {
   const now = new Date();
@@ -152,11 +135,6 @@ function checkScheduleWindow(sessionConfig) {
     return { ok: false, reason: 'Attendance allowed only within the configured lecture time' };
   }
   return { ok: true };
-}
-
-function isPointInsideAnyPolygon(lat, lng, polygons = []) {
-  if (!Array.isArray(polygons) || polygons.length === 0) return false;
-  return polygons.some((polygon) => isPointInsidePolygon(lat, lng, polygon));
 }
 
 
@@ -318,19 +296,6 @@ function normalizeLecturerIds(rawLecturerIds) {
 }
 
 
-function normalizePolygonsInput(polygons) {
-  if (!Array.isArray(polygons)) return [];
-  return polygons
-    .slice(0, MAX_POLYGONS_PER_SESSION)
-    .map((poly) => (Array.isArray(poly)
-      ? poly
-        .slice(0, MAX_POLYGON_POINTS)
-        .map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }))
-        .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)
-          && p.lat >= -90 && p.lat <= 90 && p.lng >= -180 && p.lng <= 180)
-      : []))
-    .filter((poly) => poly.length >= 3);
-}
 
 function isValidLatLng(lat, lng) {
   const la = Number(lat);
@@ -440,6 +405,20 @@ app.use(session({
 }));
 app.use(passport.initialize());
 app.use(passport.session());
+
+if (process.env.NODE_ENV === 'test') {
+  app.use((req, _res, next) => {
+    const raw = req.headers['x-test-user'];
+    if (raw) {
+      try {
+        const u = JSON.parse(raw);
+        req.user = u;
+        req.isAuthenticated = () => true;
+      } catch (_) {}
+    }
+    next();
+  });
+}
 
 function limiterKeyByUserOrIp(req) {
   const uid = req?.user?._id ? String(req.user._id) : '';
@@ -581,27 +560,28 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
   );
 }
 
-mongoose
-  .connect(process.env.MONGO_URI || 'mongodb://localhost:27017/attendance')
-  .then(async () => {
-    console.log('🗄  MongoDB connected');
-    try {
-      await LectureSession.syncIndexes();
-      await Attendance.syncIndexes();
-      await Person.syncIndexes();
-      await Course.syncIndexes();
-      await PolygonPreset.syncIndexes();
-    } catch (e) {
-      console.warn('Index sync:', e.message);
-    }
-    try {
-      await ensureBootstrapAdmin();
-    } catch (e) {
-      console.warn('Bootstrap admin:', e.message);
-    }
-    startNonRecurringExpiryJob();
-  })
-  .catch((err) => console.error('Mongo connection error', err));
+if (require.main === module) {
+  mongoose
+    .connect(process.env.MONGO_URI || 'mongodb://localhost:27017/attendance')
+    .then(async () => {
+      console.log('🗄  MongoDB connected');
+      try {
+        await LectureSession.syncIndexes();
+        await Attendance.syncIndexes();
+        await Person.syncIndexes();
+        await Course.syncIndexes();
+      } catch (e) {
+        console.warn('Index sync:', e.message);
+      }
+      try {
+        await ensureBootstrapAdmin();
+      } catch (e) {
+        console.warn('Bootstrap admin:', e.message);
+      }
+      startNonRecurringExpiryJob();
+    })
+    .catch((err) => console.error('Mongo connection error', err));
+}
 
 app.get('/api/healthz', async (req, res) => {
   const mongoState = mongoose.connection?.readyState === 1 ? 'ok' : 'down';
@@ -850,7 +830,7 @@ app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
     const course = access.course;
     if (!course.active) return res.status(404).json({ error: 'Course not found' });
     const {
-      lectureDay, startTime, endTime, recurring, rotationEnabled, polygons,
+      lectureDay, startTime, endTime, recurring, rotationEnabled,
     } = req.body || {};
     const allowedDays = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
     if (!allowedDays.includes(String(lectureDay || '').toUpperCase())) {
@@ -861,7 +841,6 @@ app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
     if (s === null || e === null || s >= e) {
       return res.status(400).json({ error: 'Invalid startTime/endTime (HH:mm)' });
     }
-    const normalizedPolygons = normalizePolygonsInput(polygons);
     const sameDaySessions = await LectureSession.find({
       course: course._id,
       lectureDay: String(lectureDay).toUpperCase(),
@@ -884,7 +863,6 @@ app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
       rotationEnabled: Boolean(rotationEnabled),
       rotationPaused: !Boolean(rotationEnabled),
       rotationOccurrenceKey: '',
-      polygons: normalizedPolygons,
       active: true,
     });
     return res.json({ success: true, session: created });
@@ -1266,10 +1244,6 @@ app.post('/api/record-attendance', studentRecordLimiter, async (req, res) => {
     }
     const schedule = checkScheduleWindow(resolved.session);
     if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    if (!isPointInsideAnyPolygon(Number(lat), Number(lng), resolved.session.polygons || [])) {
-      return res.status(400).json({ error: 'You are outside the allowed attendance area' });
-    }
-
     const normalizedCode = String(submitted).replace(/\s/g, '');
     const attendanceDate = localYmd();
     const existing = await Attendance.findOne({
@@ -1574,69 +1548,22 @@ app.delete('/api/admin/lecturers/:id', async (req, res) => {
   }
 });
 
-app.get('/api/admin/polygon-presets', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const items = await PolygonPreset.find({}).sort({ name: 1 });
-    return res.json({ items });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
 
-app.post('/api/admin/polygon-presets', async (req, res) => {
-  try {
-    const auth = await sessionAdminAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const name = String(req.body.name || '').trim();
-    const polygons = normalizePolygonsInput(req.body.polygons);
-    if (!name) return res.status(400).json({ error: 'name is required' });
-    const preset = await PolygonPreset.create({ name, polygons });
-    return res.json({ success: true, preset });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
-
-app.patch('/api/admin/polygon-presets/:id', async (req, res) => {
-  try {
-    const auth = await sessionAdminAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const preset = await PolygonPreset.findById(req.params.id);
-    if (!preset) return res.status(404).json({ error: 'Preset not found' });
-    const { name, polygons } = req.body || {};
-    if (name !== undefined) preset.name = String(name).trim();
-    if (polygons !== undefined) preset.polygons = normalizePolygonsInput(polygons);
-    await preset.save();
-    return res.json({ success: true, preset });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
-
-app.delete('/api/admin/polygon-presets/:id', async (req, res) => {
-  try {
-    const auth = await sessionAdminAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    await PolygonPreset.deleteOne({ _id: req.params.id });
-    return res.json({ success: true });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
-
-const PORT = process.env.PORT || 5000;
-const httpServer = app.listen(PORT, () => {
-  console.log(`🚀 Server listening on ${PORT}`);
-});
-
-function shutdown(signal) {
-  console.log(`[shutdown] received ${signal}`);
-  httpServer.close(() => {
-    mongoose.connection.close(false).finally(() => process.exit(0));
+if (require.main === module) {
+  const PORT = process.env.PORT || 5000;
+  const httpServer = app.listen(PORT, () => {
+    console.log(`🚀 Server listening on ${PORT}`);
   });
-  setTimeout(() => process.exit(1), 10_000).unref();
+
+  function shutdown(signal) {
+    console.log(`[shutdown] received ${signal}`);
+    httpServer.close(() => {
+      mongoose.connection.close(false).finally(() => process.exit(0));
+    });
+    setTimeout(() => process.exit(1), 10_000).unref();
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+
+module.exports = app;

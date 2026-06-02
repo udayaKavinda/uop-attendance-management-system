@@ -163,27 +163,6 @@ export async function deleteAdminLecturer(lecturerId) {
   });
 }
 
-export async function getPolygonPresets() {
-  const data = await safeFetchJson(`${apiBase()}/api/admin/polygon-presets`);
-  if (data.error) return { error: data.error, items: [] };
-  const raw = data.items ?? data.data;
-  const items = Array.isArray(raw) ? raw : (Array.isArray(data) ? data : []);
-  return { items };
-}
-
-export async function createPolygonPreset(payload) {
-  return safeFetchJson(`${apiBase()}/api/admin/polygon-presets`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function deletePolygonPreset(presetId) {
-  return safeFetchJson(`${apiBase()}/api/admin/polygon-presets/${encodeURIComponent(presetId)}`, {
-    method: 'DELETE',
-  });
-}
 
 export async function deleteAdminCourse(courseId) {
   return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}`, {
