@@ -55,8 +55,9 @@ export default function LecturerDashboard() {
   }, [bleState?.token]); // reset countdown when token changes
 
   // Update BLE advertisement when token rotates (while broadcasting)
+  // Use isAdvertising.current (ref) not broadcasting (state) to avoid stale closure
   useEffect(() => {
-    if (broadcasting && bleState?.token && bleState?.deviceName) {
+    if (isAdvertising.current && bleState?.token && bleState?.deviceName) {
       updateAdvertisement(bleState.deviceName, bleState.token);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps

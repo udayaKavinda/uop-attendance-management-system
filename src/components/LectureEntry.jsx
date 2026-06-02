@@ -233,15 +233,16 @@ export default function LectureEntry() {
       if (tokenFound) return;
       const mfData = evt.manufacturerData?.get(0xFFFF);
       if (!mfData) return;
-
+      // Set flag synchronously before any await to prevent duplicate submissions
       tokenFound = true;
       clearTimeout(timeout);
+      // Stop watching immediately before async work
+      try { device.removeEventListener('advertisementreceived', handleAdvertisement); } catch (_) {}
       ac.abort();
       cancelScanRef.current = null;
 
-      const token = Array.from(new Uint8Array(mfData.buffer))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
+      // Decode manufacturer bytes as UTF-8 — matches how LecturerDashboard encodes the token
+      const token = new TextDecoder().decode(mfData.buffer instanceof ArrayBuffer ? mfData.buffer : mfData).trim().replace(/\0/g, '');
 
       setBtPhase('submitting');
       const resp = await submitBluetoothAttendance({ courseId, token });
