@@ -888,7 +888,7 @@ app.get('/api/admin/sessions', async (req, res) => {
 });
 
 
-// ── Bluetooth admin routes ────────────────────────────────────────────────────
+// ── Bluetooth admin routes ────────────────────────────────────────────
 
 app.patch('/api/admin/sessions/:sessionId/bluetooth/start', async (req, res) => {
   try {
@@ -993,11 +993,11 @@ app.get('/api/attendance-status', async (req, res) => {
 // ──────────────────────────────────────────────────────────────────────────
 
 
-// ─── BLE Routes ───────────────────────────────────────────────────────────────
+// ─── BLE Routes ────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── Bluetooth student routes ──────────────────────────────────────────────────
+// ── Bluetooth student routes ────────────────────────────────────────────
 
 // Returns the BLE device name for the active session — student needs this to
 // know which device to scan for.
@@ -1080,7 +1080,7 @@ app.post('/api/bluetooth-attendance', studentRecordLimiter, async (req, res) => 
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────────
 
 
 // Lecturer: get attendance records for a specific session
