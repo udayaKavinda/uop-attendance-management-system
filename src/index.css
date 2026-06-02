@@ -418,16 +418,6 @@ body.present-pin-mode {
   background: linear-gradient(180deg, #ffffff 0%, #fafbff 100%);
 }
 
-.admin-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.45rem;
-  background: #eef0f5;
-  border-radius: var(--radius-md);
-  padding: 0.4rem;
-  margin-bottom: 1rem;
-}
-
 .tab-btn {
   border: 0;
   border-radius: 12px;
@@ -469,6 +459,7 @@ body.present-pin-mode {
   margin-top: 0;
   white-space: nowrap;
 }
+
 
 .course-list {
   display: grid;
@@ -1106,10 +1097,6 @@ body.present-pin-mode {
   .course-add-grid {
     grid-template-columns: 1fr;
   }
-
-  .admin-tabs {
-    grid-template-columns: 1fr;
-  }
 }
 
 .site-footer {
@@ -1119,24 +1106,19 @@ body.present-pin-mode {
   padding: 0.7rem 1rem 1.05rem;
   width: min(1120px, calc(100% - 1.5rem));
   border: 0;
+  border-top: 1px solid var(--app-border);
   border-radius: 0;
   background: transparent;
   backdrop-filter: none;
   box-shadow: none;
   text-align: center;
-  filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.28));
 }
 
 .site-footer__text {
   margin: 0;
-  color: #ffffff;
+  color: var(--app-muted);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.4;
   letter-spacing: 0.01em;
-  text-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.28),
-    0 2px 0 rgba(0, 0, 0, 0.3),
-    0 4px 10px rgba(0, 0, 0, 0.45);
-  transform: perspective(520px) translateZ(0.1px);
 }
