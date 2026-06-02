@@ -296,7 +296,7 @@ export default function LectureEntry() {
             <div className="student-empty__icon" aria-hidden>📅</div>
             <p className="student-empty__title">No lectures running right now</p>
             <p className="student-empty__text">
-              When a session is active for your course, it will appear here automatically. This list refreshes every few seconds.
+              When a session is active for your course, it will appear here automatically. This list refreshes every 10 seconds.
             </p>
           </div>
         ) : (

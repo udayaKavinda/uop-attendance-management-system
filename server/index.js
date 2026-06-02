@@ -1423,7 +1423,6 @@ app.get('/api/bluetooth-target', async (req, res) => {
     }
     return res.json({
       deviceName: resolved.session.bluetoothDeviceName,
-      sessionId: resolved.session._id,
     });
   } catch (err) {
     return respondError(res, err);
