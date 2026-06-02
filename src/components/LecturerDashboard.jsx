@@ -140,7 +140,7 @@ export default function LecturerDashboard() {
       setAdError(
         'BLE advertising is not supported in this browser. ' +
         'On Android Chrome, enable "Experimental Web Platform features" at chrome://flags, ' +
-        'or use the native Capacitor app for reliable broadcasting.'
+        'or use a dedicated BLE beacon device for reliable broadcasting.'
       );
       return;
     }
