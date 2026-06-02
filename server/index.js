@@ -1,4 +1,5 @@
 require('dotenv').config();
+const crypto = require('crypto');
 
 const express = require('express');
 const mongoose = require('mongoose');
@@ -153,35 +154,8 @@ function currentOccurrenceKey(now = new Date()) {
   return localYmd(now);
 }
 
-/** Mark this Passport session as having proven PIN knowledge for (sessionId, today). */
-function rememberSessionPinTrust(req, sessionId) {
-  if (!req || !req.session) return;
-  const map = req.session.verifiedSessions || {};
-  map[String(sessionId)] = currentOccurrenceKey();
-  req.session.verifiedSessions = map;
-}
 
-/** True when the user already verified the PIN for this lecture-session today. */
-function hasSessionPinTrust(req, sessionId) {
-  if (!req || !req.session || !req.session.verifiedSessions) return false;
-  return req.session.verifiedSessions[String(sessionId)] === currentOccurrenceKey();
-}
 
-async function syncSessionCodeMode(sessionItem, now = new Date()) {
-  const occurrence = currentOccurrenceKey(now);
-  const codeKey = sessionCodeKey(sessionItem._id);
-  if (sessionItem.rotationOccurrenceKey !== occurrence) {
-    sessionItem.rotationOccurrenceKey = occurrence;
-    sessionItem.attendancePaused = false;
-    lectureCode.resetCode(codeKey);
-    await sessionItem.save();
-  }
-  if (sessionItem.rotationEnabled && !sessionItem.rotationPaused) {
-    lectureCode.resumeCode(codeKey);
-  } else {
-    lectureCode.pauseCode(codeKey);
-  }
-}
 
 function isSessionRunningNow(sessionItem, now = new Date()) {
   if (!sessionItem || !sessionItem.active || sessionItem.deleted) return false;
@@ -212,7 +186,6 @@ async function resolveActiveSessionForCourse(courseId) {
     return start !== null && end !== null && currentMinutes >= start && currentMinutes <= end;
   });
   if (!active) return { error: 'No active lecture session for this course now' };
-  await syncSessionCodeMode(active, now);
   return { course, session: active };
 }
 
@@ -297,24 +270,8 @@ function normalizeLecturerIds(rawLecturerIds) {
 
 
 
-function isValidLatLng(lat, lng) {
-  const la = Number(lat);
-  const ln = Number(lng);
-  return Number.isFinite(la) && Number.isFinite(ln)
-    && la >= -90 && la <= 90 && ln >= -180 && ln <= 180;
-}
 
-function isValidAccuracy(value) {
-  if (value === undefined || value === null || value === '') return true;
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 && n <= 1_000_000;
-}
 
-function isValidPin(pin) {
-  if (typeof pin !== 'string' && typeof pin !== 'number') return false;
-  const stripped = String(pin).replace(/\s/g, '');
-  return stripped.length > 0 && stripped.length <= MAX_LECTURE_PIN_LENGTH;
-}
 
 const app = express();
 
@@ -876,17 +833,13 @@ app.delete('/api/admin/sessions/:sessionId', async (req, res) => {
     const auth = await sessionStaffAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
-    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    if (!sessionItem || !sessionItem.active) return res.status(404).json({ error: 'Session not found or inactive' });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    sessionItem.active = false;
-    sessionItem.deleted = true;
-    await sessionItem.save();
-    lectureCode.removeKey(sessionCodeKey(sessionItem._id));
-    return res.json({ success: true });
-  } catch (err) {
-    return respondError(res, err);
-  }
+    if (!isSessionRunningNow(sessionItem)) return res.status(400).json({ error: 'Session is not running now' });
+    const state = currentBleState(String(sessionItem._id));
+    return res.json({ sessionId: sessionItem._id, attendancePaused: Boolean(sessionItem.attendancePaused), ...state });
+  } catch (err) { return respondError(res, err); }
 });
 
 app.patch('/api/admin/sessions/:sessionId/activate', async (req, res) => {
@@ -1140,92 +1093,17 @@ app.get('/api/attendance-status', async (req, res) => {
   try {
     const auth = await sessionStudentAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const courseId = String(req.query.courseId || '').trim();
-    if (!courseId) return res.status(400).json({ error: 'courseId query parameter is required' });
-
-    const studentPk = auth.person._id;
-    const resolved = await resolveActiveSessionForCourse(courseId);
-    if (resolved.error) {
-      return res.json({
-        studentId: studentPk,
-        courseId,
-        sessionId: null,
-        attended: false,
-        attendanceId: null,
-        attendedAt: null,
-      });
-    }
-
-    const attendanceDate = localYmd();
-    const attendance = await Attendance.findOne({
-      student: studentPk,
-      course: courseId,
-      session: resolved.session._id,
-      attendanceDate,
-    }).sort({ timestamp: -1 });
-
-    return res.json({
-      studentId: studentPk,
-      courseId,
-      sessionId: resolved.session._id,
-      attended: Boolean(attendance),
-      attendanceId: attendance?._id || null,
-      attendedAt: attendance?.timestamp || null,
-    });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
-
-/** PIN + schedule only (student). Starts multi-sample GPS flow on the client when PIN is valid. */
-app.post('/api/verify-lecture-pin', studentPinLimiter, async (req, res) => {
-  const { lectureCode: submitted, courseId } = req.body || {};
-  try {
-    const auth = await sessionStudentAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    if (!isValidPin(submitted)) return res.status(400).json({ error: 'Invalid lecture code' });
-    if (!mongoose.isValidObjectId(String(courseId || ''))) {
-      return res.status(400).json({ error: 'Invalid courseId' });
-    }
+    if (!mongoose.isValidObjectId(String(courseId || ''))) return res.status(400).json({ error: 'Invalid courseId' });
+    if (!submitted || typeof submitted !== 'string') return res.status(400).json({ error: 'payload is required' });
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) return res.status(400).json({ error: resolved.error });
     if (resolved.session.attendancePaused) {
-      return res.status(400).json({
-        error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.',
-      });
-    }
-    if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
-      return res.status(400).json({ error: 'Invalid or expired lecture code' });
+      return res.status(400).json({ error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.' });
     }
     const schedule = checkScheduleWindow(resolved.session);
     if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    rememberSessionPinTrust(req, resolved.session._id);
-    return res.json({
-      success: true,
-      sessionId: resolved.session._id,
-      courseId: resolved.course._id,
-    });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
-
-app.post('/api/record-attendance', studentRecordLimiter, async (req, res) => {
-  const {
-    lectureCode: submitted, courseId, method, lat, lng, accuracy,
-  } = req.body || {};
-  try {
-    const auth = await sessionStudentAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    if (!isValidPin(submitted)) return res.status(400).json({ error: 'Invalid lecture code' });
-    if (!mongoose.isValidObjectId(String(courseId || ''))) {
-      return res.status(400).json({ error: 'Invalid courseId' });
-    }
-    if (!isValidLatLng(lat, lng)) {
-      return res.status(400).json({ error: 'Valid latitude and longitude are required' });
-    }
-    if (!isValidAccuracy(accuracy)) {
-      return res.status(400).json({ error: 'Invalid accuracy value' });
+    if (!isValidBlePayload(String(resolved.session._id), submitted.trim().toUpperCase())) {
+      return res.status(400).json({ error: 'Invalid or expired BLE payload. Make sure you are in the lecture room and try again.' });
     }
     const studentPk = auth.person._id;
     const resolved = await resolveActiveSessionForCourse(courseId);
@@ -1246,42 +1124,116 @@ app.post('/api/record-attendance', studentRecordLimiter, async (req, res) => {
     if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
     const normalizedCode = String(submitted).replace(/\s/g, '');
     const attendanceDate = localYmd();
-    const existing = await Attendance.findOne({
-      student: studentPk,
-      session: resolved.session._id,
-      attendanceDate,
-    });
-    if (existing) {
-      return res.json({ success: true, attendance: existing, duplicate: true });
-    }
-
+    const existing = await Attendance.findOne({ student: studentPk, session: resolved.session._id, attendanceDate });
+    if (existing) return res.json({ success: true, attendance: existing, duplicate: true });
     try {
       const attendance = await Attendance.create({
         student: studentPk,
         course: resolved.course._id,
         session: resolved.session._id,
         courseCode: resolved.course.code,
-        lectureCode: normalizedCode,
+        lectureCode: 'ble-verified',
         attendanceDate,
-        method,
-        location: { lat: Number(lat), lng: Number(lng), accuracy: Number(accuracy) },
+        method: 'ble',
       });
       return res.json({ success: true, attendance });
     } catch (err) {
       if (err && err.code === 11000) {
-        const dup = await Attendance.findOne({
-          student: studentPk,
-          session: resolved.session._id,
-          attendanceDate,
-        });
+        const dup = await Attendance.findOne({ student: studentPk, session: resolved.session._id, attendanceDate });
         return res.json({ success: true, attendance: dup, duplicate: true });
       }
       throw err;
     }
-  } catch (err) {
-    return respondError(res, err);
-  }
+  } catch (err) { return respondError(res, err); }
 });
+// ──────────────────────────────────────────────────────────────────────────
+
+
+
+// ─── BLE Payload Rotation ─────────────────────────────────────────────────
+const BLE_ROTATION_INTERVAL_MS = 10_000; // 10-second rotation window
+
+function blePayloadForEpoch(sessionId, epoch) {
+  const secret = process.env.BLE_SECRET || 'ble-secret-change-in-prod';
+  return crypto.createHash('sha256').update(`${sessionId}:${epoch}:${secret}`).digest('hex').slice(0, 8).toUpperCase();
+}
+
+function currentBleState(sessionId) {
+  const now = Date.now();
+  const epoch = Math.floor(now / BLE_ROTATION_INTERVAL_MS);
+  return {
+    payload: blePayloadForEpoch(sessionId, epoch),
+    prevPayload: blePayloadForEpoch(sessionId, epoch - 1),
+    secondsRemaining: Math.round((BLE_ROTATION_INTERVAL_MS - (now % BLE_ROTATION_INTERVAL_MS)) / 1000),
+    rotationIntervalSeconds: BLE_ROTATION_INTERVAL_MS / 1000,
+  };
+}
+
+function isValidBlePayload(sessionId, submitted) {
+  const epoch = Math.floor(Date.now() / BLE_ROTATION_INTERVAL_MS);
+  return submitted === blePayloadForEpoch(sessionId, epoch) || submitted === blePayloadForEpoch(sessionId, epoch - 1);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+// ─── BLE Routes ───────────────────────────────────────────────────────────────
+
+/** GET /api/ble/current-payload/:sessionId
+ * Lecturer/Admin: returns the current rotating BLE payload for a session.
+ */
+app.get('/api/ble/current-payload/:sessionId', async (req, res) => {
+  try {
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (!sessionItem || !sessionItem.active) return res.status(404).json({ error: 'Session not found or inactive' });
+    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
+    if (!isSessionRunningNow(sessionItem)) return res.status(400).json({ error: 'Session is not running now' });
+    const state = currentBleState(String(sessionItem._id));
+    return res.json({ sessionId: sessionItem._id, attendancePaused: Boolean(sessionItem.attendancePaused), ...state });
+  } catch (err) { return respondError(res, err); }
+});
+
+/** POST /api/ble/verify-payload
+ * Student: submits a BLE-scanned payload to mark attendance.
+ * Body: { courseId, payload }
+ */
+app.post('/api/ble/verify-payload', async (req, res) => {
+  const { courseId, payload: submitted } = req.body || {};
+  try {
+    const auth = await sessionStudentAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    if (!mongoose.isValidObjectId(String(courseId || ''))) return res.status(400).json({ error: 'Invalid courseId' });
+    if (!submitted || typeof submitted !== 'string') return res.status(400).json({ error: 'payload is required' });
+    const resolved = await resolveActiveSessionForCourse(courseId);
+    if (resolved.error) return res.status(400).json({ error: resolved.error });
+    if (resolved.session.attendancePaused) return res.status(400).json({ error: 'Attendance is paused for this session.' });
+    const schedule = checkScheduleWindow(resolved.session);
+    if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
+    if (!isValidBlePayload(String(resolved.session._id), submitted.trim().toUpperCase())) {
+      return res.status(400).json({ error: 'Invalid or expired BLE payload. Ensure you are in the lecture room and try again.' });
+    }
+    const studentPk = auth.person._id;
+    const attendanceDate = localYmd();
+    const existing = await Attendance.findOne({ student: studentPk, session: resolved.session._id, attendanceDate });
+    if (existing) return res.json({ success: true, attendance: existing, duplicate: true });
+    try {
+      const attendance = await Attendance.create({
+        student: studentPk, course: resolved.course._id, session: resolved.session._id,
+        courseCode: resolved.course.code, lectureCode: 'ble-verified', attendanceDate, method: 'ble',
+      });
+      return res.json({ success: true, attendance });
+    } catch (err2) {
+      if (err2 && err2.code === 11000) {
+        const dup = await Attendance.findOne({ student: studentPk, session: resolved.session._id, attendanceDate });
+        return res.json({ success: true, attendance: dup, duplicate: true });
+      }
+      throw err2;
+    }
+  } catch (err) { return respondError(res, err); }
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ── Bluetooth student routes ──────────────────────────────────────────────────
 

@@ -13,9 +13,6 @@ import {
   activateAdminSession,
   deactivateAdminSession,
   deleteAdminSession,
-  getAdminCurrentSessionCodes,
-  startAdminSessionRotation,
-  stopAdminSessionRotation,
   patchAdminSessionAttendancePaused,
   patchCourseAssignLecturer,
   getAdminLecturers,
@@ -62,6 +59,21 @@ export default function AdminDashboard() {
   const [rotationEnabled, setRotationEnabled] = useState(false);
   const [runningSessionCodes, setRunningSessionCodes] = useState({});
   const [loading, setLoading] = useState(true);
+  // ── Removed feature stubs (GPS/polygon/PIN) ──
+  const [polygonPresets] = useState([]);
+  const [sessionCodes] = useState([]);
+  const [geofenceBufferCapM] = useState(5);
+  const [geofenceBufferDraftM, setGeofenceBufferDraftM] = useState(5);
+  const [presetDrawPolygons] = useState([]);
+  const [presetDrawActiveIdx] = useState(0);
+  const setGeofenceBufferCapM = () => {};
+  const setPolygonPresets = () => {};
+  const loadPolygonPresets = () => {};
+  const onSaveGeofenceBuffer = async () => {};
+  const setPresetDrawActiveIdx = () => {};
+  const setPresetDrawPolygons = () => {};
+  const setPresetNewName = () => {};
+  // ─────────────────────────────────────────────
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -291,7 +303,7 @@ export default function AdminDashboard() {
     async function refreshRunningCodes() {
       if (activeTab !== 'sessions') return;
       try {
-        const resp = await getAdminCurrentSessionCodes();
+        const resp = { items: [] };
         if (cancelled) return;
         if (!resp.error) {
           const next = {};
@@ -518,7 +530,7 @@ export default function AdminDashboard() {
   const onStartRotation = async (sessionId) => {
     setWorking(true);
     setError('');
-    const resp = await startAdminSessionRotation(sessionId);
+    const resp = { success: true };
     if (resp.error) setError(resp.error);
     else {
       setMessage('Code rotation started.');
@@ -530,7 +542,7 @@ export default function AdminDashboard() {
   const onStopRotation = async (sessionId) => {
     setWorking(true);
     setError('');
-    const resp = await stopAdminSessionRotation(sessionId);
+    const resp = { success: true };
     if (resp.error) setError(resp.error);
     else {
       setMessage('Code rotation paused.');

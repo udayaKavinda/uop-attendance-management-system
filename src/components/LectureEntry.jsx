@@ -25,7 +25,7 @@ const BT_PHASE_LABEL = {
 };
 
 function runningCourseLabel(item) {
-  return `${item.code} — ${item.name}`;
+  return `${item.code} – ${item.name}`;
 }
 
 export default function LectureEntry() {
@@ -55,13 +55,7 @@ export default function LectureEntry() {
     setCourseMenuOpen(true);
   }, []);
 
-  const scheduleCloseMenu = useCallback(() => {
-    clearBlurTimer();
-    blurCloseTimer.current = setTimeout(() => {
-      setCourseMenuOpen(false);
-      setHighlightIndex(-1);
-    }, 200);
-  }, []);
+  useEffect(() => { loadCourses(); }, [loadCourses]);
 
   // Poll running courses every 10 s
   useEffect(() => {
@@ -448,7 +442,20 @@ export default function LectureEntry() {
                 </button>
               </>
             )}
-          </>
+          </div>
+        )}
+
+        {phase === 'error' && (
+          <div className="lecture-entry__error">
+            <p>{statusMsg}</p>
+            <button type="button" className="lecture-entry__btn lecture-entry__btn--primary" onClick={() => { setPhase('idle'); setStatusMsg(''); }}>
+              Try Again
+            </button>
+          </div>
+        )}
+
+        {courses.length === 0 && phase === 'idle' && (
+          <p className="lecture-entry__hint">No active lecture sessions found right now.</p>
         )}
       </div>
     </div>
