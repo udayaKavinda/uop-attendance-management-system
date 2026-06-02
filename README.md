@@ -1,16 +1,20 @@
 # UOP Attendance Management System
 
-Role-based web application for lecture attendance at the University of Peradeniya. Students mark attendance for **live** sessions by scanning a **rotating BLE token** broadcast from the classroom Bluetooth beacon; **lecturers** and **admins** manage courses, sessions, and reporting.
+Role-based application for lecture attendance at the University of Peradeniya. Students mark attendance for **live** sessions by scanning a **rotating BLE token** broadcast from the classroom Bluetooth beacon; **lecturers** and **admins** manage courses, sessions, and reporting.
 
-**Repository type:** private application (`package.json` → `"private": true`). **No `LICENSE` file** is present in this repo—treat usage and distribution as defined by your institution.
+> **Branch:** `capacitor-bluetooth` — the React web app is wrapped with **Capacitor** so it can be built and installed as a native **Android APK**. The student BLE scan uses the native `@capacitor-community/bluetooth-le` plugin on Android (no browser dialog, works on all Android apps) and falls back to Web Bluetooth on plain browsers. See [Building the Android App](#building-the-android-app) below.
+>
+> **Web-only branch:** `feature/bluetooth` — identical server and UI, but no Capacitor; Web Bluetooth (Chrome on Android) only.
+
+**Repository type:** private application (`package.json` → `"private": true`). No `LICENSE` file — treat usage and distribution as defined by your institution.
 
 ---
 
 ## Purpose
 
 - Give students a single place to record attendance when a session is **actively running** (same calendar day and clock time as the session slot).
-- Tie attendance to **verified identity** (Google OAuth + server session), a **rotating BLE token** broadcast by the classroom Bluetooth beacon, and the active **schedule window**.
-- Let staff create and operate sessions, control BLE broadcasting, export matrices, and maintain reusable map presets.
+- Tie attendance to **verified identity** (Google OAuth + server session) and a **rotating BLE token** broadcast by the classroom Bluetooth beacon.
+- Let staff create and operate sessions, control BLE broadcasting, export matrices, and maintain the lecturer directory.
 
 ---
 
@@ -18,10 +22,10 @@ Role-based web application for lecture attendance at the University of Peradeniy
 
 | Area | Capabilities |
 |------|----------------|
-| **Students** | Google sign-in; pick a **running** course from the combobox; tap **Scan for Bluetooth Attendance** (requires Chrome on Android); browser BLE picker opens filtered to the session's `UOP-XXXXXXXX` device; device advertises a rotating 8-byte token in manufacturer data (`0xFFFF`); client submits hex token to `/api/bluetooth-attendance`; attendance status polling per course. |
-| **Lecturers** | Staff console: courses assigned to them (multi-owner supported), session CRUD, **BLE broadcasting control** (start/stop per session card), live PIN, attendance matrix, presentation route for PIN, and **live attendance gating** (`attendancePaused`) using the blinking **Live** badge. |
-| **Admins** | Same as lecturers for any course, plus lecturer directory, draw polygon presets, multi-lecturer course assignment, full course lifecycle. |
-| **System** | In-memory rotating PIN per session (`server/lib/lectureCode.js`, **30 s** window when enabled); **in-memory BLE token** per session (`server/lib/bluetoothCode.js`, rotates automatically every **15 s** via a background `setInterval`); non-recurring session auto-deactivate via background job; date-sensitive server keys use **host-local Y-M-D** (not UTC slices, unless you force `TZ`). |
+| **Students** | Google sign-in; pick a **running** course; tap **📡 Scan for Bluetooth Attendance**. On the **native Android app** (this branch): `BleClient.requestLEScan` scans directly for the `UOP-XXXXXXXX` beacon — no device picker dialog. In a **browser**: Web Bluetooth picker (Chrome on Android only). Either path reads the rotating 8-byte token from manufacturer data (`0xFFFF`) and posts to `/api/bluetooth-attendance`. |
+| **Lecturers** | Staff console: assigned courses, session CRUD, **BLE broadcasting control** (start/stop per session card), live PIN display, attendance matrix export, projector view, and live attendance gating via the blinking **Live** badge. |
+| **Admins** | Everything lecturers can do for any course, plus lecturer directory and multi-lecturer course assignment. |
+| **System** | In-memory rotating PIN per session (`lectureCode.js`, 30 s window when enabled); **in-memory BLE token** per session (`bluetoothCode.js`, automatic 15 s rotation via `setInterval`); non-recurring session auto-deactivate; date-sensitive keys use **host-local Y-M-D**. |
 
 ---
 
@@ -29,10 +33,11 @@ Role-based web application for lecture attendance at the University of Peradeniy
 
 | Layer | Technology |
 |-------|------------|
-| **Frontend** | React 19, React Router 6, Create React App (`react-scripts` 5), Leaflet / react-leaflet 5, `fetch` + credentialed CORS. |
-| **Backend** | Node.js, **Express 5**, Mongoose 9, Passport + `passport-google-oauth20`, `express-session` + **`connect-mongo`** (persistent sessions), **`helmet`** (security headers), **`express-rate-limit`** (per-route brute-force/DOS protection), `cors`, `dotenv`. |
-| **Data** | MongoDB (documents: people, courses, lecture sessions, attendance, polygon presets, sessions). |
-| **Tooling** | `concurrently` for `npm run dev`; optional Excel export via `xlsx` on the client (`matrixExcel.js`). |
+| **Frontend** | React 19, React Router 6, Create React App (`react-scripts` 5), `fetch` + credentialed CORS. |
+| **Native wrapper** | **Capacitor 8** (`@capacitor/core`, `@capacitor/android`), **`@capacitor-community/bluetooth-le` 8** for native BLE scanning. |
+| **Backend** | Node.js, **Express 5**, Mongoose 9, Passport + `passport-google-oauth20`, `express-session` + **`connect-mongo`**, **`helmet`**, **`express-rate-limit`**, `cors`, `dotenv`. |
+| **Data** | MongoDB (people, courses, lecture sessions, attendance, sessions). |
+| **Tooling** | `concurrently` for `npm run dev`; optional Excel export via `xlsx` (`matrixExcel.js`). |
 
 ---
 
@@ -40,10 +45,13 @@ Role-based web application for lecture attendance at the University of Peradeniy
 
 ```mermaid
 flowchart LR
-  subgraph browser [Browser SPA]
+  subgraph app [Android App / Browser SPA]
     UI[React App]
+    Cap[Capacitor Bridge]
+    BLE[BleClient plugin]
     ApiClient[api.js fetch helpers]
     UI --> ApiClient
+    UI --> Cap --> BLE
   end
   subgraph server [Express server/index.js]
     Auth[Passport Google OAuth]
@@ -57,20 +65,20 @@ flowchart LR
     Course[(courses)]
     Session[(lecture sessions)]
     Attendance[(attendance)]
-    Preset[(polygon presets)]
   end
   ApiClient <-->|credentials include| Routes
   Routes --> Person
   Routes --> Course
   Routes --> Session
   Routes --> Attendance
-  Routes --> Preset
 ```
 
-- **Single-process API** in `server/index.js` (large file: models, geofence math, auth helpers, and HTTP handlers).
-- **Session-based auth**: Passport serializes `Person._id`; staff vs student routes use `sessionStaffAuth` / `sessionStudentAuth` after reloading `Person` from MongoDB.
-- **PIN and BLE token state** lives in **process memory** (`lectureCode.js` and `bluetoothCode.js` `Map` stores), not MongoDB—**server restarts** drop rotation state. BLE tokens are seeded immediately when BT is enabled and rotated by a background `setInterval`; PIN codes re-materialize on the next `current-code` fetch.
-- **Local dev split**: default CRA dev is `http://localhost:3000`; API defaults to port **5000**. `src/api.js` points `REACT_APP_API_BASE` or `localhost:5000` when the app runs on port 3000.
+- **Capacitor WebView**: the React `build/` folder is loaded inside a native Android WebView. All existing React components, API calls, and auth flow work without changes.
+- **Native BLE path**: `Capacitor.isNativePlatform()` is checked at runtime in `LectureEntry.jsx`. On Android, `BleClient.requestLEScan` is used directly; on a browser, `navigator.bluetooth.requestDevice` is used as a fallback.
+- **Single-process API** in `server/index.js` (models, auth helpers, and HTTP handlers).
+- **Session-based auth**: Passport serializes `Person._id`; staff vs student routes use `sessionStaffAuth` / `sessionStudentAuth` after reloading from MongoDB.
+- **PIN and BLE token state** lives in **process memory** (`lectureCode.js` and `bluetoothCode.js` Map stores), not MongoDB — server restarts drop rotation state.
+- **Local dev split**: CRA dev is `http://localhost:3000`; API defaults to port **5000**.
 
 ---
 
@@ -78,21 +86,30 @@ flowchart LR
 
 ```
 .
+├── android/                # Capacitor Android project (open in Android Studio)
+│   ├── app/
+│   │   ├── src/main/
+│   │   │   ├── AndroidManifest.xml   # BLE permissions declared here
+│   │   │   └── java/lk/uop/attendance/MainActivity.java
+│   │   └── build.gradle
+│   ├── build.gradle
+│   └── settings.gradle
 ├── public/                 # CRA static assets
 ├── src/
-│   ├── App.js              # Routes, auth guards (localStorage + role)
+│   ├── App.js              # Routes, auth guards
 │   ├── index.js            # StrictMode, BrowserRouter, ErrorBoundary
-│   ├── index.css           # Global + component-adjacent utility styles
-│   ├── layouts/            # MarketingLayout, StudentLayout, AdminLayout + layouts.css
+│   ├── index.css           # Global styles
+│   ├── layouts/            # MarketingLayout, StudentLayout, AdminLayout
 │   ├── components/         # Login, GoogleSuccess, LectureEntry, AdminDashboard, …
 │   ├── api.js              # All HTTP helpers; safeFetchJson; 401 → notifySessionInvalid
 │   └── utils/              # safeStorage, authRedirect, matrixExcel
 ├── server/
-│   ├── index.js            # Express app, OAuth, index sync, all API routes
-│   ├── models/             # Person, Course, LectureSession, Attendance, PolygonPreset
+│   ├── index.js            # Express app, OAuth, all API routes
+│   ├── models/             # Person, Course, LectureSession, Attendance
 │   └── lib/                # lectureCode.js, bluetoothCode.js, schedule.js, sessionExpiry.js
+├── capacitor.config.ts     # Capacitor: appId, webDir, BLE display strings
 ├── deploy/
-│   └── nginx-app-domain.conf   # Example reverse-proxy (API + auth + SPA)
+│   └── nginx-app-domain.conf
 ├── package.json
 └── README.md
 ```
@@ -101,36 +118,23 @@ flowchart LR
 
 ## Environment variables
 
-Create a **`.env`** file in the **project root** (not committed—verify with your team). Most names below are consumed directly in `server/index.js`, `sessionExpiry.js`, or `src/api.js`; `TZ` affects Node's runtime timezone behavior even when not explicitly read in code.
+Create a **`.env`** in the project root (not committed).
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MONGO_URI` | Recommended | Mongo connection string. Default in code: `mongodb://localhost:27017/attendance`. Also used by the `connect-mongo` session store. |
-| `GOOGLE_CLIENT_ID` | Yes (OAuth) | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | Yes (OAuth) | Google OAuth secret |
-| `SESSION_SECRET` | **Required in production** | Session HMAC secret. Server **fails to boot** in production if missing. Dev fallback exists. |
-| `FRONTEND_URL` | Strongly recommended | Allowed CORS origin(s) for SPA; **comma-separated**, no trailing slash issues handled in code. Used after OAuth as redirect target base. |
-| `APP_BASE_URL` | Recommended for OAuth | Public origin used to build Google **`callbackURL`** (`…/auth/google/callback`). Fallback chain in strategy setup includes `FRONTEND_URL` / `REACT_APP_API_BASE`. |
-| `REACT_APP_API_BASE` | Optional | CRA: absolute API origin (e.g. `http://localhost:5000`) when SPA and API differ. Empty string = same origin (typical reverse proxy). |
-| `NODE_ENV` | Deployment | `production` enables **Secure** + **SameSite=None** session cookies (HTTPS required for cross-site cookies). |
+| `MONGO_URI` | Recommended | Default: `mongodb://localhost:27017/attendance`. Also used by `connect-mongo`. |
+| `GOOGLE_CLIENT_ID` | Yes | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Yes | Google OAuth secret |
+| `SESSION_SECRET` | **Required in production** | Server fails to boot in production if missing. |
+| `FRONTEND_URL` | Strongly recommended | Allowed CORS origin(s), comma-separated. |
+| `APP_BASE_URL` | Recommended | Public origin for Google OAuth `callbackURL`. |
+| `REACT_APP_API_BASE` | Optional | Absolute API origin when SPA and API differ. |
+| `NODE_ENV` | Deployment | `production` enables Secure + SameSite=None cookies. |
 | `PORT` | Optional | Express listen port; default **5000** |
-| `TZ` | Optional | Server timezone for schedule comparisons. If unset, Node uses the host system timezone. Set only when you need to force a specific timezone. |
-| `SESSION_EXPIRE_JOB_MS` | Optional | Interval for non-recurring session sweep; min **10000**, default **60000** (`sessionExpiry.js`) |
-| `CSP_EXTRA_CONNECT_SRC` | Optional (production) | Extra origins to append to the CSP `connect-src` directive — needed when the SPA fetches an API on a **different** origin (split-host deploys). Comma-separated. Example: `https://api.example.com,https://cdn.example.com`. Ignored unless `NODE_ENV=production`. |
-| `CSP_REPORT_ONLY` | Optional (production) | If `1` / `true`, the server emits `Content-Security-Policy-Report-Only` instead of the enforcing header so blocked resources are reported to DevTools but still load. Use to roll out CSP safely on staging. Ignored unless `NODE_ENV=production`. |
-
-**CRA note:** Only variables prefixed with `REACT_APP_` are exposed to the browser at build time.
-
----
-
-## Database setup
-
-1. Install and start **MongoDB** locally or use Atlas / managed Mongo.
-2. Set `MONGO_URI` in `.env`.
-3. Start the server once: Mongoose creates/uses collections and syncs indexes on startup. Review server logs on first boot.
-4. On startup, the server ensures a bootstrap admin record exists for `udayakavindadev@gmail.com` (idempotent role/active/deleted correction).
-
-**Important indexes:** `Attendance` has a **unique compound index** on `(student, session, attendanceDate)` for idempotent same-day recording.
+| `TZ` | Optional | Server timezone. If unset, uses host system timezone. |
+| `SESSION_EXPIRE_JOB_MS` | Optional | Non-recurring session sweep interval; min 10000, default 60000. |
+| `CSP_EXTRA_CONNECT_SRC` | Optional (prod) | Extra origins for CSP `connect-src`. Comma-separated. |
+| `CSP_REPORT_ONLY` | Optional (prod) | `1` = report-only mode; `0` = enforce. |
 
 ---
 
@@ -141,317 +145,444 @@ npm install
 ```
 
 **Development (SPA + API):**
-
 ```bash
 npm run dev
 ```
+- Frontend: `http://localhost:3000`
+- API: `http://localhost:5000`
 
-- Frontend: `http://localhost:3000` (CRA)
-- API: `http://localhost:5000` (unless `PORT` is set)
-
-Ensure `FRONTEND_URL` includes `http://localhost:3000` for CORS when using split ports.
-
-**Backend only:**
-
+**Production web build:**
 ```bash
-npm run server
+npm run build
 ```
 
-**Production build (static React):**
+**Sync web build into Android project:**
+```bash
+npm run cap:sync          # builds React then runs npx cap sync
+```
+
+**Open Android Studio (build + run on device):**
+```bash
+npm run cap:android       # builds React, syncs, opens Android Studio
+```
+
+---
+
+## Building the Android App
+
+### Prerequisites
+
+Install these once on your development machine:
+
+| Tool | Where to get it | Notes |
+|------|----------------|-------|
+| **Android Studio** | [developer.android.com/studio](https://developer.android.com/studio) | Includes SDK, emulator, Gradle |
+| **JDK 17+** | Bundled with Android Studio | Set `JAVA_HOME` if needed |
+| **Node.js 18+** | [nodejs.org](https://nodejs.org) | Already needed for the web app |
+| **USB cable** (for physical device) | Any data-capable USB cable | Enable USB Debugging on the phone |
+
+> Android Studio is ~1 GB download. The first Gradle build downloads dependencies (~500 MB) — do this on a good network connection.
+
+---
+
+### Step 1 — Install dependencies
+
+```bash
+npm install
+```
+
+This installs `@capacitor/core`, `@capacitor/android`, and `@capacitor-community/bluetooth-le` along with all web dependencies.
+
+---
+
+### Step 2 — Build the React app
 
 ```bash
 npm run build
 ```
 
-Serve the `build/` folder behind the same origin as `/api` and `/auth` (recommended), or set `REACT_APP_API_BASE` to the API origin and configure CORS accordingly.
-
-**Other scripts:** `npm start` (CRA dev, client only), `npm test`, `npm run tunnel` (expects **`ngrok`** on PATH—not an npm dependency).
+Capacitor copies the `build/` folder into the Android project's assets. You must rebuild every time you change the frontend code.
 
 ---
 
-## Deployment (concise)
+### Step 3 — Sync into the Android project
 
-Prefer a **single hostname** reverse proxy:
+```bash
+npx cap sync android
+```
 
-| Path | Target |
-|------|--------|
-| `/api/*` | Node (Express) |
-| `/auth/*` | Node (Passport OAuth callback) |
-| `/*` | Static `build/` or Node SSR (not included) |
+This does two things:
+1. Copies `build/` into `android/app/src/main/assets/public/`
+2. Updates Gradle dependencies for any Capacitor plugins
 
-Example: `deploy/nginx-app-domain.conf`.
+Or run both steps 2 and 3 together:
 
-**Google Cloud Console:** Authorized JavaScript origin and **redirect URI** must match how users reach the app (e.g. `https://app.example.com` and `https://app.example.com/auth/google/callback` if the API handles `/auth` on that host).
+```bash
+npm run cap:sync
+```
 
-**Sessions:** Stored in MongoDB via **`connect-mongo`** (collection `sessions`). Sessions survive Node restarts and horizontal scaling; the SPA still handles transient `401` via `notifySessionInvalid`.
+---
+
+### Step 4 — Open Android Studio
+
+```bash
+npx cap open android
+```
+
+Or use the combined script that does steps 2–4:
+
+```bash
+npm run cap:android
+```
+
+Android Studio will open the `android/` project. The first time it opens it will sync Gradle — wait for the progress bar in the bottom bar to finish (can take 2–5 minutes).
+
+---
+
+### Step 5 — Connect a device
+
+**Option A — Physical Android device (recommended for BLE testing):**
+
+1. On your Android phone: go to **Settings → About phone** and tap **Build number** 7 times to enable Developer Options.
+2. Go to **Settings → Developer options** and enable **USB Debugging**.
+3. Connect the phone to your computer with a USB cable.
+4. Accept the "Allow USB Debugging?" dialog on the phone.
+5. The device should appear in the device selector dropdown at the top of Android Studio.
+
+**Option B — Android emulator:**
+
+1. In Android Studio: **Tools → Device Manager → Create Device**.
+2. Choose a phone (e.g. Pixel 6), API 33+.
+3. Click the ▶ play button next to the emulator.
+
+> **BLE note:** The emulator does **not** support real Bluetooth hardware. You can test the UI flow with an emulator, but actual BLE scanning (token reception) requires a physical device. Use Option A for end-to-end BLE testing.
+
+---
+
+### Step 6 — Run the app
+
+1. Select your device from the dropdown at the top of Android Studio.
+2. Click the green **Run** button (▶) or press **Shift+F10**.
+3. Android Studio builds the APK, installs it on the device, and launches it.
+4. The first build takes 2–3 minutes. Subsequent builds are faster.
+
+The app will open showing the attendance web app inside a native WebView. It connects to the server URL configured in your environment.
+
+---
+
+### Step 7 — Configure the server URL
+
+The Capacitor app's WebView needs to reach your API server. By default the React app uses `REACT_APP_API_BASE` or falls back to `localhost:5000` when on port 3000.
+
+**For development** — run your backend and point the app at it:
+
+```bash
+# In .env (create it if it doesn't exist):
+REACT_APP_API_BASE=http://YOUR_COMPUTER_IP:5000
+```
+
+Then rebuild and sync:
+```bash
+npm run cap:sync
+```
+
+Find your computer's IP:
+- **Windows:** `ipconfig` → IPv4 Address
+- **Mac/Linux:** `ifconfig` or `ip addr` → look for `192.168.x.x`
+
+Make sure your phone and computer are on the same Wi-Fi network.
+
+**For production** — use the deployed server URL:
+```bash
+# In .env:
+REACT_APP_API_BASE=https://attendance.eng.pdn.ac.lk
+```
+
+---
+
+### Step 8 — BLE Permissions (already configured)
+
+The `android/app/src/main/AndroidManifest.xml` already has all required BLE permissions:
+
+```xml
+<!-- Android < 12 -->
+<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+
+<!-- Android 12+ -->
+<uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+    android:usesPermissionFlags="neverForLocation" />
+<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+```
+
+The `neverForLocation` flag means the app does **not** need location permission on Android 12+ — it only uses Bluetooth for attendance, not positioning.
+
+On first scan the app will show a **"Allow Bluetooth?"** system dialog. The user must accept it.
+
+---
+
+### Building a Release APK
+
+To distribute the app outside of Android Studio (e.g. sideload via USB):
+
+1. **Generate a keystore** (one-time):
+   ```bash
+   keytool -genkey -v -keystore uop-attendance.jks \
+     -alias uop-attendance -keyalg RSA -keysize 2048 -validity 10000
+   ```
+
+2. **Configure signing** in `android/app/build.gradle`:
+   ```groovy
+   android {
+     signingConfigs {
+       release {
+         storeFile file('path/to/uop-attendance.jks')
+         storePassword 'YOUR_STORE_PASSWORD'
+         keyAlias 'uop-attendance'
+         keyPassword 'YOUR_KEY_PASSWORD'
+       }
+     }
+     buildTypes {
+       release {
+         signingConfig signingConfigs.release
+         minifyEnabled false
+       }
+     }
+   }
+   ```
+
+3. **Build the release APK** in Android Studio:
+   **Build → Generate Signed Bundle / APK → APK → Release → Finish**
+
+   The APK will be at `android/app/release/app-release.apk`.
+
+4. **Install on a device:**
+   ```bash
+   adb install android/app/release/app-release.apk
+   ```
+
+---
+
+### Workflow for ongoing development
+
+Every time you change frontend code:
+
+```bash
+npm run cap:sync         # rebuild React + sync into Android project
+# then in Android Studio: click Run (▶)
+```
+
+Every time you change `capacitor.config.ts`:
+```bash
+npx cap sync android     # re-syncs config and plugin settings
+```
+
+---
+
+## Student attendance flow (implementation)
+
+The scan path is chosen at runtime by `Capacitor.isNativePlatform()` in `LectureEntry.jsx`.
+
+1. `GET /api/courses/running` populates the course combobox (polling every 10 s).
+2. Student picks a running course and taps **📡 Scan for Bluetooth Attendance**.
+3. Client calls `GET /api/bluetooth-target?courseId=…` → `{ deviceName }`. If BT is disabled the scan aborts.
+
+**Native Android app path (this branch):**
+
+4. `BleClient.initialize({ androidNeverForLocation: true })` — requests Bluetooth permission from the user if not yet granted.
+5. `BleClient.requestLEScan({ name: deviceName }, callback)` — starts scanning in the background, no device picker dialog. Filters for the session's `UOP-XXXXXXXX` beacon.
+6. `callback` fires for each matching advertisement. Manufacturer data for company ID `0xFFFF` is read as 8 bytes → 16-char hex token. `BleClient.stopLEScan()` is called once a token is found.
+
+**Browser fallback path (Chrome on Android):**
+
+4. `navigator.bluetooth.requestDevice({ filters: [{ name: deviceName }] })` — opens the OS BLE picker, pre-filtered to the beacon.
+5. `device.watchAdvertisements({ signal: abortController.signal })` — listens for advertisements. A 30 s timeout aborts if no packet arrives.
+6. On `advertisementreceived`: manufacturer data for `0xFFFF` → 16-char hex token.
+
+**Both paths continue:**
+
+7. `POST /api/bluetooth-attendance` `{ courseId, token }` — server calls `bluetoothCode.verifyToken(sessionId, token)`. On match, creates `Attendance` with `method: 'bluetooth'`.
+8. On `{ success }` or `{ duplicate }`, the success screen is shown.
+
+**Staff live control:**
+- **📡 BT on / BT off** pill buttons on each session card control `bluetoothEnabled`.
+- The **blinking Live badge** pauses/resumes student submissions independently of BLE broadcasting.
+- A **native broadcaster app** must call `GET /api/admin/sessions/:id/bluetooth-broadcast` and advertise the returned token; the web dashboard only enables/disables.
 
 ---
 
 ## API overview
 
 **Conventions**
-
-- JSON bodies for `POST`/`PATCH` where applicable.
-- **Cookie**: `attendance.sid` (HTTP-only); clients must use `credentials: 'include'` (`safeFetchJson` in `src/api.js`).
-- **401**: unauthenticated or invalid session; **403**: authenticated but wrong role or course access.
+- JSON bodies for `POST`/`PATCH`.
+- **Cookie**: `attendance.sid` (HTTP-only); clients use `credentials: 'include'`.
+- **401**: unauthenticated; **403**: wrong role or missing course access.
 
 ### Auth & profile
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/auth/google` | Starts OAuth (503 JSON if Google env missing). Rate-limited. |
-| GET | `/auth/google/callback` | OAuth callback → redirect to `FRONTEND_URL`/`…`/login/success. Rate-limited. |
-| GET | `/api/me` | Session required → `{ studentId, email, role, lecturerId }` |
+| GET | `/auth/google` | Starts OAuth. Rate-limited. |
+| GET | `/auth/google/callback` | OAuth callback → redirect to `FRONTEND_URL`. Rate-limited. |
+| GET | `/api/me` | `{ studentId, email, role, lecturerId }` |
 | POST | `/api/logout` | Destroy session |
-| GET | `/api/healthz` | Liveness/readiness probe (`200` with Mongo `readyState===1`, else `503`) |
+| GET | `/api/healthz` | `200 { status: 'ok' }` when Mongo is up |
 
-### Read endpoints (session required)
+### Read endpoints
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/api/courses` | Active courses (summary). **Auth required**. |
-| GET | `/api/courses/running` | Courses with an active session **right now**. **Auth required**. |
+| GET | `/api/courses` | Active courses. Auth required. |
+| GET | `/api/courses/running` | Courses with an active session **right now**. Auth required. |
 
-### Student (session + `role === 'student'`)
+### Student (`role === 'student'`)
 
 | Method | Path | Notes |
 |--------|------|--------|
 | GET | `/api/attendance-status?courseId=` | Same-day attendance for session-in-window |
-| GET | `/api/bluetooth-target?courseId=` | Returns `{ deviceName }` when BT is enabled for the active session; client uses `deviceName` to filter the BLE device picker. |
-| POST | `/api/bluetooth-attendance` | Body: `{ courseId, token }`. Validates 16-char hex token against the session's rotating store (`bluetoothCode.verifyToken()`); creates `Attendance` with `method: 'bluetooth'` (token stored in `lectureCode` field). Returns `{ success: true }` or `{ duplicate: true }` for same-session re-records. **Rate-limited** (~60 req/min per authenticated user; IP fallback). |
+| GET | `/api/bluetooth-target?courseId=` | Returns `{ deviceName }` when BT is enabled. |
+| POST | `/api/bluetooth-attendance` | Body: `{ courseId, token }`. Validates 16-char hex token. Returns `{ success }` or `{ duplicate }`. Rate-limited. |
 
-> **Legacy (unused by current frontend):** `/api/verify-lecture-pin` and `/api/record-attendance` (PIN + GPS geofence flow) still exist in `server/index.js` but are no longer called by `LectureEntry.jsx` on this branch.
-
-### Staff (`lecturer` or `admin`; course-scoped for lecturers)
+### Staff (`lecturer` or `admin`)
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/api/lecture-code?courseId=` | Live PIN for active session (staff; lecturer must be assigned to the course) |
+| GET | `/api/lecture-code?courseId=` | Live PIN for active session |
 | GET | `/api/admin/courses` | Staff course list |
-| POST | `/api/admin/courses` | Create (admins send `lecturerIds` array with 1..5 lecturer IDs) |
-| DELETE | `/api/admin/courses/:courseId` | Delete (transactional: attendance, sessions, and course are removed atomically). |
+| POST | `/api/admin/courses` | Create course |
+| DELETE | `/api/admin/courses/:courseId` | Delete (transactional: attendance, sessions, course) |
 | PATCH | `/api/admin/courses/:courseId/disable` | |
 | PATCH | `/api/admin/courses/:courseId/enable` | |
-| PATCH | `/api/admin/courses/:courseId/assign-lecturer` | Admin (body: `lecturerIds` array, 1..5 unique lecturer IDs) |
+| PATCH | `/api/admin/courses/:courseId/assign-lecturer` | Admin; body: `{ lecturerIds }` array 1..5 |
 | GET | `/api/admin/courses/:courseId/sessions` | |
-| POST | `/api/admin/courses/:courseId/sessions` | Create session (rejects same-course same-day overlapping time windows). |
+| POST | `/api/admin/courses/:courseId/sessions` | Create session (rejects overlapping time windows) |
 | GET | `/api/admin/sessions` | |
-| GET | `/api/admin/sessions/current-codes` | Includes `attendancePaused` and rotation state for live cards. |
-| GET | `/api/admin/sessions/:sessionId/current-code` | Also calls `syncSessionCodeMode` while the session is in its scheduled window; includes `attendancePaused` for presenter mode. |
+| GET | `/api/admin/sessions/current-codes` | Live codes + attendancePaused + rotation state |
+| GET | `/api/admin/sessions/:sessionId/current-code` | Single session live code |
 | PATCH | `/api/admin/sessions/:sessionId/activate` | |
 | PATCH | `/api/admin/sessions/:sessionId/deactivate` | |
-| DELETE | `/api/admin/sessions/:sessionId` | Soft-delete (`deleted=true`, `active=false`); attendance rows are preserved for reporting. |
-| PATCH | `/api/admin/sessions/:sessionId/rotation/start` | Enable rotation and **resume** if paused (`rotationEnabled=true`, `rotationPaused=false`). |
-| PATCH | `/api/admin/sessions/:sessionId/rotation/stop` | Keep rotation enabled but **pause** it so the current PIN stays on screen (`rotationPaused=true`). |
-| PATCH | `/api/admin/sessions/:sessionId/attendance-paused` | Pause/resume student attendance for the **current** live window. Auto-clears for new occurrences (next live run starts unpaused). |
-| PATCH | `/api/admin/sessions/:sessionId/bluetooth/start` | Enable BLE broadcasting mode; generates `bluetoothDeviceName` (`UOP-XXXXXXXX`) on first call and persists it to DB; sets `bluetoothEnabled=true`. |
-| PATCH | `/api/admin/sessions/:sessionId/bluetooth/stop` | Disable BLE broadcasting; sets `bluetoothEnabled=false`; clears the in-memory token via `bluetoothCode.removeToken()`. |
-| GET | `/api/admin/sessions/:sessionId/bluetooth-broadcast` | **For native broadcaster app only.** Returns `{ deviceName, token, rotatesIn, rotationMs }` so an external app can advertise the current rotating token over BLE. Staff auth required. |
+| DELETE | `/api/admin/sessions/:sessionId` | Soft-delete; attendance preserved |
+| PATCH | `/api/admin/sessions/:sessionId/rotation/start` | Enable + resume rotation |
+| PATCH | `/api/admin/sessions/:sessionId/rotation/stop` | Pause rotation (PIN stays on screen) |
+| PATCH | `/api/admin/sessions/:sessionId/attendance-paused` | Pause/resume student submissions |
+| PATCH | `/api/admin/sessions/:sessionId/bluetooth/start` | Enable BLE; generates `UOP-XXXXXXXX` device name on first call |
+| PATCH | `/api/admin/sessions/:sessionId/bluetooth/stop` | Disable BLE; clears in-memory token |
+| GET | `/api/admin/sessions/:sessionId/bluetooth-broadcast` | **Broadcaster app only.** Returns `{ deviceName, token, rotatesIn, rotationMs }` |
 | GET | `/api/admin/courses/:courseId/attendance-matrix` | |
 | GET | `/api/admin/lecturers?q=` | Admin |
 | POST | `/api/admin/lecturers` | Admin |
 | PATCH | `/api/admin/lecturers/:id` | Admin |
-| DELETE | `/api/admin/lecturers/:id` | Admin. Removes lecturer from course owners; if that would leave a course with zero owners, reassigns a fallback active lecturer (otherwise returns 400). |
-| GET | `/api/admin/polygon-presets` | |
-| POST | `/api/admin/polygon-presets` | Admin |
-| PATCH | `/api/admin/polygon-presets/:id` | Admin |
-| DELETE | `/api/admin/polygon-presets/:id` | Admin |
+| DELETE | `/api/admin/lecturers/:id` | Admin |
 
 ---
 
 ## Content Security Policy
 
-CSP is **enforced only when `NODE_ENV=production`** (CRA's dev server uses `eval` for source maps, which a strict CSP would block). The policy is built from the actual external origins the app loads:
+CSP is **enforced only when `NODE_ENV=production`**. Policy summary:
 
 ```
 default-src 'self';
-base-uri 'self';
-object-src 'none';
 script-src 'self';
-script-src-attr 'none';
 style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
 font-src 'self' data: https://fonts.gstatic.com;
-img-src 'self' data: blob:
-  https://*.tile.openstreetmap.org
-  https://server.arcgisonline.com;
+img-src 'self' data: blob:;
 connect-src 'self' [+ CSP_EXTRA_CONNECT_SRC];
 frame-ancestors 'none';
 form-action 'self' https://accounts.google.com;
-worker-src 'self' blob:;
-manifest-src 'self';
-upgrade-insecure-requests;
 ```
 
-**Allow-list rationale**
+> Note: The Capacitor Android WebView bypasses the browser's CSP enforcement mechanism — CSP headers only apply when accessing the app from a real browser. The policy still protects browser users.
 
-| Origin | Why it's allowed |
-|---|---|
-| `https://fonts.googleapis.com` | Inter font CSS in `public/index.html` |
-| `https://fonts.gstatic.com` | Inter `.woff2` files |
-| `https://*.tile.openstreetmap.org` | OpenStreetMap base layer in `AdminDashboard.jsx` |
-| `https://server.arcgisonline.com` | Esri satellite layer in `AdminDashboard.jsx` |
-| `https://accounts.google.com` (`form-action`) | OAuth redirect target |
-| `'unsafe-inline'` for `style-src` | Leaflet sets inline `transform:` styles on map markers; script XSS remains blocked |
-
-**Rolling it out safely**
-
-1. Deploy with `CSP_REPORT_ONLY=1`. Browsers send `Content-Security-Policy-Report-Only` so violations show up in DevTools (`Reports` tab) without breaking the page.
-2. Use the app on staging across all roles for a session — note any `[CSP]` violation reports.
-3. If you added a new external resource (new map provider, analytics, etc.), either add its origin to the directives in `server/index.js` or to `CSP_EXTRA_CONNECT_SRC` (for fetch/XHR origins only).
-4. Unset `CSP_REPORT_ONLY` to enforce.
-
-If your deployment serves the SPA and the API on **different hostnames** (i.e. `REACT_APP_API_BASE` is set to a different origin), add that API origin to `CSP_EXTRA_CONNECT_SRC` so the browser will allow `fetch()` to it.
+**Extending for split-host deploys:** If `REACT_APP_API_BASE` points to a different origin, add it to `CSP_EXTRA_CONNECT_SRC`.
 
 ---
 
-## Authentication and authorization flow
-
-1. User visits `/` → `Login` can redirect to **`/auth/google`** on the **API origin** (full URL depends on deployment).
-2. Google returns to **`/auth/google/callback`**; Passport establishes session (persisted in MongoDB via `connect-mongo`) and redirects to **`{FRONTEND_URL}/login/success`**.
-3. `GoogleSuccess` calls **`GET /api/me`** with credentials and writes **`localStorage`** key `student` as a cache snapshot.
-4. `App` re-validates session state via **`GET /api/me`** on load; this server response is the routing source of truth (`student` → `/lecture`; `lecturer` / `admin` → `/admin`).
-
-**Role source of truth:** `Person.role` in MongoDB (`student` | `lecturer` | `admin`). Google callback can **promote** to `lecturer` if email matches an active lecturer row (see `server/index.js` Google strategy).
-
-**Bootstrap admin:** startup enforces `udayakavindadev@gmail.com` as an active, non-deleted `admin` record for emergency access in fresh databases.
-
----
-
-## Student attendance flow (implementation)
-
-Attendance is recorded via **Web Bluetooth** — no PIN entry or GPS required.
-
-1. `GET /api/courses/running` populates the course combobox (polling every 10 s).
-2. Student picks a running course and taps **📡 Scan for Bluetooth Attendance**.
-3. Client calls `GET /api/bluetooth-target?courseId=…` to fetch `{ deviceName }`. If BT is disabled on the active session, the API returns an error and the scan is aborted.
-4. `navigator.bluetooth.requestDevice({ filters: [{ name: deviceName }], optionalManufacturerData: [0xFFFF] })` opens the OS BLE picker, pre-filtered to the session's `UOP-XXXXXXXX` beacon.
-5. `device.watchAdvertisements({ signal: abortController.signal })` begins listening for BLE advertisements. A 30 s timeout fires `AbortController.abort()` if no packet arrives.
-6. On `advertisementreceived`: manufacturer data for company ID `0xFFFF` is read as 8 bytes → 16-char hex token.
-7. `POST /api/bluetooth-attendance` `{ courseId, token }` — server calls `bluetoothCode.verifyToken(sessionId, token)` (string equality check against the current window's token). On match, creates an `Attendance` record with `method: 'bluetooth'`.
-8. On `{ success }` or `{ duplicate }`, `recorded=true` is set and the success screen is shown.
-
-Staff live control notes:
-- **📡 BT on / BT off** pill buttons on each session card control `bluetoothEnabled`. When enabled, the device badge (`UOP-XXXXXXXX`) is shown.
-- The **blinking Live badge** (`attendancePaused`) pauses/resumes student submissions independently of BLE broadcasting.
-- A separate **native broadcaster app** must call `GET /api/admin/sessions/:id/bluetooth-broadcast` and advertise the returned token; the web dashboard controls only enable/disable.
-
-**Browser support:** Web Bluetooth (`navigator.bluetooth.requestDevice` + `watchAdvertisements`) is available on **Chrome for Android** (and Chrome OS). It is **not** available in Safari, Firefox, or Chrome on iOS. Students on unsupported browsers see an error message.
-
----
-
-## Development conventions
-
-- **API client:** Add new calls to `src/api.js` using **`safeFetchJson`**; preserve **`credentials: 'include'`** and **401 handling** (`notifySessionInvalid`).
-- **Styles:** Global `src/index.css`; layout-specific `src/layouts/layouts.css`. BEM-style class names appear in places (`student-empty__text`, `primary-btn--location-check`).
-- **Maps:** Leaflet assets; admin/student flows use React hooks and functional components.
-- **Error handling:** Root **`ErrorBoundary`**; dev-only `unhandledrejection` logging in `src/index.js`.
-
----
-
-## Known limitations and assumptions
+## Known limitations
 
 | Topic | Detail |
 |-------|--------|
-| **BLE browser support** | `navigator.bluetooth.requestDevice` + `watchAdvertisements` is only available on **Chrome for Android** (and Chrome OS). Safari, Firefox, and Chrome on iOS will fail. Students on unsupported browsers see an explicit error message. |
-| **BLE broadcaster** | The web dashboard cannot advertise BLE—browsers have no BLE peripheral API. A **separate native app** must call `GET /api/admin/sessions/:id/bluetooth-broadcast` and broadcast the returned token. Without the broadcaster running, students cannot record attendance. |
-| **BLE token rotation** | Automatic every **15 s** — a `setInterval` in `bluetoothCode.js` sweeps the in-memory store every 1 s and replaces any token whose window has elapsed. No broadcaster poll required to trigger rotation. |
-| **PIN / token storage** | In-memory per server process; **not** durable across restarts or horizontal scaling without redesign. |
-| **Public discovery** | `/api/courses` and `/api/courses/running` require an authenticated session. |
-| **Client guards** | Route protection is server-authoritative via **`/api/me`**; localStorage is cache-only and must not be trusted for authorization. |
-| **Tests** | CRA test stack present; **no comprehensive API integration tests** in repo were verified for this README. |
+| **BLE on native app** | Full BLE scanning via `@capacitor-community/bluetooth-le` on the Android app. No browser dialog — scans directly. Requires Android 6+ with Bluetooth enabled. |
+| **BLE in browser** | `navigator.bluetooth.requestDevice` + `watchAdvertisements` is only available on **Chrome for Android** (and Chrome OS). Not available in Safari, Firefox, or Chrome on iOS. Students on unsupported browsers see an explicit error message. |
+| **iOS** | Capacitor supports iOS with `@capacitor/ios`, but this branch only ships the Android project. An iOS build would require adding `npx cap add ios` on a Mac with Xcode. |
+| **BLE broadcaster** | The web dashboard cannot advertise BLE — browsers have no BLE peripheral API. A **separate native app** must call `GET /api/admin/sessions/:id/bluetooth-broadcast` and broadcast the returned token. |
+| **BLE token rotation** | Automatic every **10 seconds** via a `setInterval` in `bluetoothCode.js`. No poll required to trigger rotation. |
+| **Token / PIN storage** | In-memory per server process; not durable across restarts or horizontal scaling. |
+| **Emulator BLE** | Android emulators do not support real Bluetooth hardware. BLE scanning requires a physical device. |
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Things to check |
-|---------|-------------------|
-| CORS errors | `FRONTEND_URL` matches browser origin exactly; `credentials: true` on server; no mixed `www` vs bare domain. |
-| OAuth redirect mismatch | Google Console redirect URI matches **`APP_BASE_URL` + `/auth/google/callback`** (or relative path if relative callback is registered, which is uncommon). |
-| 401 after deploy | Sessions are persisted in Mongo (`connect-mongo`), so mass logout is no longer expected. Check `SESSION_SECRET`, cookie domain/protocol (`Secure`/`SameSite`), and whether deploy changed host/origin unexpectedly. |
-| PIN always invalid | Clock skew; session not “running” (day/time); rotation paused; wrong `courseId`; server restarted (new code). |
-| “Scan” button missing / disabled | Web Bluetooth is not supported on this browser — student must use Chrome on Android. Chrome on iOS does not support it. |
-| BLE device not found in picker | Student is too far from the broadcaster; broadcaster app is not running; session does not have BT enabled (staff must tap **📡 BT on**); device name mismatch (unlikely — server returns the exact name stored in DB). |
-| “No Bluetooth signal received in 30 s” | Broadcaster is running but student is out of BLE range (typically < 10 m in open air, less through walls); move closer to the classroom. Also check that `advertisementreceived` fires with manufacturer data — some OS/browser combos drop packets. |
-| Token validation fails (“Verification failed”) | Student scanned just as the 15 s token rotated — the scanned packet carried the old token but the server has already replaced it. Student should tap Scan again immediately; the next advertisement will carry the new token. |
-| Startup index sync errors | Inspect startup logs in `server/index.js` connect handler; ensure DB user has index-management permissions. |
+### Android build issues
+
+| Symptom | Fix |
+|---------|-----|
+| `sdk.dir` error when opening Android Studio | Open Android Studio → SDK Manager → confirm Android SDK is installed; or set `ANDROID_SDK_ROOT` env var |
+| Gradle sync fails ("Could not resolve…") | Check internet connection; try **File → Sync Project with Gradle Files** |
+| `JAVA_HOME` not set | Android Studio bundles a JDK — in Android Studio: **File → Project Structure → SDK Location → JDK location** |
+| Build fails: "Manifest merger failed" | Check `android/app/src/main/AndroidManifest.xml` for duplicate permission tags |
+| App installed but shows blank white screen | The `build/` folder wasn't synced — run `npm run cap:sync` then Run again |
+| "ERR_CONNECTION_REFUSED" in app | The React app can't reach the API — check `REACT_APP_API_BASE` points to your running server |
+
+### BLE issues on device
+
+| Symptom | Fix |
+|---------|-----|
+| "Bluetooth initialization failed" | Enable Bluetooth on the phone; accept the Bluetooth permission dialog |
+| Scan starts but never finds the beacon | Broadcaster app is not running; student is too far from the beacon (BLE range typically < 10 m); check `bluetoothEnabled` on the session card |
+| "No Bluetooth signal received in 30 s" | Move closer to the classroom; check the session has BT enabled (staff must tap **📡 BT on**) |
+| "Invalid or expired Bluetooth token" | Token rotated just as the packet was scanned (15 s window); tap Scan again immediately for the fresh token |
+| BLE permission denied permanently | Go to phone **Settings → Apps → UOP Attendance → Permissions → Nearby devices → Allow** |
+
+### Web app issues
+
+| Symptom | Fix |
+|---------|-----|
+| CORS errors | `FRONTEND_URL` must exactly match browser origin; `credentials: true` on server |
+| OAuth redirect mismatch | Google Console redirect URI must match `APP_BASE_URL + /auth/google/callback` |
+| 401 after deploy | Check `SESSION_SECRET`, cookie domain/protocol, and whether hostname changed |
+| "Scan" button disabled in browser | Web Bluetooth not supported on this browser — student must use Chrome on Android |
+
+---
+
+## Development conventions
+
+- **API client:** Add new calls to `src/api.js` using `safeFetchJson`; preserve `credentials: 'include'` and 401 handling.
+- **Capacitor changes:** After changing `capacitor.config.ts` or native plugin config, run `npx cap sync`.
+- **Styles:** Global `src/index.css`; layout-specific `src/layouts/layouts.css`.
+- **Error handling:** Root `ErrorBoundary`; dev-only `unhandledrejection` logging in `src/index.js`.
+
+---
+
+## Codebase invariants
+
+| Item | Current state | Source |
+|------|---------------|--------|
+| Student scan — native | `BleClient.initialize + requestLEScan` (no dialog); path activated by `Capacitor.isNativePlatform() === true` | `src/components/LectureEntry.jsx` |
+| Student scan — browser | `navigator.bluetooth.requestDevice + watchAdvertisements`; fallback when not native | `src/components/LectureEntry.jsx` |
+| BLE token | 8 random bytes = 16-char hex. Rotates every **10 seconds** via `setInterval` in `bluetoothCode.js`. Verified by string equality. Stored in `Attendance.lectureCode`. | `server/lib/bluetoothCode.js` |
+| BLE device name | `'UOP-' + 4 random hex bytes uppercase`. Generated once on first `bluetooth/start`, persisted in `LectureSession.bluetoothDeviceName`. | `server/lib/bluetoothCode.js` |
+| Attendance method | `['google', 'bluetooth']` — `'bluetooth'` for BLE-recorded rows. | `server/models/Attendance.js` |
+| PIN rotation | 30 s window when enabled. | `server/lib/lectureCode.js` |
+| Token / PIN storage | In-process memory (Map). Server restart clears both. | `server/lib/lectureCode.js`, `server/lib/bluetoothCode.js` |
+| Sessions persistence | `express-session` + `connect-mongo` (TTL 7 d). Survives restarts. | `server/index.js` |
+| Security middleware | `helmet` (prod CSP), `cors` (allow-list), `express-rate-limit` (per-user/IP). | `server/index.js` |
+| Course ownership | Multi-owner: `Course.lecturers` array, 1..5 unique lecturer IDs. | `server/models/Course.js` |
+| Course delete | Transactional: attendance + sessions + course deleted atomically. | `server/index.js` |
+| Duplicate attendance | `{ success: true, duplicate: true }` for same-session same-day re-records; never 500. | `server/index.js` |
+| Public discovery | `/api/courses` and `/api/courses/running` require auth. | `server/index.js` |
+| Timezone | Server uses host local time (`localYmd`) unless `TZ` is set. | `server/index.js` |
+| Bootstrap admin | Startup ensures `udayakavindadev@gmail.com` is an active admin. | `server/index.js` |
+| Capacitor app ID | `lk.ac.pdn.eng.attendance` | `capacitor.config.ts` |
+| Android BLE permissions | `BLUETOOTH_SCAN` (neverForLocation) + `BLUETOOTH_CONNECT` for API 31+; legacy permissions for API ≤ 30. | `android/app/src/main/AndroidManifest.xml` |
 
 ---
 
 ## Contributing
 
 1. Work on a feature branch; keep changes focused.
-2. Match existing patterns in `src/api.js`, `server/index.js` auth helpers, and component style.
-3. Run **`npm run build`** before sharing frontend changes; **`node --check server/index.js`** for syntax after server edits.
-4. Update this README when adding env vars, routes, or auth behavior—**documentation drift** has been an issue historically.
-
----
-
-## AI Context (for coding assistants)
-
-**Goals when editing this repo**
-
-- Prefer **small, reviewable diffs**; do not refactor `server/index.js` broadly without explicit instruction.
-- **Never** trust `studentId` from request body for authorization—use `sessionStudentAuth` / `req.user` patterns already in place.
-- **Preserve** `safeFetchJson` and **401 → `notifySessionInvalid`** behavior for session coherence.
-
-**Architecture patterns**
-
-- Monolithic Express file with inline helpers (`resolveActiveSessionForCourse`, geofence, schedule checks) plus shared scheduling helpers in `server/lib/schedule.js`.
-- Mongoose models in `server/models/`.
-- React SPA with **layout routes** and **role gates** in `App.js` (localStorage snapshot of `/api/me`).
-
-**State management**
-
-- **React component state and hooks only**—no Redux or global client store.
-
-**Styling**
-
-- CSS files (`index.css`, `layouts.css`); utility classes like `primary-btn`, `card-content`, `input`.
-
-**Naming**
-
-- Mongo: `Person` model, `people` collection historically; routes under `/api/admin/…`.
-- Course ownership is stored in `Course.lecturers` (1..5 assigned lecturers per course).
-- Session cookie name: **`attendance.sid`**.
-
-**Sensitive / high-impact areas (edit carefully)**
-
-- **`server/index.js`**: OAuth strategy, session cookie flags, CORS, startup index sync, attendance logic.
-- **`server/lib/lectureCode.js`**: PIN generation and validation contract with clients.
-- **`server/lib/bluetoothCode.js`**: BLE token generation, rotation, and verification; token lifetime and in-memory store.
-- **`src/utils/authRedirect.js`**, **`src/api.js`**: session invalidation and base URL logic.
-
----
-
-## Codebase invariants (current state)
-
-This table is the quick reference for facts the rest of the README depends on. Update it together with the code if any of these change.
-
-| Item | Current state | Source |
-|------|---------------|--------|
-| Student flow | **BLE scan** — student taps "Scan for Bluetooth Attendance", browser BLE picker opens, device advertises 8-byte token in manufacturer data (`0xFFFF`), client calls `/api/bluetooth-attendance` with hex token; no PIN entry, no GPS. | `src/components/LectureEntry.jsx` |
-| BLE token | 8 random bytes = 16-char hex. Rotates automatically every **15 s** via a `setInterval` sweep in `bluetoothCode.js`; seeded immediately when BT is enabled. Verified by `bluetoothCode.verifyToken(sessionId, token)`. Stored in `Attendance.lectureCode` field for bluetooth rows. | `server/lib/bluetoothCode.js`, `server/models/Attendance.js` |
-| BLE device name | Fixed per session lifetime — `'UOP-' + 4 random hex bytes uppercase` (e.g. `UOP-A3F7C201`). Generated once on first `bluetooth/start` call and persisted in `LectureSession.bluetoothDeviceName`. | `server/lib/bluetoothCode.js`, `server/models/LectureSession.js` |
-| Attendance method enum | `['google', 'bluetooth']` — `'bluetooth'` added for BLE-recorded rows. | `server/models/Attendance.js` |
-| PIN rotation | **30 s** window when rotation is active (`ROTATION_MS`); rotation can be paused independently of attendance acceptance. | `server/lib/lectureCode.js` |
-| Token / PIN storage | **In-process memory** only (Map). Server restart drops both PIN rotation state and BLE tokens. | `server/lib/lectureCode.js`, `server/lib/bluetoothCode.js` |
-| Sessions persistence | `express-session` + **`connect-mongo`** (collection `sessions`, TTL 7 d). Survives Node restarts and horizontal scaling. | `server/index.js` |
-| Security middleware | **`helmet`** with **production-only CSP** (allow-list of OSM/Esri tiles, Google Fonts; everything else `'self'`; `frame-ancestors 'none'`; toggleable via `CSP_REPORT_ONLY` and extendable via `CSP_EXTRA_CONNECT_SRC`); **`cors`** (allow-list, credentialed); **`express-rate-limit`** (per-user via `limiterKeyByUserOrIp`; IP fallback wraps `req.ip` with `rateLimit.ipKeyGenerator()` so IPv6 clients can't bypass limits by rotating addresses — required by `express-rate-limit` v8 `ERR_ERL_KEY_GEN_IPV6` validator). | `server/index.js` |
-| Course ownership | Multi-owner: each course stores `lecturers` (array of 1..5 unique lecturer IDs), and any assigned lecturer has course-scoped staff access. | `server/models/Course.js`, `server/index.js` |
-| Course delete consistency | `DELETE /api/admin/courses/:courseId` runs in a Mongo transaction so attendance, sessions, and course delete succeed/fail together. | `server/index.js` |
-| Duplicate attendance | `/api/bluetooth-attendance` returns `{ success: true, duplicate: true }` for same-session re-records (pre-check **and** unique-index catch on `11000`), never 500. | `server/index.js` |
-| Public discovery | `/api/courses` and `/api/courses/running` require an authenticated session. | `server/index.js` |
-| Removed | `POST /api/login` (unauthenticated user-enumeration oracle) and the `login()` helper in `src/api.js`. | — |
-| Removed | Legacy one-shot endpoint `POST /api/verify-lecture` (superseded by the PIN+GPS flow, which is itself superseded by BLE on this branch). | `server/index.js`, `src/api.js` |
-| Timezone | Server date/day logic uses host system local time (`localYmd`) unless `TZ` is explicitly set in the environment; Excel filename date uses system-local Y-M-D (`systemLocalYmd`). | `server/index.js`, `src/utils/matrixExcel.js` |
-| Live attendance gating | Per-session `attendancePaused` flag toggled via the **blinking Live badge** in Session control or the projector view. Auto-clears when a new daily occurrence rolls over. | `server/models/LectureSession.js`, `src/components/AdminDashboard.jsx`, `src/components/SessionPinPresentPage.jsx` |
-| Schedule helpers | Shared scheduling/day helpers are centralized in `server/lib/schedule.js` and reused by API + expiry job. | `server/lib/schedule.js`, `server/index.js`, `server/lib/sessionExpiry.js` |
-| Bootstrap admin | Startup ensures `udayakavindadev@gmail.com` exists as active non-deleted `admin`; creates record if missing. | `server/index.js` |
-| License | **No `LICENSE` file**; package is `"private": true` in `package.json`. | `package.json` |
-
----
-
-## License
-
-No license file is included. **`package.json` declares `"private": true`.** Use and redistribution are subject to your institution’s policies; add a `LICENSE` file if you intend open-source distribution.
+2. After changing frontend code, run `npm run cap:sync` to keep the Android project in sync.
+3. Run `npm run build` before sharing frontend changes; `node --check server/index.js` after server edits.
+4. Run `npm run test:server` to verify the BLE route tests pass.
+5. Update this README when adding env vars, routes, or auth behavior.

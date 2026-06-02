@@ -13,6 +13,7 @@ import {
 } from '../api';
 import { readStoredStudent } from '../utils/safeStorage';
 
+
 const BT_PHASE_LABEL = {
   fetching: 'Looking up session…',
   requesting: 'Select the device in the browser dialog…',
@@ -21,7 +22,7 @@ const BT_PHASE_LABEL = {
 };
 
 function runningCourseLabel(item) {
-  return `${item.code} — ${item.name}`;
+  return `${item.code} – ${item.name}`;
 }
 
 export default function LectureEntry() {
@@ -46,17 +47,15 @@ export default function LectureEntry() {
     }
   };
 
+  const scheduleCloseMenu = () => {
+    blurCloseTimer.current = setTimeout(() => {
+      setCourseMenuOpen(false);
+    }, 150);
+  };
+
   const openCourseMenu = useCallback(() => {
     clearBlurTimer();
     setCourseMenuOpen(true);
-  }, []);
-
-  const scheduleCloseMenu = useCallback(() => {
-    clearBlurTimer();
-    blurCloseTimer.current = setTimeout(() => {
-      setCourseMenuOpen(false);
-      setHighlightIndex(-1);
-    }, 200);
   }, []);
 
   // Poll running courses every 10 s
@@ -153,8 +152,9 @@ export default function LectureEntry() {
     });
   }, [courseMenuOpen, filteredCourses.length]);
 
-  // Abort BT watch on unmount
-  useEffect(() => () => { abortRef.current?.abort(); }, []);
+  // Cancel any in-progress BT scan on unmount (works for both paths)
+  const cancelScanRef = useRef(null);
+  useEffect(() => () => { cancelScanRef.current?.(); }, []);
   useEffect(() => () => clearBlurTimer(), []);
 
   const handleCourseKeyDown = (e) => {
@@ -182,9 +182,9 @@ export default function LectureEntry() {
     }
   };
 
-  const startBtScan = useCallback(async () => {
-    if (!courseId) { setError('Select a course first.'); return; }
-
+  
+  // ── Web Bluetooth fallback path (Chrome on Android) ──────────────────────────
+  const startBtScanWeb = useCallback(async () => {
     if (!navigator.bluetooth?.requestDevice) {
       setError('Web Bluetooth is not supported on this browser. Please use Chrome on Android.');
       return;
@@ -194,11 +194,7 @@ export default function LectureEntry() {
     setBtPhase('fetching');
 
     const target = await getBluetoothTarget(courseId);
-    if (target.error) {
-      setError(target.error);
-      setBtPhase('idle');
-      return;
-    }
+    if (target.error) { setError(target.error); setBtPhase('idle'); return; }
 
     setBtPhase('requesting');
     let device;
@@ -209,7 +205,7 @@ export default function LectureEntry() {
       });
     } catch (err) {
       setBtPhase('idle');
-      if (err.name === 'NotFoundError') return; // user cancelled picker — no error shown
+      if (err.name === 'NotFoundError') return;
       setError(
         err.name === 'SecurityError'
           ? 'Bluetooth permission denied. Enable Bluetooth and try again.'
@@ -221,11 +217,13 @@ export default function LectureEntry() {
     setBtPhase('watching');
     const ac = new AbortController();
     abortRef.current = ac;
+    cancelScanRef.current = () => ac.abort();
     let tokenFound = false;
 
     const timeout = setTimeout(() => {
       if (!tokenFound) {
         ac.abort();
+        cancelScanRef.current = null;
         setBtPhase('idle');
         setError('No Bluetooth signal received in 30 s. Make sure you are near the room and the broadcaster is running.');
       }
@@ -234,29 +232,29 @@ export default function LectureEntry() {
     const handleAdvertisement = async (evt) => {
       if (tokenFound) return;
       const mfData = evt.manufacturerData?.get(0xFFFF);
-      if (!mfData) return; // wait for a packet that carries our manufacturer data
+      if (!mfData) return;
 
       tokenFound = true;
       clearTimeout(timeout);
       ac.abort();
+      cancelScanRef.current = null;
 
       const token = Array.from(new Uint8Array(mfData.buffer))
         .map((b) => b.toString(16).padStart(2, '0'))
         .join('');
 
       setBtPhase('submitting');
-      const result = await submitBluetoothAttendance({ courseId, token });
-      if (result.success || result.duplicate) {
+      const resp = await submitBluetoothAttendance({ courseId, token });
+      if (resp.success || resp.duplicate) {
         setRecorded(true);
         setError(null);
       } else {
-        setError(result.error || 'Verification failed. Move closer and try again.');
+        setError(resp.error || 'Verification failed. Move closer and try again.');
       }
       setBtPhase('idle');
     };
 
     device.addEventListener('advertisementreceived', handleAdvertisement);
-
     try {
       await device.watchAdvertisements({ signal: ac.signal });
     } catch (err) {
@@ -266,6 +264,12 @@ export default function LectureEntry() {
       setError(err.message || 'Bluetooth watch failed.');
     }
   }, [courseId]);
+
+  // ── Entry point: pick the right path ─────────────────────────────────────────
+  const startBtScan = useCallback(async () => {
+    if (!courseId) { setError('Select a course first.'); return; }
+    return startBtScanWeb();
+  }, [courseId, startBtScanWeb]);
 
   const scanning = btPhase !== 'idle';
   const noRunning = courses.length === 0 && !error;

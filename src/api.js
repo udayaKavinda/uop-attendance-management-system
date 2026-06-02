@@ -6,24 +6,12 @@ function apiBase() {
   return '';
 }
 
-/**
- * Fetch JSON; does not throw on network failure or non-JSON body..
- * Sends cookies (Passport session) on same-site / credentialed CORS requests.
- */
 async function safeFetchJson(url, init = {}) {
   try {
-    const resp = await fetch(url, {
-      credentials: 'include',
-      ...init,
-      headers: {
-        ...(init.headers || {}),
-      },
-    });
+    const resp = await fetch(url, { credentials: 'include', ...init, headers: { ...(init.headers || {}) } });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      if (resp.status === 401) {
-        notifySessionInvalid();
-      }
+      if (resp.status === 401) notifySessionInvalid();
       const msg = data.error || data.message || `Request failed (${resp.status})`;
       return { ...data, error: msg };
     }
@@ -33,30 +21,8 @@ async function safeFetchJson(url, init = {}) {
   }
 }
 
-/** Current user from server session (requires Google OAuth cookie). */
-export async function getMe() {
-  return safeFetchJson(`${apiBase()}/api/me`);
-}
-
-export async function logoutSession() {
-  return safeFetchJson(`${apiBase()}/api/logout`, { method: 'POST' });
-}
-
-export async function verifyLecturePin(payload) {
-  return safeFetchJson(`${apiBase()}/api/verify-lecture-pin`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function recordAttendance(payload) {
-  return safeFetchJson(`${apiBase()}/api/record-attendance`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-}
+export async function getMe() { return safeFetchJson(`${apiBase()}/api/me`); }
+export async function logoutSession() { return safeFetchJson(`${apiBase()}/api/logout`, { method: 'POST' }); }
 
 export async function getAttendanceStatus(courseId) {
   return safeFetchJson(
@@ -96,12 +62,6 @@ export async function stopSessionBluetooth(sessionId) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Staff-only: live pin for an active session on this course (lecturer = own courses only). */
-export async function getLectureCode(courseId) {
-  return safeFetchJson(
-    `${apiBase()}/api/lecture-code?courseId=${encodeURIComponent(courseId || '')}`,
-  );
-}
 
 export async function getCourses() {
   const data = await safeFetchJson(`${apiBase()}/api/courses`);
@@ -117,7 +77,6 @@ export async function getRunningCourses() {
   return { items: Array.isArray(raw) ? raw : [] };
 }
 
-/** Staff-only: session cookie must belong to admin or lecturer. */
 export async function getAdminCourses() {
   const data = await safeFetchJson(`${apiBase()}/api/admin/courses`);
   if (data.error) return data;
@@ -127,17 +86,13 @@ export async function getAdminCourses() {
 
 export async function createAdminCourse(payload) {
   return safeFetchJson(`${apiBase()}/api/admin/courses`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
 }
 
 export async function patchCourseAssignLecturer(courseId, lecturerIds) {
   return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/assign-lecturer`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lecturerIds }),
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lecturerIds }),
   });
 }
 
@@ -151,9 +106,7 @@ export async function getAdminLecturers(q) {
 
 export async function createAdminLecturer(payload) {
   return safeFetchJson(`${apiBase()}/api/admin/lecturers`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
 }
 
@@ -165,21 +118,15 @@ export async function deleteAdminLecturer(lecturerId) {
 
 
 export async function deleteAdminCourse(courseId) {
-  return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}`, {
-    method: 'DELETE',
-  });
+  return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}`, { method: 'DELETE' });
 }
 
 export async function disableAdminCourse(courseId) {
-  return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/disable`, {
-    method: 'PATCH',
-  });
+  return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/disable`, { method: 'PATCH' });
 }
 
 export async function enableAdminCourse(courseId) {
-  return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/enable`, {
-    method: 'PATCH',
-  });
+  return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/enable`, { method: 'PATCH' });
 }
 
 export async function getAdminSessions(courseId) {
@@ -191,28 +138,20 @@ export async function getAdminSessions(courseId) {
 
 export async function createAdminSession(courseId, payload) {
   return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/sessions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
 }
 
 export async function deleteAdminSession(sessionId) {
-  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}`, {
-    method: 'DELETE',
-  });
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
 }
 
 export async function activateAdminSession(sessionId) {
-  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/activate`, {
-    method: 'PATCH',
-  });
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/activate`, { method: 'PATCH' });
 }
 
 export async function deactivateAdminSession(sessionId) {
-  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/deactivate`, {
-    method: 'PATCH',
-  });
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/deactivate`, { method: 'PATCH' });
 }
 
 export async function getAdminAllSessions() {
@@ -222,37 +161,88 @@ export async function getAdminAllSessions() {
   return { ...data, items: Array.isArray(raw) ? raw : [] };
 }
 
-export async function getAdminCurrentSessionCodes() {
-  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions/current-codes`);
-  if (data.error) return { error: data.error, items: [] };
-  const raw = data.items ?? data.data;
-  return { items: Array.isArray(raw) ? raw : [] };
-}
-
-export async function startAdminSessionRotation(sessionId) {
-  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/rotation/start`, {
-    method: 'PATCH',
-  });
-}
-
-export async function stopAdminSessionRotation(sessionId) {
-  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/rotation/stop`, {
-    method: 'PATCH',
-  });
-}
-
 export async function patchAdminSessionAttendancePaused(sessionId, paused) {
   return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/attendance-paused`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paused }),
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused }),
   });
-}
-
-export async function getAdminSessionCode(sessionId) {
-  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/current-code`);
 }
 
 export async function getAdminAttendanceMatrix(courseId) {
   return safeFetchJson(`${apiBase()}/api/admin/courses/${encodeURIComponent(courseId)}/attendance-matrix`);
+}
+
+
+
+/** Lecturer: get currently active/running sessions (staff-scoped). */
+export async function getActiveSessions() {
+  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions/current-codes`);
+  if (data.error) return { error: data.error, sessions: [] };
+  const raw = data.items ?? data.data;
+  const sessions = (Array.isArray(raw) ? raw : []).map((s) => ({
+    ...s,
+    id: s.sessionId || s._id,
+  }));
+  return { sessions };
+}
+
+/** Lecturer: get all sessions (history). */
+export async function getSessions() {
+  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions`);
+  if (data.error) return { error: data.error, sessions: [] };
+  const raw = data.items ?? data.data;
+  return { sessions: Array.isArray(raw) ? raw.map((s) => ({ ...s, id: s._id })) : [] };
+}
+
+/** Lecturer: activate a session (start it). */
+export async function startSession(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/activate`, {
+    method: 'PATCH',
+  });
+}
+
+/** Lecturer: deactivate a session (end it). */
+export async function endSession(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/deactivate`, {
+    method: 'PATCH',
+  });
+}
+
+/** Lecturer: get attendance records for a session. */
+export async function getAttendance(sessionId) {
+  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/attendance`);
+  if (data.error) return { error: data.error, records: [] };
+  const raw = data.records ?? data.items ?? data.data;
+  return { records: Array.isArray(raw) ? raw : [] };
+}
+
+/** Lecturer: returns a URL for downloading attendance as Excel. */
+export function exportAttendanceUrl(sessionId) {
+  return `${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/attendance/export`;
+}
+
+
+
+
+export async function getAdminSettings() { return safeFetchJson(`${apiBase()}/api/admin/settings`); }
+
+export async function patchAdminStudentDomainRestriction(restrictStudentGoogleDomain) {
+  return safeFetchJson(`${apiBase()}/api/admin/settings/student-domain-restriction`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ restrictStudentGoogleDomain }),
+  });
+}
+
+/** Lecturer: get device name + current rotating token for BLE broadcast. */
+export async function getLecturerBroadcastToken(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/bluetooth-broadcast`);
+}
+
+/** Lecturer: enable BLE for a session (generates device name if not set). */
+export async function enableSessionBluetooth(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/bluetooth/start`, { method: 'PATCH' });
+}
+
+/** Lecturer: disable BLE for a session. */
+export async function disableSessionBluetooth(sessionId) {
+  return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/bluetooth/stop`, { method: 'PATCH' });
 }

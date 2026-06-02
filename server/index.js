@@ -1,4 +1,5 @@
 require('dotenv').config();
+const crypto = require('crypto');
 
 const express = require('express');
 const mongoose = require('mongoose');
@@ -14,7 +15,6 @@ const Person = require('./models/Person');
 const Attendance = require('./models/Attendance');
 const Course = require('./models/Course');
 const LectureSession = require('./models/LectureSession');
-const lectureCode = require('./lib/lectureCode');
 const bluetoothCode = require('./lib/bluetoothCode');
 const { startNonRecurringExpiryJob } = require('./lib/sessionExpiry');
 const {
@@ -24,7 +24,6 @@ const {
   isNonRecurringExpired,
 } = require('./lib/schedule');
 
-const MAX_LECTURE_PIN_LENGTH = 16;
 const MAX_COURSE_LECTURERS = 5;
 const BOOTSTRAP_ADMIN_EMAIL = 'udayakavindadev@gmail.com';
 
@@ -138,8 +137,6 @@ function checkScheduleWindow(sessionConfig) {
 }
 
 
-function sessionCodeKey(sessionId) {
-  return `session:${sessionId}`;
 }
 
 function localYmd(now = new Date()) {
@@ -153,35 +150,8 @@ function currentOccurrenceKey(now = new Date()) {
   return localYmd(now);
 }
 
-/** Mark this Passport session as having proven PIN knowledge for (sessionId, today). */
-function rememberSessionPinTrust(req, sessionId) {
-  if (!req || !req.session) return;
-  const map = req.session.verifiedSessions || {};
-  map[String(sessionId)] = currentOccurrenceKey();
-  req.session.verifiedSessions = map;
-}
 
-/** True when the user already verified the PIN for this lecture-session today. */
-function hasSessionPinTrust(req, sessionId) {
-  if (!req || !req.session || !req.session.verifiedSessions) return false;
-  return req.session.verifiedSessions[String(sessionId)] === currentOccurrenceKey();
-}
 
-async function syncSessionCodeMode(sessionItem, now = new Date()) {
-  const occurrence = currentOccurrenceKey(now);
-  const codeKey = sessionCodeKey(sessionItem._id);
-  if (sessionItem.rotationOccurrenceKey !== occurrence) {
-    sessionItem.rotationOccurrenceKey = occurrence;
-    sessionItem.attendancePaused = false;
-    lectureCode.resetCode(codeKey);
-    await sessionItem.save();
-  }
-  if (sessionItem.rotationEnabled && !sessionItem.rotationPaused) {
-    lectureCode.resumeCode(codeKey);
-  } else {
-    lectureCode.pauseCode(codeKey);
-  }
-}
 
 function isSessionRunningNow(sessionItem, now = new Date()) {
   if (!sessionItem || !sessionItem.active || sessionItem.deleted) return false;
@@ -212,7 +182,6 @@ async function resolveActiveSessionForCourse(courseId) {
     return start !== null && end !== null && currentMinutes >= start && currentMinutes <= end;
   });
   if (!active) return { error: 'No active lecture session for this course now' };
-  await syncSessionCodeMode(active, now);
   return { course, session: active };
 }
 
@@ -297,24 +266,8 @@ function normalizeLecturerIds(rawLecturerIds) {
 
 
 
-function isValidLatLng(lat, lng) {
-  const la = Number(lat);
-  const ln = Number(lng);
-  return Number.isFinite(la) && Number.isFinite(ln)
-    && la >= -90 && la <= 90 && ln >= -180 && ln <= 180;
-}
 
-function isValidAccuracy(value) {
-  if (value === undefined || value === null || value === '') return true;
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 && n <= 1_000_000;
-}
 
-function isValidPin(pin) {
-  if (typeof pin !== 'string' && typeof pin !== 'number') return false;
-  const stripped = String(pin).replace(/\s/g, '');
-  return stripped.length > 0 && stripped.length <= MAX_LECTURE_PIN_LENGTH;
-}
 
 const app = express();
 
@@ -427,14 +380,6 @@ function limiterKeyByUserOrIp(req) {
   return `ip:${rateLimit.ipKeyGenerator(req.ip)}`;
 }
 
-const studentPinLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 30,
-  keyGenerator: limiterKeyByUserOrIp,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many attempts, please slow down.' },
-});
 const studentRecordLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
@@ -690,7 +635,6 @@ app.post('/api/admin/courses', async (req, res) => {
   try {
     const auth = await sessionStaffAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const code = lectureCode.normalizeCourseCode(req.body.code);
     const name = String(req.body.name || '').trim();
     const batch = String(req.body.batch ?? '').trim();
     const lecturerIdsBody = normalizeLecturerIds(req.body.lecturerIds);
@@ -743,7 +687,7 @@ app.delete('/api/admin/courses/:courseId', async (req, res) => {
     await Attendance.deleteMany({ course: course._id });
     await LectureSession.deleteMany({ course: course._id });
     await Course.deleteOne({ _id: course._id });
-    sessionIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
+    sessionIds.forEach((id) => lectureCode.removeKey(""));
     return res.json({ success: true });
   } catch (err) {
     return respondError(res, err);
@@ -761,7 +705,7 @@ app.patch('/api/admin/courses/:courseId/disable', async (req, res) => {
     await course.save();
     await LectureSession.updateMany({ course: course._id }, { $set: { active: false } });
     const sessionIds = await LectureSession.find({ course: course._id }).distinct('_id');
-    sessionIds.forEach((id) => lectureCode.removeKey(sessionCodeKey(id)));
+    sessionIds.forEach((id) => lectureCode.removeKey(""));
     return res.json({ success: true, course });
   } catch (err) {
     return respondError(res, err);
@@ -879,14 +823,11 @@ app.delete('/api/admin/sessions/:sessionId', async (req, res) => {
     if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
     const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    sessionItem.active = false;
     sessionItem.deleted = true;
+    sessionItem.active = false;
     await sessionItem.save();
-    lectureCode.removeKey(sessionCodeKey(sessionItem._id));
     return res.json({ success: true });
-  } catch (err) {
-    return respondError(res, err);
-  }
+  } catch (err) { return respondError(res, err); }
 });
 
 app.patch('/api/admin/sessions/:sessionId/activate', async (req, res) => {
@@ -900,10 +841,6 @@ app.patch('/api/admin/sessions/:sessionId/activate', async (req, res) => {
     if (!sessionItem.course?.active) return res.status(400).json({ error: 'Course is disabled' });
     sessionItem.active = true;
     await sessionItem.save();
-    if (sessionItem.rotationEnabled) {
-      if (sessionItem.rotationPaused) lectureCode.pauseCode(sessionCodeKey(sessionItem._id));
-      else lectureCode.resumeCode(sessionCodeKey(sessionItem._id));
-    }
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
     return respondError(res, err);
@@ -921,7 +858,6 @@ app.patch('/api/admin/sessions/:sessionId/deactivate', async (req, res) => {
     sessionItem.active = false;
     sessionItem.attendancePaused = false;
     await sessionItem.save();
-    lectureCode.removeKey(sessionCodeKey(sessionItem._id));
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
     return respondError(res, err);
@@ -942,70 +878,8 @@ app.get('/api/admin/sessions', async (req, res) => {
   }
 });
 
-app.get('/api/admin/sessions/current-codes', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const scope = await staffSessionMatch(auth.person, auth.isAdmin);
-    const now = new Date();
-    const sessions = await LectureSession.find({ active: true, deleted: false, ...scope })
-      .populate('course', 'code active batch');
-    const running = sessions.filter((s) => s.course?.active && isSessionRunningNow(s, now));
-    const items = [];
-    for (const s of running) {
-      const codeKey = sessionCodeKey(s._id);
-      await syncSessionCodeMode(s, now);
 
-      items.push({
-        sessionId: s._id,
-        courseCode: s.course.code,
-        rotationEnabled: Boolean(s.rotationEnabled),
-        rotationPaused: Boolean(s.rotationPaused),
-        attendancePaused: Boolean(s.attendancePaused),
-        ...lectureCode.getCurrent(codeKey),
-      });
-    }
-    return res.json({ items });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
 
-app.patch('/api/admin/sessions/:sessionId/rotation/start', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
-    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
-    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
-    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    sessionItem.rotationEnabled = true;
-    sessionItem.rotationPaused = false;
-    await sessionItem.save();
-    lectureCode.resumeCode(sessionCodeKey(sessionItem._id));
-    return res.json({ success: true, session: sessionItem });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
-
-app.patch('/api/admin/sessions/:sessionId/rotation/stop', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
-    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
-    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
-    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    sessionItem.rotationEnabled = true;
-    sessionItem.rotationPaused = true;
-    await sessionItem.save();
-    lectureCode.pauseCode(sessionCodeKey(sessionItem._id));
-    return res.json({ success: true, session: sessionItem });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
 
 // ── Bluetooth admin routes ────────────────────────────────────────────────────
 
@@ -1058,10 +932,12 @@ app.get('/api/admin/sessions/:sessionId/bluetooth-broadcast', async (req, res) =
     if (!sessionItem.bluetoothEnabled) return res.status(400).json({ error: 'Bluetooth not enabled for this session' });
     const { token, rotatesIn } = bluetoothCode.getToken(String(sessionItem._id));
     return res.json({
+      sessionId: sessionItem._id,
       deviceName: sessionItem.bluetoothDeviceName,
       token,
       rotatesIn,
       rotationMs: bluetoothCode.ROTATION_MS,
+      attendancePaused: Boolean(sessionItem.attendancePaused),
     });
   } catch (err) {
     return respondError(res, err);
@@ -1087,54 +963,7 @@ app.patch('/api/admin/sessions/:sessionId/attendance-paused', async (req, res) =
   }
 });
 
-app.get('/api/admin/sessions/:sessionId/current-code', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
-    if (sessionItem) {
-      const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    }
-    if (sessionItem && isNonRecurringExpired(sessionItem)) {
-      sessionItem.active = false;
-      await sessionItem.save();
-      lectureCode.removeKey(sessionCodeKey(sessionItem._id));
-    }
-    if (!sessionItem || !sessionItem.active) return res.status(404).json({ error: 'Session not found' });
-    const now = new Date();
-    if (isSessionRunningNow(sessionItem, now)) {
-      await syncSessionCodeMode(sessionItem, now);
-    }
-    return res.json({
-      sessionId: sessionItem._id,
-      attendancePaused: Boolean(sessionItem.attendancePaused),
-      ...lectureCode.getCurrent(sessionCodeKey(sessionItem._id)),
-    });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
 
-app.get('/api/lecture-code', async (req, res) => {
-  try {
-    const auth = await sessionStaffAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    const { courseId } = req.query;
-    if (!courseId) return res.status(400).json({ error: 'courseId query parameter is required' });
-    const access = await assertCourseAccess(auth.person, auth.isAdmin, courseId);
-    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
-    const resolved = await resolveActiveSessionForCourse(courseId);
-    if (resolved.error) return res.status(400).json({ error: resolved.error });
-    return res.json({
-      courseId: resolved.course._id,
-      sessionId: resolved.session._id,
-      ...lectureCode.getCurrent(sessionCodeKey(resolved.session._id)),
-    });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
 
 app.get('/api/attendance-status', async (req, res) => {
   try {
@@ -1142,146 +971,33 @@ app.get('/api/attendance-status', async (req, res) => {
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const courseId = String(req.query.courseId || '').trim();
     if (!courseId) return res.status(400).json({ error: 'courseId query parameter is required' });
-
     const studentPk = auth.person._id;
     const resolved = await resolveActiveSessionForCourse(courseId);
     if (resolved.error) {
-      return res.json({
-        studentId: studentPk,
-        courseId,
-        sessionId: null,
-        attended: false,
-        attendanceId: null,
-        attendedAt: null,
-      });
+      return res.json({ studentId: studentPk, courseId, sessionId: null, attended: false, attendanceId: null, attendedAt: null });
     }
-
     const attendanceDate = localYmd();
-    const attendance = await Attendance.findOne({
-      student: studentPk,
-      course: courseId,
-      session: resolved.session._id,
-      attendanceDate,
-    }).sort({ timestamp: -1 });
-
+    const attendance = await Attendance.findOne({ student: studentPk, session: resolved.session._id, attendanceDate });
     return res.json({
-      studentId: studentPk,
-      courseId,
-      sessionId: resolved.session._id,
-      attended: Boolean(attendance),
-      attendanceId: attendance?._id || null,
-      attendedAt: attendance?.timestamp || null,
+      studentId: studentPk, courseId, sessionId: resolved.session._id,
+      attended: Boolean(attendance), attendanceId: attendance?._id || null, attendedAt: attendance?.timestamp || null,
     });
-  } catch (err) {
-    return respondError(res, err);
-  }
+  } catch (err) { return respondError(res, err); }
 });
+// ──────────────────────────────────────────────────────────────────────────
 
-/** PIN + schedule only (student). Starts multi-sample GPS flow on the client when PIN is valid. */
-app.post('/api/verify-lecture-pin', studentPinLimiter, async (req, res) => {
-  const { lectureCode: submitted, courseId } = req.body || {};
-  try {
-    const auth = await sessionStudentAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    if (!isValidPin(submitted)) return res.status(400).json({ error: 'Invalid lecture code' });
-    if (!mongoose.isValidObjectId(String(courseId || ''))) {
-      return res.status(400).json({ error: 'Invalid courseId' });
-    }
-    const resolved = await resolveActiveSessionForCourse(courseId);
-    if (resolved.error) return res.status(400).json({ error: resolved.error });
-    if (resolved.session.attendancePaused) {
-      return res.status(400).json({
-        error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.',
-      });
-    }
-    if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
-      return res.status(400).json({ error: 'Invalid or expired lecture code' });
-    }
-    const schedule = checkScheduleWindow(resolved.session);
-    if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    rememberSessionPinTrust(req, resolved.session._id);
-    return res.json({
-      success: true,
-      sessionId: resolved.session._id,
-      courseId: resolved.course._id,
-    });
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
 
-app.post('/api/record-attendance', studentRecordLimiter, async (req, res) => {
-  const {
-    lectureCode: submitted, courseId, method, lat, lng, accuracy,
-  } = req.body || {};
-  try {
-    const auth = await sessionStudentAuth(req);
-    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
-    if (!isValidPin(submitted)) return res.status(400).json({ error: 'Invalid lecture code' });
-    if (!mongoose.isValidObjectId(String(courseId || ''))) {
-      return res.status(400).json({ error: 'Invalid courseId' });
-    }
-    if (!isValidLatLng(lat, lng)) {
-      return res.status(400).json({ error: 'Valid latitude and longitude are required' });
-    }
-    if (!isValidAccuracy(accuracy)) {
-      return res.status(400).json({ error: 'Invalid accuracy value' });
-    }
-    const studentPk = auth.person._id;
-    const resolved = await resolveActiveSessionForCourse(courseId);
-    if (resolved.error) return res.status(400).json({ error: resolved.error });
-    if (resolved.session.attendancePaused) {
-      return res.status(400).json({
-        error: 'Attendance is paused for this session. Please wait until your lecturer resumes attendance.',
-      });
-    }
-    const sessionTrusted = hasSessionPinTrust(req, resolved.session._id);
-    if (!sessionTrusted) {
-      if (!lectureCode.isValidCode(sessionCodeKey(resolved.session._id), submitted)) {
-        return res.status(400).json({ error: 'Invalid or expired lecture code' });
-      }
-      rememberSessionPinTrust(req, resolved.session._id);
-    }
-    const schedule = checkScheduleWindow(resolved.session);
-    if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    const normalizedCode = String(submitted).replace(/\s/g, '');
-    const attendanceDate = localYmd();
-    const existing = await Attendance.findOne({
-      student: studentPk,
-      session: resolved.session._id,
-      attendanceDate,
-    });
-    if (existing) {
-      return res.json({ success: true, attendance: existing, duplicate: true });
-    }
 
-    try {
-      const attendance = await Attendance.create({
-        student: studentPk,
-        course: resolved.course._id,
-        session: resolved.session._id,
-        courseCode: resolved.course.code,
-        lectureCode: normalizedCode,
-        attendanceDate,
-        method,
-        location: { lat: Number(lat), lng: Number(lng), accuracy: Number(accuracy) },
-      });
-      return res.json({ success: true, attendance });
-    } catch (err) {
-      if (err && err.code === 11000) {
-        const dup = await Attendance.findOne({
-          student: studentPk,
-          session: resolved.session._id,
-          attendanceDate,
-        });
-        return res.json({ success: true, attendance: dup, duplicate: true });
-      }
-      throw err;
-    }
-  } catch (err) {
-    return respondError(res, err);
-  }
-});
+
+
+// ─── BLE Routes ───────────────────────────────────────────────────────────────
+
+/** GET /api/ble/current-payload/:sessionId
+ * Lecturer/Admin: returns the current rotating BLE payload for a session.
+ */
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ── Bluetooth student routes ──────────────────────────────────────────────────
 
@@ -1367,6 +1083,22 @@ app.post('/api/bluetooth-attendance', studentRecordLimiter, async (req, res) => 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+
+// Lecturer: get attendance records for a specific session
+app.get('/api/admin/sessions/:sessionId/attendance', async (req, res) => {
+  try {
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const sessionItem = await LectureSession.findOne({ _id: req.params.sessionId, deleted: false });
+    if (!sessionItem) return res.status(404).json({ error: 'Session not found' });
+    const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
+    const records = await Attendance.find({ session: sessionItem._id })
+      .populate('student', 'studentId email name').sort({ timestamp: -1 });
+    return res.json({ records });
+  } catch (err) { return respondError(res, err); }
+});
 
 app.get('/api/admin/courses/:courseId/attendance-matrix', async (req, res) => {
   try {
