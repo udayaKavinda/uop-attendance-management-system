@@ -2,7 +2,10 @@ name: Deploy to attendance.eng.pdn.ac.lk
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - feature/gps-pin-rotation
+      - feature/bluetooth
   workflow_dispatch:
 
 concurrency:
@@ -16,9 +19,11 @@ jobs:
     env:
       APP_DIR: /opt/attendance/app
       NODE_ENV: production
+      DEPLOY_BRANCH: ${{ github.ref_name }}
     steps:
       - name: Show context
         run: |
+          echo "branch=$DEPLOY_BRANCH"
           echo "runner=$(hostname)"
           echo "user=$(id -un)"
           echo "node=$(/usr/bin/node -v)"
@@ -29,7 +34,7 @@ jobs:
         run: |
           cd "$APP_DIR"
           git fetch --all --prune
-          git reset --hard origin/main
+          git reset --hard origin/$DEPLOY_BRANCH
           git clean -fdx -e .env -e build -e node_modules
 
       - name: Server syntax check
@@ -54,7 +59,7 @@ jobs:
         run: |
           for i in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:5000/api/healthz > /dev/null; then
-              echo "healthy"; exit 0
+              echo "healthy on branch: $DEPLOY_BRANCH"; exit 0
             fi
             sleep 2
           done
