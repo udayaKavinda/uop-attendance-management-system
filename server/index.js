@@ -686,7 +686,6 @@ app.delete('/api/admin/courses/:courseId', async (req, res) => {
     await Attendance.deleteMany({ course: course._id });
     await LectureSession.deleteMany({ course: course._id });
     await Course.deleteOne({ _id: course._id });
-    sessionIds.forEach((id) => lectureCode.removeKey(""));
     return res.json({ success: true });
   } catch (err) {
     return respondError(res, err);
@@ -704,7 +703,6 @@ app.patch('/api/admin/courses/:courseId/disable', async (req, res) => {
     await course.save();
     await LectureSession.updateMany({ course: course._id }, { $set: { active: false } });
     const sessionIds = await LectureSession.find({ course: course._id }).distinct('_id');
-    sessionIds.forEach((id) => lectureCode.removeKey(""));
     return res.json({ success: true, course });
   } catch (err) {
     return respondError(res, err);
