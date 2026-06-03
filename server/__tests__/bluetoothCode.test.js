@@ -1,129 +1,134 @@
-'use strict';
+/**
+ * BLE token generation and verification tests
+ * Run with: npm run test:server
+ */
 
-const ROTATION_MS = 15000;
+// Mock mongoose before requiring bluetoothCode
+const mockDoc = { token: null, prevToken: null, generatedAt: 0 };
+const mockModel = {
+  findOne: jest.fn(),
+  findOneAndUpdate: jest.fn(),
+  deleteOne: jest.fn(),
+};
+jest.mock('../models/BleToken', () => mockModel);
 
-beforeEach(() => {
-  jest.useFakeTimers();
-  jest.resetModules();
-});
+const bluetoothCode = require('../lib/bluetoothCode');
+const { ROTATION_MS, GRACE_MS } = bluetoothCode;
 
-afterEach(() => {
-  jest.useRealTimers();
-});
-
-function loadFresh() {
-  return require('../lib/bluetoothCode');
-}
-
-describe('generateDeviceName', () => {
-  test('returns UOP- prefix with 8 hex chars', () => {
-    const { generateDeviceName } = loadFresh();
-    const name = generateDeviceName();
-    expect(name).toMatch(/^UOP-[0-9A-F]{8}$/);
+describe('bluetoothCode', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
   });
 
-  test('returns a different name each call', () => {
-    const { generateDeviceName } = loadFresh();
-    const names = new Set(Array.from({ length: 10 }, () => generateDeviceName()));
-    expect(names.size).toBeGreaterThan(1);
-  });
-});
+  describe('generateDeviceName', () => {
+    it('returns a string matching UOP-XXXXXXXX', () => {
+      const name = bluetoothCode.generateDeviceName();
+      expect(name).toMatch(/^UOP-[0-9A-F]{8}$/);
+    });
 
-describe('getToken', () => {
-  test('throws when sessionId is empty', () => {
-    const { getToken } = loadFresh();
-    expect(() => getToken('')).toThrow('sessionId required');
-    expect(() => getToken(null)).toThrow('sessionId required');
+    it('generates unique names', () => {
+      const names = new Set(Array.from({ length: 20 }, () => bluetoothCode.generateDeviceName()));
+      expect(names.size).toBe(20);
+    });
   });
 
-  test('returns a 16-char hex token and rotatesIn within ROTATION_MS/1000', () => {
-    const { getToken } = loadFresh();
-    const { token, rotatesIn } = getToken('session-1');
-    expect(token).toMatch(/^[0-9a-f]{16}$/);
-    expect(rotatesIn).toBeGreaterThan(0);
-    expect(rotatesIn).toBeLessThanOrEqual(ROTATION_MS / 1000);
+  describe('getToken', () => {
+    it('creates a new token when none exists', async () => {
+      mockModel.findOne.mockResolvedValue(null);
+      mockModel.findOneAndUpdate.mockResolvedValue({
+        token: 'abc123de45678901', prevToken: null, generatedAt: Date.now(),
+      });
+      const result = await bluetoothCode.getToken('session1');
+      expect(result.token).toHaveLength(16);
+      expect(result.rotatesIn).toBeLessThanOrEqual(ROTATION_MS / 1000);
+      expect(mockModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns existing token if within rotation window', async () => {
+      const generatedAt = Date.now() - 5000; // 5s ago, within 15s window
+      mockModel.findOne.mockResolvedValue({ token: 'existingtoken12', prevToken: null, generatedAt });
+      const result = await bluetoothCode.getToken('session1');
+      expect(result.token).toBe('existingtoken12');
+      expect(mockModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rotates token when window expires', async () => {
+      const generatedAt = Date.now() - ROTATION_MS - 1000; // expired
+      mockModel.findOne.mockResolvedValue({ token: 'oldtoken1234567', prevToken: null, generatedAt });
+      mockModel.findOneAndUpdate.mockResolvedValue({
+        token: 'newtoken1234567', prevToken: 'oldtoken1234567', generatedAt: Date.now(),
+      });
+      const result = await bluetoothCode.getToken('session1');
+      expect(mockModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+      // The upsert should store the old token as prevToken
+      const upsertCall = mockModel.findOneAndUpdate.mock.calls[0][1];
+      expect(upsertCall.prevToken).toBe('oldtoken1234567');
+    });
+
+    it('throws if sessionId is empty', async () => {
+      await expect(bluetoothCode.getToken('')).rejects.toThrow('sessionId required');
+    });
   });
 
-  test('returns the same token when called again within the window', () => {
-    const { getToken } = loadFresh();
-    const { token: t1 } = getToken('session-2');
-    jest.advanceTimersByTime(ROTATION_MS - 1000);
-    const { token: t2 } = getToken('session-2');
-    expect(t2).toBe(t1);
+  describe('verifyToken', () => {
+    it('returns true for current token', async () => {
+      mockModel.findOne.mockResolvedValue({
+        token: 'validtoken12345', prevToken: null, generatedAt: Date.now(),
+      });
+      expect(await bluetoothCode.verifyToken('session1', 'validtoken12345')).toBe(true);
+    });
+
+    it('returns false for wrong token', async () => {
+      mockModel.findOne.mockResolvedValue({
+        token: 'validtoken12345', prevToken: null, generatedAt: Date.now(),
+      });
+      expect(await bluetoothCode.verifyToken('session1', 'wrongtoken12345')).toBe(false);
+    });
+
+    it('returns false when no token exists for session', async () => {
+      mockModel.findOne.mockResolvedValue(null);
+      expect(await bluetoothCode.verifyToken('session1', 'sometoken12345')).toBe(false);
+    });
+
+    it('accepts previous token within grace window', async () => {
+      mockModel.findOne.mockResolvedValue({
+        token: 'newtoken123456789', prevToken: 'oldtoken123456789',
+        generatedAt: Date.now() - 1000, // rotated 1s ago, within 2s grace
+      });
+      expect(await bluetoothCode.verifyToken('session1', 'oldtoken123456789')).toBe(true);
+    });
+
+    it('rejects previous token after grace window', async () => {
+      mockModel.findOne.mockResolvedValue({
+        token: 'newtoken123456789', prevToken: 'oldtoken123456789',
+        generatedAt: Date.now() - (GRACE_MS + 1000), // rotated 3s ago, outside grace
+      });
+      expect(await bluetoothCode.verifyToken('session1', 'oldtoken123456789')).toBe(false);
+    });
+
+    it('is case-insensitive', async () => {
+      mockModel.findOne.mockResolvedValue({
+        token: 'abcdef1234567890', prevToken: null, generatedAt: Date.now(),
+      });
+      expect(await bluetoothCode.verifyToken('session1', 'ABCDEF1234567890')).toBe(true);
+    });
+
+    it('returns false for empty submission', async () => {
+      mockModel.findOne.mockResolvedValue({ token: 'valid', prevToken: null, generatedAt: Date.now() });
+      expect(await bluetoothCode.verifyToken('session1', '')).toBe(false);
+    });
   });
 
-  test('lazy-rotates the token when called after ROTATION_MS', () => {
-    const { getToken } = loadFresh();
-    const { token: t1 } = getToken('session-3');
-    jest.advanceTimersByTime(ROTATION_MS + 1);
-    const { token: t2 } = getToken('session-3');
-    expect(t2).not.toBe(t1);
-    expect(t2).toMatch(/^[0-9a-f]{16}$/);
-  });
+  describe('removeToken', () => {
+    it('deletes the token document', async () => {
+      mockModel.deleteOne.mockResolvedValue({ deletedCount: 1 });
+      await bluetoothCode.removeToken('session1');
+      expect(mockModel.deleteOne).toHaveBeenCalledWith({ sessionId: 'session1' });
+    });
 
-  test('rotatesIn decreases as time passes', () => {
-    const { getToken } = loadFresh();
-    getToken('session-4');
-    jest.advanceTimersByTime(5000);
-    const { rotatesIn } = getToken('session-4');
-    expect(rotatesIn).toBeLessThanOrEqual(ROTATION_MS / 1000 - 5);
-  });
-});
-
-describe('auto-rotation via setInterval', () => {
-  test('background interval rotates token after ROTATION_MS', () => {
-    const { getToken } = loadFresh();
-    const { token: t1 } = getToken('session-auto');
-    jest.advanceTimersByTime(ROTATION_MS + 1000);
-    const { token: t2 } = getToken('session-auto');
-    expect(t2).not.toBe(t1);
-  });
-});
-
-describe('verifyToken', () => {
-  test('returns true for the current token', () => {
-    const { getToken, verifyToken } = loadFresh();
-    const { token } = getToken('session-v1');
-    expect(verifyToken('session-v1', token)).toBe(true);
-  });
-
-  test('returns false for an incorrect token', () => {
-    const { getToken, verifyToken } = loadFresh();
-    getToken('session-v2');
-    expect(verifyToken('session-v2', 'deadbeefdeadbeef')).toBe(false);
-  });
-
-  test('returns false for unknown sessionId', () => {
-    const { verifyToken } = loadFresh();
-    expect(verifyToken('no-such-session', 'aabbccddaabbccdd')).toBe(false);
-  });
-
-  test('is case-insensitive', () => {
-    const { getToken, verifyToken } = loadFresh();
-    const { token } = getToken('session-v3');
-    expect(verifyToken('session-v3', token.toUpperCase())).toBe(true);
-  });
-
-  test('returns false after token has been rotated', () => {
-    const { getToken, verifyToken } = loadFresh();
-    const { token: old } = getToken('session-v4');
-    jest.advanceTimersByTime(ROTATION_MS + 1000);
-    const { token: fresh } = getToken('session-v4');
-    expect(verifyToken('session-v4', old)).toBe(false);
-    expect(verifyToken('session-v4', fresh)).toBe(true);
-  });
-});
-
-describe('removeToken', () => {
-  test('removes the token so verifyToken returns false', () => {
-    const { getToken, verifyToken, removeToken } = loadFresh();
-    const { token } = getToken('session-r1');
-    removeToken('session-r1');
-    expect(verifyToken('session-r1', token)).toBe(false);
-  });
-
-  test('is a no-op for unknown sessionId', () => {
-    const { removeToken } = loadFresh();
-    expect(() => removeToken('ghost')).not.toThrow();
+    it('does nothing for empty sessionId', async () => {
+      await bluetoothCode.removeToken('');
+      expect(mockModel.deleteOne).not.toHaveBeenCalled();
+    });
   });
 });

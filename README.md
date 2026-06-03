@@ -25,7 +25,7 @@ Role-based application for lecture attendance at the University of Peradeniya. S
 | **Students** | Google sign-in; pick a **running** course; tap **📡 Scan for Bluetooth Attendance**. On the **native Android app** (this branch): `BleClient.requestLEScan` scans directly for the `UOP-XXXXXXXX` beacon — no device picker dialog. In a **browser**: Web Bluetooth picker (Chrome on Android only). Either path reads the rotating 8-byte token from manufacturer data (`0xFFFF`) and posts to `/api/bluetooth-attendance`. |
 | **Lecturers** | Staff console: assigned courses, session CRUD, **BLE broadcasting control** (start/stop per session card), live BLE token display, attendance matrix export, projector view, and live attendance gating via the blinking **Live** badge. |
 | **Admins** | Everything lecturers can do for any course, plus lecturer directory and multi-lecturer course assignment. |
-| **System** | **in-memory BLE token** per session (`bluetoothCode.js`, automatic 15 s rotation via `setInterval`); non-recurring session auto-deactivate; date-sensitive keys use **host-local Y-M-D**. |
+| **System** | **MongoDB-persisted BLE token** per session (`bluetoothCode.js` + `BleToken` model, **15 s** rotation window applied lazily on access, with a short previous-token grace window); non-recurring session auto-deactivate; date-sensitive keys use **host-local Y-M-D**. |
 
 ---
 
@@ -77,7 +77,7 @@ flowchart LR
 - **Native BLE path**: `Capacitor.isNativePlatform()` is checked at runtime in `LectureEntry.jsx`. On Android, `BleClient.requestLEScan` is used directly; on a browser, `navigator.bluetooth.requestDevice` is used as a fallback.
 - **Single-process API** in `server/index.js` (models, auth helpers, and HTTP handlers).
 - **Session-based auth**: Passport serializes `Person._id`; staff vs student routes use `sessionStaffAuth` / `sessionStudentAuth` after reloading from MongoDB.
-- **BLE token state** lives in **process memory** (`bluetoothCode.js` Map store), not MongoDB — server restarts drop rotation state.
+- **BLE token state** is persisted in **MongoDB** (`BleToken` collection via `bluetoothCode.js`) and survives server restarts; a TTL index auto-expires stale tokens.
 - **Local dev split**: CRA dev is `http://localhost:3000`; API defaults to port **5000**.
 
 ---
@@ -105,8 +105,8 @@ flowchart LR
 │   └── utils/              # safeStorage, authRedirect, matrixExcel
 ├── server/
 │   ├── index.js            # Express app, OAuth, all API routes
-│   ├── models/             # Person, Course, LectureSession, Attendance
-│   └── lib/                # bluetoothCode.js, bluetoothCode.js, schedule.js, sessionExpiry.js
+│   ├── models/             # Person, Course, LectureSession, Attendance, BleToken
+│   └── lib/                # bluetoothCode.js, schedule.js, sessionExpiry.js
 ├── capacitor.config.ts     # Capacitor: appId, webDir, BLE display strings
 ├── deploy/
 │   └── nginx-app-domain.conf
@@ -457,13 +457,12 @@ The scan path is chosen at runtime by `Capacitor.isNativePlatform()` in `Lecture
 | GET | `/api/admin/courses/:courseId/sessions` | |
 | POST | `/api/admin/courses/:courseId/sessions` | Create session (rejects overlapping time windows) |
 | GET | `/api/admin/sessions` | |
-| GET | `/api/admin/sessions/:sessionId/current-code` | Single session live code |
 | PATCH | `/api/admin/sessions/:sessionId/activate` | |
 | PATCH | `/api/admin/sessions/:sessionId/deactivate` | |
 | DELETE | `/api/admin/sessions/:sessionId` | Soft-delete; attendance preserved |
 | PATCH | `/api/admin/sessions/:sessionId/attendance-paused` | Pause/resume student submissions |
 | PATCH | `/api/admin/sessions/:sessionId/bluetooth/start` | Enable BLE; generates `UOP-XXXXXXXX` device name on first call |
-| PATCH | `/api/admin/sessions/:sessionId/bluetooth/stop` | Disable BLE; clears in-memory token |
+| PATCH | `/api/admin/sessions/:sessionId/bluetooth/stop` | Disable BLE; removes the session's token from MongoDB |
 | GET | `/api/admin/sessions/:sessionId/bluetooth-broadcast` | **Broadcaster app only.** Returns `{ deviceName, token, rotatesIn, rotationMs }` |
 | GET | `/api/admin/courses/:courseId/attendance-matrix` | |
 | GET | `/api/admin/lecturers?q=` | Admin |
@@ -502,8 +501,8 @@ form-action 'self' https://accounts.google.com;
 | **BLE in browser** | `navigator.bluetooth.requestDevice` + `watchAdvertisements` is only available on **Chrome for Android** (and Chrome OS). Not available in Safari, Firefox, or Chrome on iOS. Students on unsupported browsers see an explicit error message. |
 | **iOS** | Capacitor supports iOS with `@capacitor/ios`, but this branch only ships the Android project. An iOS build would require adding `npx cap add ios` on a Mac with Xcode. |
 | **BLE broadcaster** | The web dashboard cannot advertise BLE — browsers have no BLE peripheral API. A **separate native app** must call `GET /api/admin/sessions/:id/bluetooth-broadcast` and broadcast the returned token. |
-| **BLE token rotation** | Automatic every **15 seconds** via a `setInterval` in `bluetoothCode.js`. No poll required to trigger rotation. |
-| **Token storage** | In-memory per server process; not durable across restarts or horizontal scaling. |
+| **BLE token rotation** | **15 s** rotation window in `bluetoothCode.js`, applied lazily when the token is next read (e.g. by the broadcaster poll). The previous token is accepted for a short grace window after rotation. |
+| **Token storage** | Persisted in MongoDB (`BleToken` collection); durable across server restarts. A TTL index auto-expires tokens after 1 hour of inactivity. |
 | **Emulator BLE** | Android emulators do not support real Bluetooth hardware. BLE scanning requires a physical device. |
 
 ---
@@ -557,10 +556,10 @@ form-action 'self' https://accounts.google.com;
 |------|---------------|--------|
 | Student scan — native | `BleClient.initialize + requestLEScan` (no dialog); path activated by `Capacitor.isNativePlatform() === true` | `src/components/LectureEntry.jsx` |
 | Student scan — browser | `navigator.bluetooth.requestDevice + watchAdvertisements`; fallback when not native | `src/components/LectureEntry.jsx` |
-| BLE token | 8 random bytes = 16-char hex. Rotates every **10 seconds** via `setInterval` in `bluetoothCode.js`. Verified by string equality. Stored in `Attendance.lectureCode`. | `server/lib/bluetoothCode.js` |
+| BLE token | 8 random bytes = 16-char hex. **15 s** rotation window applied lazily on read in `bluetoothCode.js`; persisted in MongoDB (`BleToken`). Verified by string equality (current or previous token within grace window). Stored in `Attendance.lectureCode`. | `server/lib/bluetoothCode.js` |
 | BLE device name | `'UOP-' + 4 random hex bytes uppercase`. Generated once on first `bluetooth/start`, persisted in `LectureSession.bluetoothDeviceName`. | `server/lib/bluetoothCode.js` |
 | Attendance method | `['google', 'bluetooth']` — `'bluetooth'` for BLE-recorded rows. | `server/models/Attendance.js` |
-| Token storage | BLE token lives in `bluetoothCode.js` in-process Map. Server restart resets tokens. |
+| Token storage | BLE token persisted in MongoDB (`BleToken` collection) via `bluetoothCode.js`; survives server restarts; TTL auto-expiry. | `server/models/BleToken.js` |
 | Sessions persistence | `express-session` + `connect-mongo` (TTL 7 d). Survives restarts. | `server/index.js` |
 | Security middleware | `helmet` (prod CSP), `cors` (allow-list), `express-rate-limit` (per-user/IP). | `server/index.js` |
 | Course ownership | Multi-owner: `Course.lecturers` array, 1..5 unique lecturer IDs. | `server/models/Course.js` |

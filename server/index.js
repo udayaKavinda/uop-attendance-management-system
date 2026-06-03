@@ -15,6 +15,7 @@ const Person = require('./models/Person');
 const Attendance = require('./models/Attendance');
 const Course = require('./models/Course');
 const LectureSession = require('./models/LectureSession');
+const BleToken = require('./models/BleToken');
 const bluetoothCode = require('./lib/bluetoothCode');
 const { startNonRecurringExpiryJob } = require('./lib/sessionExpiry');
 const {
@@ -137,7 +138,6 @@ function checkScheduleWindow(sessionConfig) {
 }
 
 
-
 function localYmd(now = new Date()) {
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
@@ -148,8 +148,6 @@ function localYmd(now = new Date()) {
 function currentOccurrenceKey(now = new Date()) {
   return localYmd(now);
 }
-
-
 
 
 function isSessionRunningNow(sessionItem, now = new Date()) {
@@ -163,7 +161,17 @@ function isSessionRunningNow(sessionItem, now = new Date()) {
   return currentMinutes >= start && currentMinutes <= end;
 }
 
+// 5 s cache cuts repeated Course + LectureSession reads under 100-student polling load.
+const _sessionResolveCache = new Map();
+const SESSION_RESOLVE_CACHE_TTL_MS = 5000;
+
 async function resolveActiveSessionForCourse(courseId) {
+  const cacheKey = String(courseId);
+  const cached = _sessionResolveCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < SESSION_RESOLVE_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
   const course = await Course.findById(courseId);
   if (!course || !course.active) return { error: 'Invalid course' };
   const now = new Date();
@@ -181,7 +189,9 @@ async function resolveActiveSessionForCourse(courseId) {
     return start !== null && end !== null && currentMinutes >= start && currentMinutes <= end;
   });
   if (!active) return { error: 'No active lecture session for this course now' };
-  return { course, session: active };
+  const result = { course, session: active };
+  _sessionResolveCache.set(cacheKey, { value: result, ts: Date.now() });
+  return result;
 }
 
 /** Staff API authorization: derived from Passport session (Google OAuth), not client headers. */
@@ -264,10 +274,6 @@ function normalizeLecturerIds(rawLecturerIds) {
 }
 
 
-
-
-
-
 const app = express();
 
 const corsOrigins = (process.env.FRONTEND_URL
@@ -294,13 +300,7 @@ const cspDirectives = {
   scriptSrcAttr: ["'none'"],
   styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
   fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
-  imgSrc: [
-    "'self'",
-    'data:',
-    'blob:',
-    'https://*.tile.openstreetmap.org',
-    'https://server.arcgisonline.com',
-  ],
+  imgSrc: ["'self'", 'data:', 'blob:'],
   connectSrc: ["'self'", ...cspExtraConnect],
   frameAncestors: ["'none'"],
   formAction: ["'self'", 'https://accounts.google.com'],
@@ -343,7 +343,7 @@ sessionStore.on('error', (err) => console.error('[session-store]', err.message))
 // session support required for Passport's req.login() after OAuth
 app.use(session({
   name: 'attendance.sid',
-  secret: process.env.SESSION_SECRET || 'attendance-dev-secret-change-in-production',
+  secret: process.env.SESSION_SECRET || (isProd ? (() => { throw new Error('SESSION_SECRET not set') })() : 'dev-only-secret'),
   resave: false,
   saveUninitialized: false,
   proxy: true,
@@ -371,6 +371,22 @@ if (process.env.NODE_ENV === 'test') {
     next();
   });
 }
+
+// CSRF mitigation: require X-Requested-With on all mutating API routes.
+// All browser fetch calls in api.js send this header; form-based cross-site
+// POSTs cannot, preventing exploitation of SameSite=None session cookies.
+app.use((req, res, next) => {
+  const method = req.method.toUpperCase();
+  if (
+    ['POST', 'PATCH', 'DELETE', 'PUT'].includes(method) &&
+    req.path.startsWith('/api/')
+  ) {
+    if (!req.headers['x-requested-with']) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+  next();
+});
 
 function limiterKeyByUserOrIp(req) {
   const uid = req?.user?._id ? String(req.user._id) : '';
@@ -787,11 +803,7 @@ app.post('/api/admin/courses/:courseId/sessions', async (req, res) => {
       lectureDay: String(lectureDay).toUpperCase(),
       deleted: false,
     });
-    const overlap = sameDaySessions.find((item) => {
-      const itemStart = toMinutes(item.startTime);
-      const itemEnd = toMinutes(item.endTime);
-      return hasScheduleOverlap(s, e, itemStart, itemEnd);
-    });
+    const overlap = hasScheduleOverlap(sameDaySessions, String(lectureDay).toUpperCase(), startTime, endTime);
     if (overlap) {
       return res.status(400).json({ error: 'This session overlaps with an existing session for the same course' });
     }
@@ -876,9 +888,7 @@ app.get('/api/admin/sessions', async (req, res) => {
 });
 
 
-
-
-// ── Bluetooth admin routes ────────────────────────────────────────────────────
+// ── Bluetooth admin routes ────────────────────────────────────────────
 
 app.patch('/api/admin/sessions/:sessionId/bluetooth/start', async (req, res) => {
   try {
@@ -893,7 +903,7 @@ app.patch('/api/admin/sessions/:sessionId/bluetooth/start', async (req, res) => 
     }
     sessionItem.bluetoothEnabled = true;
     await sessionItem.save();
-    bluetoothCode.getToken(String(sessionItem._id)); // seed so auto-rotation starts immediately
+    await bluetoothCode.getToken(String(sessionItem._id)); // seed so auto-rotation starts
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
     return respondError(res, err);
@@ -910,7 +920,7 @@ app.patch('/api/admin/sessions/:sessionId/bluetooth/stop', async (req, res) => {
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     sessionItem.bluetoothEnabled = false;
     await sessionItem.save();
-    bluetoothCode.removeToken(String(sessionItem._id));
+    await bluetoothCode.removeToken(String(sessionItem._id));
     return res.json({ success: true, session: sessionItem });
   } catch (err) {
     return respondError(res, err);
@@ -927,7 +937,7 @@ app.get('/api/admin/sessions/:sessionId/bluetooth-broadcast', async (req, res) =
     const access = await assertCourseAccess(auth.person, auth.isAdmin, sessionItem.course);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     if (!sessionItem.bluetoothEnabled) return res.status(400).json({ error: 'Bluetooth not enabled for this session' });
-    const { token, rotatesIn } = bluetoothCode.getToken(String(sessionItem._id));
+    const { token, rotatesIn } = await bluetoothCode.getToken(String(sessionItem._id));
     return res.json({
       sessionId: sessionItem._id,
       deviceName: sessionItem.bluetoothDeviceName,
@@ -961,7 +971,6 @@ app.patch('/api/admin/sessions/:sessionId/attendance-paused', async (req, res) =
 });
 
 
-
 app.get('/api/attendance-status', async (req, res) => {
   try {
     const auth = await sessionStudentAuth(req);
@@ -984,19 +993,11 @@ app.get('/api/attendance-status', async (req, res) => {
 // ──────────────────────────────────────────────────────────────────────────
 
 
-
-
-
-// ─── BLE Routes ───────────────────────────────────────────────────────────────
-
-/** GET /api/ble/current-payload/:sessionId
- * Lecturer/Admin: returns the current rotating BLE payload for a session.
- */
-
+// ─── BLE Routes ────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── Bluetooth student routes ──────────────────────────────────────────────────
+// ── Bluetooth student routes ────────────────────────────────────────────
 
 // Returns the BLE device name for the active session — student needs this to
 // know which device to scan for.
@@ -1041,7 +1042,7 @@ app.post('/api/bluetooth-attendance', studentRecordLimiter, async (req, res) => 
     }
     const schedule = checkScheduleWindow(resolved.session);
     if (!schedule.ok) return res.status(400).json({ error: schedule.reason });
-    if (!bluetoothCode.verifyToken(String(resolved.session._id), token.trim().toLowerCase())) {
+    if (!await bluetoothCode.verifyToken(String(resolved.session._id), token.trim().toLowerCase())) {
       return res.status(400).json({ error: 'Invalid or expired Bluetooth token. Move closer and try again.' });
     }
     const studentPk = auth.person._id;
@@ -1079,7 +1080,7 @@ app.post('/api/bluetooth-attendance', studentRecordLimiter, async (req, res) => 
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────────
 
 
 // Lecturer: get attendance records for a specific session

@@ -1,10 +1,5 @@
 const mongoose = require('mongoose');
 
-const pointSchema = new mongoose.Schema({
-  lat: { type: Number, required: true },
-  lng: { type: Number, required: true },
-}, { _id: false });
-
 const lectureSessionSchema = new mongoose.Schema({
   course: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true, index: true },
   lectureDay: {
@@ -22,7 +17,6 @@ const lectureSessionSchema = new mongoose.Schema({
   rotationOccurrenceKey: { type: String, default: '' },
   bluetoothEnabled: { type: Boolean, default: false },
   bluetoothDeviceName: { type: String, default: null },
-  polygons: { type: [[pointSchema]], default: [] },
   active: { type: Boolean, default: true, index: true },
   deleted: { type: Boolean, default: false, index: true },
 }, { timestamps: true });

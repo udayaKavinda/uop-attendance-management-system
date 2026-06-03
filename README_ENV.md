@@ -94,7 +94,7 @@ The public IP `192.248.40.154` is operated by university IT and forwards inbound
 | certbot | 2.9.0 | Ubuntu archive |
 | GitHub Actions runner | 2.334.0 | github.com/actions/runner release |
 
-The repository's frontend toolchain (React 19, react‑scripts 5, Leaflet, etc.) is installed into `/opt/attendance/app/node_modules` via `npm install` and is not tracked here.
+The repository's frontend toolchain (React 19, react‑scripts 5, Capacitor 8, `xlsx`, etc.) is installed into `/opt/attendance/app/node_modules` via `npm install` and is not tracked here.
 
 ---
 

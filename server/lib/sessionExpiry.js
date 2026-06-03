@@ -20,7 +20,8 @@ function startNonRecurringExpiryJob() {
       console.error('[session-expiry]', err);
     });
   };
-  tick();
+  // Defer first run until after the event loop tick so Mongoose is fully connected
+  setImmediate(tick);
   return setInterval(tick, intervalMs);
 }
 
