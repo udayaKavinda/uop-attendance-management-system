@@ -651,6 +651,7 @@ app.post('/api/admin/courses', async (req, res) => {
     const auth = await sessionStaffAuth(req);
     if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
     const name = String(req.body.name || '').trim();
+    const code = String(req.body.code || '').trim().toUpperCase();
     const batch = String(req.body.batch ?? '').trim();
     const lecturerIdsBody = normalizeLecturerIds(req.body.lecturerIds);
     if (!code || !name) return res.status(400).json({ error: 'name and code are required' });
