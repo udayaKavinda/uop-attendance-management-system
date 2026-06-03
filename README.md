@@ -23,7 +23,7 @@ Role-based web application for lecture attendance at the **University of Peraden
 | Area | Capabilities |
 |------|----------------|
 | **Students** | Google sign-in; pick a running course; tap **📡 Scan for Bluetooth Attendance**. The browser uses `navigator.bluetooth.requestDevice` (Web Bluetooth API — Chrome on Android required) to find the session's BLE beacon, reads the rotating token from manufacturer data (`0xFFFF`), and posts to `/api/bluetooth-attendance`. |
-| **Lecturers** | Staff console: assigned courses, session CRUD, BLE broadcasting control (enable/disable per session), live BLE token display, attendance matrix export, and live attendance gating via the blinking **Live** badge. |
+| **Lecturers** | Staff console: assigned courses, session CRUD, **BLE broadcasting control** (📡 BT on/off + Start/Stop Broadcasting per session card), live BLE token + countdown display, attendance matrix export, and live attendance gating via the blinking **Live** badge. |
 | **Admins** | Everything lecturers can do for any course, plus lecturer directory and multi-lecturer course assignment. |
 | **System** | Rotating BLE token per session persisted in MongoDB (`bluetoothCode.js` + `BleToken` model, **15 s** rotation window applied lazily on access); non-recurring session auto-deactivate; date-sensitive keys use host-local Y-M-D. |
 
@@ -171,13 +171,13 @@ Serve the `build/` folder behind the same origin as `/api` and `/auth` via Nginx
 
 ## Lecturer BLE broadcast flow
 
-1. Lecturer opens a session card and clicks **📡 Enable Bluetooth Attendance** — server assigns a unique device name (e.g. `UOP-A3F9`) via `PATCH /api/admin/sessions/:id/bluetooth/start`.
-2. The BLE broadcaster (a dedicated beacon device, or Android Chrome with Experimental Web Platform flags) calls `GET /api/admin/sessions/:id/bluetooth-broadcast` to get `{ deviceName, token, rotatesIn }`.
-3. Token is encoded as UTF-8 bytes and broadcast in BLE manufacturer data (company ID `0xFFFF`, device name = session device name).
-4. Token rotates automatically every **15 seconds** server-side. The broadcaster polls and updates the advertisement.
-5. Both the current and previous token are accepted server-side to handle rotation boundary edge cases.
-
-> **Note:** `navigator.bluetooth.advertise()` (Web Bluetooth peripheral API) is experimental and requires enabling "Experimental Web Platform features" in Chrome flags. For reliable broadcasting, use a dedicated BLE beacon or the `capacitor-bluetooth` native app branch.
+1. Lecturer opens the **Sessions** tab and finds the session card.
+2. Click **📡 BT on** — server assigns a unique device name (e.g. `UOP-A3F9`) via `PATCH /api/admin/sessions/:id/bluetooth/start` and immediately polls `GET /api/admin/sessions/:id/bluetooth-broadcast` to seed the rotating token.
+3. The **BLE token panel** appears on the session card: device name, current token, and a countdown bar.
+4. Click **📡 Start Broadcasting** — calls `navigator.bluetooth.advertise()` with manufacturer data (company ID `0xFFFF`, UTF-8 token bytes). Requires enabling "Experimental Web Platform features" at `chrome://flags` in Chrome on Android.
+5. Token rotates every **15 seconds** server-side; the dashboard polls every 8 s and updates the advertisement automatically via `updateData`.
+6. Both the current and previous token are accepted server-side to handle rotation boundary edge cases.
+7. Click **⏹ Stop Broadcasting** or **BT off** to end the broadcast and disable BLE for the session.
 
 ---
 
@@ -306,7 +306,7 @@ npm test
 | Topic | Detail |
 |-------|--------|
 | **Web Bluetooth browser support** | Only Chrome on Android (and desktop Chrome with a flag). Firefox and Safari are not supported. |
-| **BLE advertising from browser** | `navigator.bluetooth.advertise()` is experimental — requires "Experimental Web Platform features" flag in Chrome. Use a dedicated BLE beacon device or the `capacitor-bluetooth` branch for reliable lecturer broadcasting. |
+| **BLE advertising from browser** | `navigator.bluetooth.advertise()` is experimental — requires "Experimental Web Platform features" flag in Chrome on Android. The **📡 Start Broadcasting** button in the Sessions tab will show an error with instructions if the API is unavailable. For reliable broadcasting without the flag, use the `capacitor-bluetooth` branch (native BLE via `BleClient.startAdvertising`). |
 | **BLE token storage** | Tokens are persisted to MongoDB (`BleToken` collection) and survive server restarts. TTL index auto-expires tokens after 1 hour of inactivity. |
 | **Single VM** | No failover or horizontal scaling without redesign. |
 
