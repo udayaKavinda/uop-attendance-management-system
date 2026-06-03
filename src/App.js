@@ -4,7 +4,6 @@ import Login from './components/Login';
 import LectureEntry from './components/LectureEntry';
 import GoogleSuccess from './components/GoogleSuccess';
 import AdminDashboard from './components/AdminDashboard';
-import LecturerDashboard from './components/LecturerDashboard';
 import AttendanceTablePage from './components/AttendanceTablePage';
 import SessionPinPresentPage from './components/SessionPinPresentPage';
 import MarketingLayout from './layouts/MarketingLayout';
@@ -107,7 +106,7 @@ function App() {
 
           <Route element={staff ? <Outlet /> : <Navigate to="/lecture" replace />}>
             <Route path="/admin" element={<AdminLayout />}>
-              <Route index element={user?.role === 'lecturer' ? <LecturerDashboard /> : <AdminDashboard />} />
+              <Route index element={<AdminDashboard />} />
               <Route path="present/session/:sessionId" element={<SessionPinPresentPage />} />
               <Route path="courses/:courseId/matrix" element={<AttendanceTablePage />} />
             </Route>

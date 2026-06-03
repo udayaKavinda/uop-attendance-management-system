@@ -20,11 +20,14 @@ import {
   deleteAdminLecturer,
   startSessionBluetooth,
   stopSessionBluetooth,
+  getLecturerBroadcastToken,
 } from '../api';
 import { readStoredStudent } from '../utils/safeStorage';
 
 const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 const DAY_ORDER = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+const BLE_COMPANY_ID = 0xFFFF;
+const BLE_POLL_INTERVAL_MS = 8_000;
 const OWNER_ALL_LABEL = 'All lecturers — show every course';
 const OWNER_LISTBOX_ID = 'admin-catalog-owner-listbox';
 const MAX_COURSE_LECTURERS = 5;
@@ -79,6 +82,14 @@ export default function AdminDashboard() {
   const ownerLecturerBlurTimer = useRef(null);
   const ownerLecturerComboboxRef = useRef(null);
   const assignOwnerPanelRef = useRef(null);
+
+  // BLE broadcasting state (keyed by sessionId string)
+  const [bleStates, setBleStates] = useState({});       // { [sid]: { deviceName, token, rotatesIn } }
+  const [bleCountdowns, setBleCountdowns] = useState({}); // { [sid]: number }
+  const [bleBroadcasting, setBleBroadcasting] = useState({}); // { [sid]: boolean }
+  const [bleAdErrors, setBleAdErrors] = useState({});    // { [sid]: string }
+  const pollRefsMap = useRef({});   // { [sid]: intervalId }
+  const adHandlesMap = useRef({});  // { [sid]: BLE advertise handle }
 
   const student = useMemo(() => readStoredStudent(), []);
   const isAdmin = student?.role === 'admin';
@@ -519,6 +530,117 @@ export default function AdminDashboard() {
       await loadSessions();
     }
     setWorking(false);
+  };
+
+  // BLE token polling — called on interval for each BLE-enabled active session
+  const pollBleToken = useCallback(async (sessionId) => {
+    const sid = String(sessionId);
+    const data = await getLecturerBroadcastToken(sid);
+    if (data.error) return;
+    setBleStates((prev) => ({ ...prev, [sid]: data }));
+    if (data.rotatesIn != null) {
+      setBleCountdowns((prev) => ({ ...prev, [sid]: data.rotatesIn }));
+    }
+    // Update advertisement data if currently broadcasting
+    const handle = adHandlesMap.current[sid];
+    if (handle && typeof handle.updateData === 'function' && data.token) {
+      try {
+        const tokenBytes = new TextEncoder().encode(data.token);
+        await handle.updateData({ manufacturerData: [{ companyIdentifier: BLE_COMPANY_ID, data: tokenBytes }] });
+      } catch (err) {
+        adHandlesMap.current[sid] = null;
+        setBleBroadcasting((prev) => ({ ...prev, [sid]: false }));
+        setBleAdErrors((prev) => ({ ...prev, [sid]: 'Broadcast interrupted — token rotated: ' + err.message }));
+      }
+    }
+  }, []);
+
+  // Start/stop polling when sessions list changes (tracks which sessions have BLE enabled + active)
+  useEffect(() => {
+    const activeBleSessions = sessions.filter((s) => s.bluetoothEnabled && s.active);
+    const activeIds = new Set(activeBleSessions.map((s) => String(s._id)));
+
+    activeBleSessions.forEach((s) => {
+      const sid = String(s._id);
+      if (!pollRefsMap.current[sid]) {
+        pollBleToken(sid);
+        pollRefsMap.current[sid] = setInterval(() => pollBleToken(sid), BLE_POLL_INTERVAL_MS);
+      }
+    });
+
+    Object.keys(pollRefsMap.current).forEach((sid) => {
+      if (!activeIds.has(sid)) {
+        clearInterval(pollRefsMap.current[sid]);
+        delete pollRefsMap.current[sid];
+        const handle = adHandlesMap.current[sid];
+        if (handle && typeof handle.stop === 'function') handle.stop().catch(() => {});
+        adHandlesMap.current[sid] = null;
+        setBleBroadcasting((prev) => { const n = { ...prev }; delete n[sid]; return n; });
+        setBleStates((prev) => { const n = { ...prev }; delete n[sid]; return n; });
+        setBleCountdowns((prev) => { const n = { ...prev }; delete n[sid]; return n; });
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions]);
+
+  // Single countdown tick for all active BLE sessions
+  useEffect(() => {
+    const t = setInterval(() => {
+      setBleCountdowns((prev) => {
+        const keys = Object.keys(prev);
+        if (keys.length === 0) return prev;
+        const next = { ...prev };
+        let changed = false;
+        keys.forEach((sid) => { if (next[sid] > 0) { next[sid] -= 1; changed = true; } });
+        return changed ? next : prev;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Cleanup all BLE state on unmount
+  useEffect(() => () => {
+    Object.values(pollRefsMap.current).forEach(clearInterval);
+    Object.values(adHandlesMap.current).forEach((h) => { if (h?.stop) h.stop().catch(() => {}); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleStartBroadcast = async (sessionId) => {
+    const sid = String(sessionId);
+    const state = bleStates[sid];
+    if (!state?.token || !state?.deviceName) {
+      setBleAdErrors((prev) => ({ ...prev, [sid]: 'Enable Bluetooth first to get the broadcast token.' }));
+      return;
+    }
+    setBleAdErrors((prev) => ({ ...prev, [sid]: '' }));
+    if (!navigator.bluetooth?.advertise) {
+      setBleAdErrors((prev) => ({
+        ...prev,
+        [sid]: 'BLE advertising is not supported in this browser. On Android Chrome, enable "Experimental Web Platform features" at chrome://flags.',
+      }));
+      return;
+    }
+    try {
+      const tokenBytes = new TextEncoder().encode(state.token);
+      const handle = await navigator.bluetooth.advertise({
+        type: 'manufacturer',
+        manufacturerData: [{ companyIdentifier: BLE_COMPANY_ID, data: tokenBytes }],
+      });
+      adHandlesMap.current[sid] = handle;
+      setBleBroadcasting((prev) => ({ ...prev, [sid]: true }));
+    } catch (err) {
+      setBleAdErrors((prev) => ({ ...prev, [sid]: 'Broadcast failed: ' + err.message }));
+    }
+  };
+
+  const handleStopBroadcast = async (sessionId) => {
+    const sid = String(sessionId);
+    const handle = adHandlesMap.current[sid];
+    if (handle && typeof handle.stop === 'function') {
+      try { await handle.stop(); } catch (_) {}
+    }
+    adHandlesMap.current[sid] = null;
+    setBleBroadcasting((prev) => ({ ...prev, [sid]: false }));
   };
 
   const onStartBluetooth = async (sessionId) => {
@@ -969,19 +1091,14 @@ export default function AdminDashboard() {
                     </div>
                     <div className="bt-row">
                       {s.bluetoothEnabled ? (
-                        <>
-                          <span className="bt-device-badge" title="BLE device name for broadcaster">
-                            📡 {s.bluetoothDeviceName}
-                          </span>
-                          <button
-                            type="button"
-                            className="pill-btn warning"
-                            disabled={working}
-                            onClick={() => onStopBluetooth(s._id)}
-                          >
-                            BT off
-                          </button>
-                        </>
+                        <button
+                          type="button"
+                          className="pill-btn warning"
+                          disabled={working}
+                          onClick={() => onStopBluetooth(s._id)}
+                        >
+                          BT off
+                        </button>
                       ) : (
                         <button
                           type="button"
@@ -994,6 +1111,30 @@ export default function AdminDashboard() {
                         </button>
                       )}
                     </div>
+                    {s.bluetoothEnabled && bleStates[String(s._id)] && (() => {
+                      const sid = String(s._id);
+                      const bs = bleStates[sid];
+                      const cd = bleCountdowns[sid];
+                      return (
+                        <div className="ble-panel">
+                          <p className="ble-label">Device: <strong>{bs.deviceName}</strong></p>
+                          <p className="ble-token">Token: <code>{bs.token}</code></p>
+                          <div className="ble-countdown">
+                            <div className="countdown-bar" style={{ width: ((cd ?? bs.rotatesIn) / 15) * 100 + '%' }} />
+                            <span>{cd ?? bs.rotatesIn}s until next token</span>
+                          </div>
+                          {bleAdErrors[sid] && <p className="error-text">{bleAdErrors[sid]}</p>}
+                          {bleBroadcasting[sid] ? (
+                            <>
+                              <p className="broadcasting-badge">● Broadcasting</p>
+                              <button type="button" className="danger-btn" onClick={() => handleStopBroadcast(sid)}>⏹ Stop Broadcasting</button>
+                            </>
+                          ) : (
+                            <button type="button" className="primary-btn" onClick={() => handleStartBroadcast(sid)}>📡 Start Broadcasting</button>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="course-actions">
                       {s.active
                         ? <button type="button" className="pill-btn warning" onClick={() => onDeactivateSession(s._id)}>Deactivate</button>
