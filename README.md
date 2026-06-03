@@ -25,7 +25,7 @@ Role-based web application for lecture attendance at the **University of Peraden
 | **Students** | Google sign-in; pick a running course; tap **📡 Scan for Bluetooth Attendance**. The browser uses `navigator.bluetooth.requestDevice` (Web Bluetooth API — Chrome on Android required) to find the session's BLE beacon, reads the rotating token from manufacturer data (`0xFFFF`), and posts to `/api/bluetooth-attendance`. |
 | **Lecturers** | Staff console: assigned courses, session CRUD, BLE broadcasting control (enable/disable per session), live BLE token display, attendance matrix export, and live attendance gating via the blinking **Live** badge. |
 | **Admins** | Everything lecturers can do for any course, plus lecturer directory and multi-lecturer course assignment. |
-| **System** | In-memory rotating BLE token per session (`bluetoothCode.js`, automatic **15 s** rotation via `setInterval`); non-recurring session auto-deactivate; date-sensitive keys use host-local Y-M-D. |
+| **System** | Rotating BLE token per session persisted in MongoDB (`bluetoothCode.js` + `BleToken` model, **15 s** rotation window applied lazily on access); non-recurring session auto-deactivate; date-sensitive keys use host-local Y-M-D. |
 
 ---
 
@@ -67,7 +67,7 @@ flowchart LR
 
 - **Single-process API** in `server/index.js`.
 - **Session-based auth**: Passport serializes `Person._id`; staff vs student routes use `sessionStaffAuth` / `sessionStudentAuth` after reloading from MongoDB.
-- **BLE token state** lives in **process memory** (`bluetoothCode.js` Map store), not MongoDB — server restarts drop token state.
+- **BLE token state** is persisted in **MongoDB** (`BleToken` collection via `bluetoothCode.js`) and survives server restarts; a TTL index auto-expires stale tokens.
 - **Local dev split**: CRA dev is `http://localhost:3000`; API defaults to port **5000**.
 
 ---
@@ -88,7 +88,7 @@ flowchart LR
 ├── server/
 │   ├── index.js            # Express app, OAuth, all API routes
 │   ├── models/             # Person, Course, LectureSession, Attendance, BleToken
-│   └── lib/                # bluetoothCode.js, schedule.js, sessionExpiry.js, sessionExpiry.js
+│   └── lib/                # bluetoothCode.js, schedule.js, sessionExpiry.js
 ├── deploy/
 │   └── nginx-app-domain.conf
 ├── package.json
@@ -226,13 +226,12 @@ Serve the `build/` folder behind the same origin as `/api` and `/auth` via Nginx
 | GET | `/api/admin/courses/:courseId/sessions` | |
 | POST | `/api/admin/courses/:courseId/sessions` | Create session (rejects overlapping time windows) |
 | GET | `/api/admin/sessions` | |
-| GET | `/api/admin/sessions/:sessionId/current-code` | Single session live code |
 | PATCH | `/api/admin/sessions/:sessionId/activate` | |
 | PATCH | `/api/admin/sessions/:sessionId/deactivate` | |
 | DELETE | `/api/admin/sessions/:sessionId` | Soft-delete; attendance preserved |
 | PATCH | `/api/admin/sessions/:sessionId/attendance-paused` | Pause/resume student submissions |
 | PATCH | `/api/admin/sessions/:sessionId/bluetooth/start` | Enable BLE; generates `UOP-XXXXXXXX` device name on first call |
-| PATCH | `/api/admin/sessions/:sessionId/bluetooth/stop` | Disable BLE; clears in-memory token |
+| PATCH | `/api/admin/sessions/:sessionId/bluetooth/stop` | Disable BLE; removes the session's token from MongoDB |
 | GET | `/api/admin/sessions/:sessionId/bluetooth-broadcast` | **Broadcaster app only.** Returns `{ deviceName, token, rotatesIn, rotationMs }` |
 | GET | `/api/admin/courses/:courseId/attendance-matrix` | |
 | GET | `/api/admin/lecturers?q=` | Admin |
@@ -260,7 +259,7 @@ frame-ancestors 'none';
 form-action 'self' https://accounts.google.com;
 ```
 
-> Note: The Capacitor Android WebView bypasses the browser's CSP enforcement mechanism — CSP headers only apply when accessing the app from a real browser. The policy still protects browser users.
+> Note: An Android WebView wrapper (e.g. the `capacitor-bluetooth` branch) bypasses the browser's CSP enforcement mechanism — CSP headers only apply when accessing the app from a real browser. The policy still protects browser users.
 
 **Extending for split-host deploys:** If `REACT_APP_API_BASE` points to a different origin, add it to `CSP_EXTRA_CONNECT_SRC`.
 
@@ -287,8 +286,9 @@ npm run test:server
 ```
 
 Covers:
-- `bluetoothCode.js` — token generation, rotation, grace window, case-insensitivity, removeToken (13 tests)
-- `schedule.js` — `toMinutes`, `hasScheduleOverlap`, `isNonRecurringExpired` (6 tests)
+- `bluetoothCode.js` — token generation, rotation, grace window, case-insensitivity, removeToken (15 tests)
+- `schedule.js` — `toMinutes`, `hasScheduleOverlap`, `isNonRecurringExpired` (7 tests)
+- `ble.routes.test.js` — BLE route integration with mocked models: auth/RBAC (401/403), `bluetooth/start`, `bluetooth/stop`, `bluetooth-broadcast`, `bluetooth-target`, and `bluetooth-attendance` end-to-end (29 tests)
 
 ### Frontend tests
 
@@ -298,7 +298,6 @@ npm test
 ```
 
 ### What's not yet covered
-- API integration tests (routes, auth, full BLE attendance flow end-to-end)
 - Concurrent student submission stress tests
 - BLE scan simulation in JSDOM
 
@@ -310,15 +309,13 @@ npm test
 | **BLE advertising from browser** | `navigator.bluetooth.advertise()` is experimental — requires "Experimental Web Platform features" flag in Chrome. Use a dedicated BLE beacon device or the `capacitor-bluetooth` branch for reliable lecturer broadcasting. |
 | **BLE token storage** | Tokens are persisted to MongoDB (`BleToken` collection) and survive server restarts. TTL index auto-expires tokens after 1 hour of inactivity. |
 | **Single VM** | No failover or horizontal scaling without redesign. |
-| **No comprehensive integration test suite** | Unit tests cover BLE token and schedule logic (`npm run test:server`). API integration tests are not yet written. |
 
 ## Contributing
 
 1. Work on a feature branch; keep changes focused.
-2. After changing frontend code, run `npm run cap:sync` to keep the Android project in sync.
-3. Run `npm run build` before sharing frontend changes; `node --check server/index.js` after server edits.
-4. Run `npm run test:server` to verify the BLE route tests pass.
-5. Update this README when adding env vars, routes, or auth behavior.
+2. Run `npm run build` before sharing frontend changes; `node --check server/index.js` after server edits.
+3. Run `npm run test:server` to verify the BLE route and schedule tests pass.
+4. Update this README when adding env vars, routes, or auth behavior.
 
 
 ---

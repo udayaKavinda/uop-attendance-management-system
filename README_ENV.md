@@ -47,7 +47,7 @@ The public IP `192.248.40.154` is operated by university IT and forwards inbound
 ## 3. Topology
 
 ```
-┌────────────────────────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────┐
 │ public internet                                                            │
 │                                                                            │
 │   off-campus browser                          on-campus browser            │
@@ -55,16 +55,16 @@ The public IP `192.248.40.154` is operated by university IT and forwards inbound
 │        ▼                                          ▼                        │
 │   192.248.40.154 (UoP IT NAT)                10.40.2.171  (direct)         │
 │        │                                          │                        │
-│        └──────────────────┬───────────────────────┘                        │
+│        └───────────────────┬─────────────────────┘                        │
 │                           ▼                                                │
 │                    attendance-vm  (10.40.2.171)                            │
-│                    ┌─────────────────────────────────────┐                 │
+│                    ┌─────────────────────────────────┐                 │
 │                    │ Nginx 1.24    :80 / :443            │                 │
 │                    │   ├─ /.well-known/acme-challenge -> /var/www/letsencrypt
 │                    │   ├─ /api/*  -> 127.0.0.1:5000     │                 │
 │                    │   ├─ /auth/* -> 127.0.0.1:5000     │                 │
 │                    │   └─ /*      -> /opt/attendance/app/build (static)   │
-│                    └────────────┬────────────────────────┘                 │
+│                    └────────────┬────────────────────────┐                 │
 │                                 ▼                                          │
 │                    Node API (attendance.service)                           │
 │                          127.0.0.1:5000                                    │
@@ -76,7 +76,7 @@ The public IP `192.248.40.154` is operated by university IT and forwards inbound
 │                    GitHub Actions runner (attendance-prod)                 │
 │                    actions.runner.<repo>.attendance-prod.service           │
 │                          long-poll outbound to github.com                  │
-└────────────────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -94,7 +94,7 @@ The public IP `192.248.40.154` is operated by university IT and forwards inbound
 | certbot | 2.9.0 | Ubuntu archive |
 | GitHub Actions runner | 2.334.0 | github.com/actions/runner release |
 
-The repository's frontend toolchain (React 19, react‑scripts 5, Leaflet, etc.) is installed into `/opt/attendance/app/node_modules` via `npm install` and is not tracked here.
+The repository's frontend toolchain (React 19, react‑scripts 5, `xlsx`, etc.) is installed into `/opt/attendance/app/node_modules` via `npm install` and is not tracked here.
 
 ---
 
