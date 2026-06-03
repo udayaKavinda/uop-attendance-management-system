@@ -181,18 +181,6 @@ export async function getAdminAttendanceMatrix(courseId) {
 
 
 
-/** Lecturer: get currently active/running sessions (staff-scoped). */
-export async function getActiveSessions() {
-  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions/current-codes`);
-  if (data.error) return { error: data.error, sessions: [] };
-  const raw = data.items ?? data.data;
-  const sessions = (Array.isArray(raw) ? raw : []).map((s) => ({
-    ...s,
-    id: s.sessionId || s._id,
-  }));
-  return { sessions };
-}
-
 /** Lecturer: get all sessions (history). */
 export async function getSessions() {
   const data = await safeFetchJson(`${apiBase()}/api/admin/sessions`);

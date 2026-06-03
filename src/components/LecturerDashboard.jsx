@@ -2,10 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { BleClient } from '@capacitor-community/bluetooth-le';
 import {
-  getCourses, getActiveSessions, startSession, endSession,
+  startSession, endSession,
   getLecturerBroadcastToken, enableSessionBluetooth, disableSessionBluetooth,
   getAttendance, exportAttendanceUrl, getSessions,
-  patchAdminSessionAttendancePaused,
 } from '../api';
 
 // Manufacturer company ID — must match LectureEntry.jsx
@@ -16,7 +15,6 @@ const IS_NATIVE = Capacitor.isNativePlatform();
 
 export default function LecturerDashboard() {
   const [tab, setTab]               = useState('sessions');
-  const [courses, setCourses]       = useState([]);
   const [activeSession, setActive]  = useState(null);
   const [bleState, setBleState]     = useState(null); // { deviceName, token, rotatesIn }
   const [countdown, setCountdown]   = useState(null);
@@ -34,8 +32,7 @@ export default function LecturerDashboard() {
   const isAdvertising = useRef(false);
 
   useEffect(() => {
-    Promise.all([fetchCourses(), fetchActive()]).finally(() => setLoading(false));
-    fetchHistory();
+    refreshSessions().finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -74,19 +71,15 @@ export default function LecturerDashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function fetchCourses() {
-    const { courses: c } = await getCourses();
-    setCourses(c || []);
-  }
-
-  async function fetchActive() {
-    const data = await getActiveSessions();
-    if (!data.error) setActive((data.sessions || [])[0] || null);
-  }
-
-  async function fetchHistory() {
+  // Single source of truth: /api/admin/sessions returns the lecturer's sessions
+  // (staff-scoped) with `active`, populated `course`, schedule, and BLE fields.
+  // The active session (if any) is the one the lecturer can broadcast on.
+  async function refreshSessions() {
     const data = await getSessions();
-    if (!data.error) setHistory(data.sessions || []);
+    if (data.error) return;
+    const sessions = data.sessions || [];
+    setHistory(sessions);
+    setActive(sessions.find((s) => s.active) || null);
   }
 
   async function pollToken(sessionId) {
@@ -96,12 +89,11 @@ export default function LecturerDashboard() {
     setBleState(data);
   }
 
-  async function handleStart(courseId) {
+  async function handleStart(sessionId) {
     setError('');
-    const res = await startSession(courseId);
+    const res = await startSession(sessionId);
     if (res.error) { setError(res.error); return; }
-    await fetchActive();
-    await fetchHistory();
+    await refreshSessions();
     setTab('sessions');
     setAdError('');
   }
@@ -116,7 +108,7 @@ export default function LecturerDashboard() {
     setBleState(null);
     setBleEnabled(false);
     setCountdown(null);
-    await fetchHistory();
+    await refreshSessions();
   }
 
   async function handleEnableBluetooth() {
@@ -285,15 +277,19 @@ export default function LecturerDashboard() {
             </div>
           ) : (
             <div>
-              <p className="text-muted">No active session. Start one from a course below.</p>
-              <h3>Your Courses</h3>
-              <ul className="course-list">
-                {courses.map(c => (
-                  <li key={c._id}>
-                    <span>{c.code} — {c.name}</span>
-                    <button className="primary-btn small" onClick={() => handleStart(c._id)}>Start Session</button>
-                  </li>
-                ))}
+              <p className="text-muted">No active session. Activate one of your scheduled sessions below.</p>
+              <h3>Your Sessions</h3>
+              <ul className="session-list">
+                {sessionHistory.filter((s) => !s.active).length === 0 ? (
+                  <p className="text-muted">No scheduled sessions. An admin must create sessions for your courses.</p>
+                ) : (
+                  sessionHistory.filter((s) => !s.active).map((s) => (
+                    <li key={s._id || s.id} className="session-item">
+                      <span>{s.course?.code} — {s.lectureDay} {s.startTime}–{s.endTime}</span>
+                      <button className="primary-btn small" onClick={() => handleStart(s._id || s.id)}>Activate</button>
+                    </li>
+                  ))
+                )}
               </ul>
             </div>
           )}
