@@ -407,8 +407,10 @@ The scan path is chosen at runtime by `Capacitor.isNativePlatform()` in `Lecture
 
 **Staff live control:**
 - **📡 BT on / BT off** pill buttons on each session card control `bluetoothEnabled`.
+- Enabling BT reveals the **BLE token panel**: rotating token, countdown bar, and **📡 Start Broadcasting** / **⏹ Stop Broadcasting** buttons.
+- On the **native Android app**: `BleClient.startAdvertising` broadcasts the token directly. In a **browser**: `navigator.bluetooth.advertise` (Experimental Web Platform features, Chrome only).
+- The token auto-refreshes every 8 s; the advertisement is updated silently while broadcasting.
 - The **blinking Live badge** pauses/resumes student submissions independently of BLE broadcasting.
-- A **native broadcaster app** must call `GET /api/admin/sessions/:id/bluetooth-broadcast` and advertise the returned token; the web dashboard only enables/disables.
 
 ---
 
@@ -500,7 +502,7 @@ form-action 'self' https://accounts.google.com;
 | **BLE on native app** | Full BLE scanning via `@capacitor-community/bluetooth-le` on the Android app. No browser dialog — scans directly. Requires Android 6+ with Bluetooth enabled. |
 | **BLE in browser** | `navigator.bluetooth.requestDevice` + `watchAdvertisements` is only available on **Chrome for Android** (and Chrome OS). Not available in Safari, Firefox, or Chrome on iOS. Students on unsupported browsers see an explicit error message. |
 | **iOS** | Capacitor supports iOS with `@capacitor/ios`, but this branch only ships the Android project. An iOS build would require adding `npx cap add ios` on a Mac with Xcode. |
-| **BLE broadcaster** | The web dashboard cannot advertise BLE — browsers have no BLE peripheral API. A **separate native app** must call `GET /api/admin/sessions/:id/bluetooth-broadcast` and broadcast the returned token. |
+| **BLE broadcaster** | Broadcasting is built into the Sessions tab of the staff dashboard. On the **native Android app** `BleClient.startAdvertising` is used; in a browser, `navigator.bluetooth.advertise` (Experimental Web Platform features, Chrome Android only) is the fallback. |
 | **BLE token rotation** | **15 s** rotation window in `bluetoothCode.js`, applied lazily when the token is next read (e.g. by the broadcaster poll). The previous token is accepted for a short grace window after rotation. |
 | **Token storage** | Persisted in MongoDB (`BleToken` collection); durable across server restarts. A TTL index auto-expires tokens after 1 hour of inactivity. |
 | **Emulator BLE** | Android emulators do not support real Bluetooth hardware. BLE scanning requires a physical device. |

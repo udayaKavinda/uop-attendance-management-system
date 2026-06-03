@@ -116,8 +116,9 @@ function headers(person) {
   return { ...authHeader(person), ...csrfHeader };
 }
 
-// Clear the in-memory BleToken store before each test for isolation
+// Clear mocks and in-memory BleToken store before each test for isolation
 beforeEach(() => {
+  jest.clearAllMocks();
   Object.keys(_bleTokenStore).forEach(k => delete _bleTokenStore[k]);
 });
 
