@@ -107,6 +107,7 @@ Create a **`.env`** in the project root (not committed).
 | `GOOGLE_CLIENT_ID` | Yes | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Yes | Google OAuth secret |
 | `SESSION_SECRET` | **Required in production** | Server fails to boot in production if missing. |
+| `BLE_SECRET` | Optional | BLE payload secret. If unset, the server uses a built-in default (`uop-ble-dev-secret-change-me`) so the app runs with zero config. Override in production. |
 | `FRONTEND_URL` | Strongly recommended | Allowed CORS origin(s), comma-separated. |
 | `APP_BASE_URL` | Recommended | Public origin for Google OAuth `callbackURL`. |
 | `REACT_APP_API_BASE` | Optional | Absolute API origin when SPA and API differ. |
@@ -135,10 +136,11 @@ npm run dev
 - Frontend: `http://localhost:3000`
 - API: `http://localhost:5000`
 
-**Run server unit tests:**
+**Run server unit tests (cross-platform — Windows/macOS/Linux):**
 ```bash
 npm run test:server
 ```
+> Uses `cross-env` so `NODE_ENV=test` is set correctly on PowerShell/cmd as well as POSIX shells.
 
 **Production web build:**
 ```bash
@@ -147,6 +149,21 @@ npm run build
 Serve the `build/` folder behind the same origin as `/api` and `/auth` via Nginx reverse proxy.
 
 **First boot:** Mongoose auto-creates collections. Bootstrap admin `udayakavindadev@gmail.com` is seeded idempotently.
+
+---
+
+## Browser setup (required — Chrome on Android)
+
+This branch targets **Chrome on Android only**. Both scanning (students) and broadcasting (lecturers) use the experimental Web Bluetooth advertising/scanning APIs, which are behind a flag.
+
+1. Open Chrome on Android and go to `chrome://flags`.
+2. Search for **"Experimental Web Platform features"** and set it to **Enabled**.
+3. Restart Chrome.
+4. Make sure the device **Bluetooth is ON** and the site is served over **HTTPS** (or `http://localhost` during development) — Web Bluetooth requires a secure context.
+5. Students: tap **📡 Scan for Bluetooth Attendance** and pick the `UOP-XXXXXXXX` device in the OS picker.
+6. Lecturers: enable **📡 BT on** for a session, then tap **📡 Start Broadcasting**.
+
+> Desktop Chrome can scan with the flag enabled but cannot reliably advertise. Firefox and Safari are **not** supported.
 
 ---
 
@@ -161,7 +178,7 @@ Serve the `build/` folder behind the same origin as `/api` and `/auth` via Nginx
 3. Client calls `GET /api/bluetooth-target?courseId=…` → `{ deviceName }`. If BLE is disabled on the session the scan aborts.
 4. `navigator.bluetooth.requestDevice({ filters: [{ name: deviceName }] })` — opens the OS BLE picker pre-filtered to the session's `UOP-XXXXXXXX` beacon.
 5. `device.watchAdvertisements({ signal: abortController.signal })` — listens passively. A 30 s timeout aborts if no packet arrives.
-6. On `advertisementreceived`: manufacturer data for company ID `0xFFFF` is read as 8 bytes → decoded as UTF-8 string → 16-char hex token.
+6. On `advertisementreceived`: manufacturer data for company ID `0xFFFF` is the 16-character hex token encoded as UTF-8 (16 bytes); the client decodes it back to the 16-char hex string with `TextDecoder`.
 7. `POST /api/bluetooth-attendance` `{ courseId, token }` — server calls `bluetoothCode.verifyToken(sessionId, token)`. On match, creates `Attendance` with `method: 'bluetooth'`.
 8. On `{ success }` or `{ duplicate }`, the success screen is shown.
 
@@ -226,6 +243,7 @@ Serve the `build/` folder behind the same origin as `/api` and `/auth` via Nginx
 | GET | `/api/admin/courses/:courseId/sessions` | |
 | POST | `/api/admin/courses/:courseId/sessions` | Create session (rejects overlapping time windows) |
 | GET | `/api/admin/sessions` | |
+| GET | `/api/admin/sessions/running` | Sessions live right now (drives the **Live** badge + pause control). Scoped to the lecturer's courses; admins see all. |
 | PATCH | `/api/admin/sessions/:sessionId/activate` | |
 | PATCH | `/api/admin/sessions/:sessionId/deactivate` | |
 | DELETE | `/api/admin/sessions/:sessionId` | Soft-delete; attendance preserved |

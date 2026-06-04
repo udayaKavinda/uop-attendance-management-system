@@ -10,9 +10,11 @@ import {
   enableAdminCourse,
   createAdminSession,
   getAdminAllSessions,
+  getAdminRunningSessions,
   activateAdminSession,
   deactivateAdminSession,
   deleteAdminSession,
+  patchAdminSessionAttendancePaused,
   startSessionBluetooth,
   stopSessionBluetooth,
   getLecturerBroadcastToken,
@@ -48,7 +50,7 @@ export default function LecturerDashboard() {
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('10:00');
   const [recurring, setRecurring] = useState(true);
-  const [rotationEnabled, setRotationEnabled] = useState(false);
+  const [runningSessionCodes, setRunningSessionCodes] = useState({});
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
@@ -101,6 +103,25 @@ export default function LecturerDashboard() {
     const t = setTimeout(() => setToast(''), 4200);
     return () => clearTimeout(t);
   }, [message]);
+
+  // Poll which sessions are live right now to drive the Live/Paused badge.
+  useEffect(() => {
+    let cancelled = false;
+    let timer = null;
+    async function refreshRunning() {
+      if (activeTab !== 'sessions') return;
+      const resp = await getAdminRunningSessions();
+      if (cancelled) return;
+      if (!resp.error) {
+        const next = {};
+        (resp.items || []).forEach((item) => { next[String(item.sessionId)] = item; });
+        setRunningSessionCodes(next);
+      }
+      if (!cancelled) timer = setTimeout(refreshRunning, 5000);
+    }
+    refreshRunning();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [activeTab]);
 
   const sortedFilteredSessions = useMemo(() => {
     const q = sessionSearch.trim().toLowerCase();
@@ -184,7 +205,7 @@ export default function LecturerDashboard() {
     setWorking(true);
     setError('');
     const resp = await createAdminSession(selectedCourseId, {
-      lectureDay, startTime, endTime, recurring, rotationEnabled,
+      lectureDay, startTime, endTime, recurring,
     });
     if (resp.error) setError(resp.error);
     else {
@@ -193,7 +214,6 @@ export default function LecturerDashboard() {
       setStartTime('08:00');
       setEndTime('10:00');
       setRecurring(true);
-      setRotationEnabled(false);
       await loadSessions();
     }
     setWorking(false);
@@ -225,6 +245,24 @@ export default function LecturerDashboard() {
     const resp = await deleteAdminSession(sessionId);
     if (resp.error) setError(resp.error);
     else { setMessage('Session deleted.'); await loadSessions(); }
+    setWorking(false);
+  };
+
+  const onToggleAttendancePaused = async (sessionId) => {
+    const sid = String(sessionId);
+    const rc = runningSessionCodes[sid];
+    const nextPaused = !rc?.attendancePaused;
+    setWorking(true);
+    setError('');
+    const resp = await patchAdminSessionAttendancePaused(sessionId, nextPaused);
+    if (resp.error) setError(resp.error);
+    else {
+      setMessage(nextPaused ? 'Student attendance paused for this session.' : 'Student attendance resumed.');
+      setRunningSessionCodes((prev) => (
+        prev[sid] ? { ...prev, [sid]: { ...prev[sid], attendancePaused: nextPaused } } : prev
+      ));
+      await loadSessions();
+    }
     setWorking(false);
   };
 
@@ -473,11 +511,6 @@ export default function LecturerDashboard() {
                   <option value="yes">Yes</option>
                   <option value="no">No</option>
                 </select>
-                <label className="field-label" htmlFor="rotationSelect" style={{ marginTop: '0.75rem' }}>Enable pin rotation</label>
-                <select id="rotationSelect" className="input" value={rotationEnabled ? 'yes' : 'no'} onChange={(e) => setRotationEnabled(e.target.value === 'yes')}>
-                  <option value="no">No</option>
-                  <option value="yes">Yes</option>
-                </select>
               </div>
 
               <div className="form-section">
@@ -501,9 +534,25 @@ export default function LecturerDashboard() {
               />
               <div className="session-list">
                 {sortedFilteredSessions.map((s) => (
-                  <div key={s._id} className={`session-item ${s.active ? 'state-active' : 'state-inactive'}`}>
+                  <div key={s._id} className={`session-item ${s.active ? 'state-active' : 'state-inactive'} ${runningSessionCodes[String(s._id)] ? 'state-running' : ''}`}>
                     <div>
-                      <p className="session-main">{s.course?.code} — {s.lectureDay} {s.startTime}–{s.endTime}</p>
+                      <div className="session-item__head">
+                        <p className="session-main">{s.course?.code} — {s.lectureDay} {s.startTime}–{s.endTime}</p>
+                        {runningSessionCodes[String(s._id)] ? (() => {
+                          const rc = runningSessionCodes[String(s._id)];
+                          return (
+                            <button
+                              type="button"
+                              className={`session-live-badge ${rc.attendancePaused ? 'session-live-badge--attendance-paused' : 'session-live-badge--blink'}`}
+                              disabled={working}
+                              onClick={() => onToggleAttendancePaused(s._id)}
+                              title={rc.attendancePaused ? 'Click to resume student attendance' : 'Click to pause student attendance'}
+                            >
+                              {rc.attendancePaused ? 'Paused' : 'Live'}
+                            </button>
+                          );
+                        })() : null}
+                      </div>
                       <p className="session-sub">{s.recurring ? 'Recurring' : 'One-time'}</p>
                     </div>
                     <div className="bt-row">

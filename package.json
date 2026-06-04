@@ -32,7 +32,7 @@
     "server": "node server/index.js",
     "dev": "concurrently \"npm run start\" \"npm run server\"",
     "tunnel": "ngrok http 3000",
-    "test:server": "NODE_ENV=test jest --config jest.server.config.js --forceExit"
+    "test:server": "cross-env NODE_ENV=test jest --config jest.server.config.js --forceExit"
   },
   "eslintConfig": {
     "extends": [
@@ -42,8 +42,9 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
-    "supertest": "^6.3.3",
-    "jest": "^29.0.0"
+    "cross-env": "^7.0.3",
+    "jest": "^29.0.0",
+    "supertest": "^6.3.3"
   },
   "browserslist": {
     "production": [

@@ -10,6 +10,7 @@ import {
   enableAdminCourse,
   createAdminSession,
   getAdminAllSessions,
+  getAdminRunningSessions,
   activateAdminSession,
   deactivateAdminSession,
   deleteAdminSession,
@@ -59,7 +60,6 @@ export default function AdminDashboard() {
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('10:00');
   const [recurring, setRecurring] = useState(true);
-  const [rotationEnabled, setRotationEnabled] = useState(false);
   const [runningSessionCodes, setRunningSessionCodes] = useState({});
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
@@ -281,15 +281,6 @@ export default function AdminDashboard() {
     }
   };
 
-  const loadRunningCodes = async () => {
-    const data = { items: [] };
-    if (!data.error) {
-      setRunningSessionCodes(
-        Object.fromEntries((data.items || []).map(item => [String(item.sessionId), item]))
-      );
-    }
-  };
-
   useEffect(() => {
     if (!isAdmin) return;
     const pool = newCourseLecturerId
@@ -308,7 +299,7 @@ export default function AdminDashboard() {
     async function refreshRunningCodes() {
       if (activeTab !== 'sessions') return;
       try {
-        const resp = { items: [] };
+        const resp = await getAdminRunningSessions();
         if (cancelled) return;
         if (!resp.error) {
           const next = {};
@@ -319,11 +310,11 @@ export default function AdminDashboard() {
         }
       } catch (err) {
         if (!cancelled) {
-          // Temporary network/tunnel issues should not crash the whole admin screen.
-          setError((prev) => (prev ? prev : 'Live pin updates are temporarily unavailable. Retrying...'));
+          // Temporary network issues should not crash the whole admin screen.
+          setError((prev) => (prev ? prev : 'Live session updates are temporarily unavailable. Retrying...'));
         }
       } finally {
-        if (!cancelled) timer = setTimeout(refreshRunningCodes, 1000);
+        if (!cancelled) timer = setTimeout(refreshRunningCodes, 5000);
       }
     }
     refreshRunningCodes();
@@ -399,13 +390,6 @@ export default function AdminDashboard() {
     setWorking(false);
   };
 
-  const openProjectorView = (sessionRecord) => {
-    const id = String(sessionRecord._id);
-    const label = `${sessionRecord.course?.code || 'Course'} · ${sessionRecord.lectureDay || ''} ${sessionRecord.startTime || ''}–${sessionRecord.endTime || ''}`;
-    const path = `/admin/present/session/${id}?${new URLSearchParams({ label }).toString()}`;
-    window.open(`${window.location.origin}${path}`, '_blank', 'noopener,noreferrer');
-  };
-
   const onDeleteCourse = async (courseId) => {
     const targetCourse = courses.find((c) => String(c._id) === String(courseId));
     const expect = `${targetCourse?.code || ''} ${targetCourse?.batch ?? ''}`.trim();
@@ -461,7 +445,6 @@ export default function AdminDashboard() {
       startTime,
       endTime,
       recurring,
-      rotationEnabled,
     });
     if (resp.error) setError(resp.error);
     else {
@@ -470,7 +453,6 @@ export default function AdminDashboard() {
       setStartTime('08:00');
       setEndTime('10:00');
       setRecurring(true);
-      setRotationEnabled(false);
       await loadSessions();
     }
     setWorking(false);
@@ -1008,11 +990,6 @@ export default function AdminDashboard() {
                   <option value="yes">Yes</option>
                   <option value="no">No</option>
                 </select>
-                <label className="field-label" htmlFor="rotationSelect" style={{ marginTop: '0.75rem' }}>Enable pin rotation</label>
-                <select id="rotationSelect" className="input" value={rotationEnabled ? 'yes' : 'no'} onChange={(e) => setRotationEnabled(e.target.value === 'yes')}>
-                  <option value="no">No</option>
-                  <option value="yes">Yes</option>
-                </select>
               </div>
 
               <div className="form-section">
@@ -1026,7 +1003,7 @@ export default function AdminDashboard() {
               <header className="section-head">
                 <p className="section-kicker">Operations</p>
                 <h2 className="section-title">Session control</h2>
-                <p className="section-desc">Search sessions, toggle activation, or click the blinking Live badge to pause or resume student attendance. Use ↻ beside the code for PIN rotation. Deactivate or soft-delete as needed.</p>
+                <p className="section-desc">Search sessions, toggle activation, or click the blinking Live badge to pause or resume student attendance. Enable Bluetooth to broadcast the rotating BLE token. Deactivate or soft-delete as needed.</p>
               </header>
               <input
                 className="input"
@@ -1056,38 +1033,6 @@ export default function AdminDashboard() {
                         })() : null}
                       </div>
                       <p className="session-sub">{s.recurring ? 'Recurring' : 'One-time'}</p>
-                      {runningSessionCodes[String(s._id)] && (() => {
-                        const rc = runningSessionCodes[String(s._id)];
-                        const suffix = rc.attendancePaused
-                          ? (rc.rotationPaused ? ' (attendance paused · rotation paused)' : ' (attendance paused)')
-                          : rc.rotationPaused
-                            ? ' (rotation paused)'
-                            : ` (${rc.secondsRemaining}s)`;
-                        return (
-                        <div className="live-code-row">
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            disabled={working}
-                            onClick={() => {}}
-                            title={rc.rotationPaused ? 'Resume PIN rotation' : 'Pause PIN rotation'}
-                          >
-                            {rc.rotationPaused ? '⟳' : '↻'}
-                          </button>
-                          <button
-                            type="button"
-                            className="live-code-display-btn"
-                            onClick={() => openProjectorView(s)}
-                            title="Open PIN in a new tab for projector (large text + timer + rotation controls)"
-                          >
-                            <span className="live-code-display-btn__prefix">Code:</span>
-                            <span className="live-code-display-btn__digits">{rc.code}</span>
-                            <span className="live-code-display-btn__suffix">{suffix}</span>
-                            <span className="live-code-display-btn__hint" aria-hidden>⛶</span>
-                          </button>
-                        </div>
-                        );
-                      })()}
                     </div>
                     <div className="bt-row">
                       {s.bluetoothEnabled ? (

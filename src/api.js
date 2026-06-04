@@ -169,6 +169,14 @@ export async function getAdminAllSessions() {
   return { ...data, items: Array.isArray(raw) ? raw : [] };
 }
 
+/** Staff: sessions that are live right now (drives the Live badge + pause control). */
+export async function getAdminRunningSessions() {
+  const data = await safeFetchJson(`${apiBase()}/api/admin/sessions/running`);
+  if (data.error) return { error: data.error, items: [] };
+  const raw = data.items ?? data.data;
+  return { items: Array.isArray(raw) ? raw : [] };
+}
+
 export async function patchAdminSessionAttendancePaused(sessionId, paused) {
   return safeFetchJson(`${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/attendance-paused`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused }),
@@ -211,22 +219,8 @@ export async function getAttendance(sessionId) {
   return { records: Array.isArray(raw) ? raw : [] };
 }
 
-/** Lecturer: returns a URL for downloading attendance as Excel. */
-export function exportAttendanceUrl(sessionId) {
-  return `${apiBase()}/api/admin/sessions/${encodeURIComponent(sessionId)}/attendance/export`;
-}
 
 
-
-
-export async function getAdminSettings() { return safeFetchJson(`${apiBase()}/api/admin/settings`); }
-
-export async function patchAdminStudentDomainRestriction(restrictStudentGoogleDomain) {
-  return safeFetchJson(`${apiBase()}/api/admin/settings/student-domain-restriction`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ restrictStudentGoogleDomain }),
-  });
-}
 
 /** Lecturer: get device name + current rotating token for BLE broadcast. */
 export async function getLecturerBroadcastToken(sessionId) {
