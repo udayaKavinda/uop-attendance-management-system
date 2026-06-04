@@ -177,7 +177,7 @@ This branch targets **Chrome on Android only**. Both scanning (students) and bro
 1. `GET /api/courses/running` populates the course combobox (polling every 10 s).
 2. Student picks a running course and taps **📡 Scan for Bluetooth Attendance**.
 3. Client calls `GET /api/bluetooth-target?courseId=…` → `{ deviceName }`. If BLE is disabled on the session the scan aborts.
-4. `navigator.bluetooth.requestDevice({ filters: [{ name: deviceName }] })` — opens the OS BLE picker pre-filtered to the session's `UOP-XXXXXXXX` beacon.
+4. `navigator.bluetooth.requestDevice({ filters: [{ manufacturerData: [{ companyIdentifier: 0xFFFF }] }] })` — opens the OS BLE picker filtered to advertisers carrying the `0xFFFF` manufacturer payload. (The browser broadcaster can't set a custom BLE local name, so the `UOP-XXXXXXXX` name is informational only on this web-only branch; the token check rejects wrong devices.)
 5. `device.watchAdvertisements({ signal: abortController.signal })` — listens passively. A 30 s timeout aborts if no packet arrives.
 6. On `advertisementreceived`: manufacturer data for company ID `0xFFFF` is the 16-character hex token encoded as UTF-8 (16 bytes); the client decodes it back to the 16-char hex string with `TextDecoder`.
 7. `POST /api/bluetooth-attendance` `{ courseId, token }` — server calls `bluetoothCode.verifyToken(sessionId, token)`. On match, creates `Attendance` with `method: 'bluetooth'`.

@@ -199,8 +199,12 @@ export default function LectureEntry() {
     setBtPhase('requesting');
     let device;
     try {
+      // The browser broadcaster (navigator.bluetooth.advertise) can only set
+      // manufacturer data, not a custom BLE local name, so filter by the 0xFFFF
+      // company ID rather than the UOP-XXXX device name (which is never advertised
+      // on this web-only branch). The token check below rejects any wrong device.
       device = await navigator.bluetooth.requestDevice({
-        filters: [{ name: target.deviceName }],
+        filters: [{ manufacturerData: [{ companyIdentifier: 0xFFFF }] }],
         optionalManufacturerData: [0xFFFF],
       });
     } catch (err) {
