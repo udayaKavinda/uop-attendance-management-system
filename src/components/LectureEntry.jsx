@@ -6,13 +6,14 @@ import React, {
   useState,
 } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { BleClient } from '@capacitor-community/bluetooth-le';
+import { BluetoothLowEnergy } from '@capgo/capacitor-bluetooth-low-energy';
 import {
   getBluetoothTarget,
   submitBluetoothAttendance,
   getAttendanceStatus,
   getRunningCourses,
 } from '../api';
+import { extractTokenFromUuids } from '../utils/bleToken';
 import { readStoredStudent } from '../utils/safeStorage';
 
 const IS_NATIVE = Capacitor.isNativePlatform();
@@ -185,7 +186,10 @@ export default function LectureEntry() {
     }
   };
 
-  // ── Capacitor native BLE path ────────────────────────────────────────────────
+  // ── Capacitor native BLE path (@capgo/capacitor-bluetooth-low-energy) ─────────
+  // The broadcaster packs the rotating token into a service UUID (see utils/bleToken),
+  // so the scanner inspects each device's advertised serviceUuids rather than
+  // manufacturer data (which capgo advertising cannot carry).
   const startBtScanNative = useCallback(async () => {
     setError(null);
     setBtPhase('fetching');
@@ -195,8 +199,8 @@ export default function LectureEntry() {
 
     setBtPhase('requesting');
     try {
-      // androidNeverForLocation: true → uses BLUETOOTH_SCAN without location
-      await BleClient.initialize({ androidNeverForLocation: true });
+      await BluetoothLowEnergy.initialize({ mode: 'central' });
+      await BluetoothLowEnergy.requestPermissions();
     } catch (err) {
       setBtPhase('idle');
       setError('Bluetooth initialization failed. Enable Bluetooth and try again.');
@@ -206,12 +210,14 @@ export default function LectureEntry() {
     setBtPhase('watching');
     let tokenFound = false;
     let stopped = false;
+    let listener = null;
 
     const stopScan = async () => {
       if (stopped) return;
       stopped = true;
       cancelScanRef.current = null;
-      try { await BleClient.stopLEScan(); } catch (_) {}
+      try { if (listener) await listener.remove(); } catch (_) {}
+      try { await BluetoothLowEnergy.stopScan(); } catch (_) {}
     };
     cancelScanRef.current = stopScan;
 
@@ -223,40 +229,32 @@ export default function LectureEntry() {
       }
     }, 30000);
 
+    const handleDevice = async (device) => {
+      if (tokenFound || !device) return;
+      const token = extractTokenFromUuids(device.serviceUuids);
+      if (!token) return;
+      // Set the flag synchronously before any await to avoid duplicate submissions.
+      tokenFound = true;
+      clearTimeout(timeout);
+      await stopScan();
+
+      setBtPhase('submitting');
+      const resp = await submitBluetoothAttendance({ courseId, token });
+      if (resp.success || resp.duplicate) {
+        setRecorded(true);
+        setError(null);
+      } else {
+        setError(resp.error || 'Verification failed. Move closer and try again.');
+      }
+      setBtPhase('idle');
+    };
+
     try {
-      await BleClient.requestLEScan({ name: target.deviceName }, async (scanResult) => {
-        if (tokenFound) return;
-
-        // manufacturerData keys vary by platform: '65535', '0xFFFF', 'ffff' …
-        const mfMap = scanResult.manufacturerData || {};
-        const mfData = Object.entries(mfMap)
-          .find(([k]) => {
-            const n = k.startsWith('0x') || k.startsWith('0X')
-              ? parseInt(k, 16)
-              : parseInt(k, 10);
-            return n === 0xFFFF;
-          })?.[1];
-        if (!mfData) return;
-
-        tokenFound = true;
-        clearTimeout(timeout);
-        await stopScan();
-
-        // Decode manufacturer bytes as UTF-8 string (matches how lecturer encodes the token)
-        const token = new TextDecoder().decode(
-          mfData.buffer ? new Uint8Array(mfData.buffer) : mfData,
-        ).replace(/\0/g, '').trim();
-
-        setBtPhase('submitting');
-        const resp = await submitBluetoothAttendance({ courseId, token });
-        if (resp.success || resp.duplicate) {
-          setRecorded(true);
-          setError(null);
-        } else {
-          setError(resp.error || 'Verification failed. Move closer and try again.');
-        }
-        setBtPhase('idle');
+      listener = await BluetoothLowEnergy.addListener('deviceScanned', (event) => {
+        handleDevice(event?.device);
       });
+      // No service filter: the token UUID rotates, so we scan all and match the prefix.
+      await BluetoothLowEnergy.startScan({ allowDuplicates: true });
     } catch (err) {
       clearTimeout(timeout);
       await stopScan();
@@ -281,9 +279,10 @@ export default function LectureEntry() {
     setBtPhase('requesting');
     let device;
     try {
+      // The token rides in a rotating service UUID, so we cannot pre-filter by it.
+      // Accept all devices and match the advertised UUIDs once watching begins.
       device = await navigator.bluetooth.requestDevice({
-        filters: [{ name: target.deviceName }],
-        optionalManufacturerData: [0xFFFF],
+        acceptAllDevices: true,
       });
     } catch (err) {
       setBtPhase('idle');
@@ -313,8 +312,9 @@ export default function LectureEntry() {
 
     const handleAdvertisement = async (evt) => {
       if (tokenFound) return;
-      const mfData = evt.manufacturerData?.get(0xFFFF);
-      if (!mfData) return;
+      // The broadcaster advertises the token inside a service UUID.
+      const token = extractTokenFromUuids(evt.uuids);
+      if (!token) return;
       // Set flag synchronously before any await to prevent duplicate submissions
       tokenFound = true;
       clearTimeout(timeout);
@@ -322,13 +322,6 @@ export default function LectureEntry() {
       try { device.removeEventListener('advertisementreceived', handleAdvertisement); } catch (_) {}
       ac.abort();
       cancelScanRef.current = null;
-
-      // Decode manufacturer bytes as UTF-8 — matches how the broadcaster (TextEncoder)
-      // and the native scan path encode/decode the 16-char hex token.
-      const token = new TextDecoder()
-        .decode(mfData.buffer instanceof ArrayBuffer ? mfData.buffer : mfData)
-        .replace(/\0/g, '')
-        .trim();
 
       setBtPhase('submitting');
       const resp = await submitBluetoothAttendance({ courseId, token });

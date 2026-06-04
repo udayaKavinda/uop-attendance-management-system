@@ -22,8 +22,8 @@ Role-based application for lecture attendance at the University of Peradeniya. S
 
 | Area | Capabilities |
 |------|----------------|
-| **Students** | Google sign-in; pick a **running** course; tap **📡 Scan for Bluetooth Attendance**. On the **native Android app** (this branch): `BleClient.requestLEScan` scans directly for the `UOP-XXXXXXXX` beacon — no device picker dialog. In a **browser**: Web Bluetooth picker (Chrome on Android only). Either path reads the rotating 8-byte token from manufacturer data (`0xFFFF`) and posts to `/api/bluetooth-attendance`. |
-| **Lecturers** | Staff console: assigned courses, session CRUD, **BLE broadcasting control** (start/stop per session card), live BLE token display, attendance matrix export, projector view, and live attendance gating via the blinking **Live** badge. |
+| **Students** | Google sign-in; pick a **running** course; tap **📡 Scan for Bluetooth Attendance**. On the **native Android app**: `@capgo/capacitor-bluetooth-low-energy` scans in the background (no picker) and reads the rotating token from an advertised **service UUID** (`utils/bleToken.js`). In a **browser**: Web Bluetooth `watchAdvertisements` fallback with the same UUID decoding. Posts to `/api/bluetooth-attendance`. |
+| **Lecturers** | Staff console: assigned courses, session CRUD, **native BLE broadcasting** (📡 BT on → Start Broadcasting on the Android app), live token + countdown, attendance matrix export, and live attendance gating via the blinking **Live** badge. |
 | **Admins** | Everything lecturers can do for any course, plus lecturer directory and multi-lecturer course assignment. |
 | **System** | **MongoDB-persisted BLE token** per session (`bluetoothCode.js` + `BleToken` model, **15 s** rotation window applied lazily on access, with a short previous-token grace window); non-recurring session auto-deactivate; date-sensitive keys use **host-local Y-M-D**. |
 
@@ -34,7 +34,7 @@ Role-based application for lecture attendance at the University of Peradeniya. S
 | Layer | Technology |
 |-------|------------|
 | **Frontend** | React 19, React Router 6, Create React App (`react-scripts` 5), `fetch` + credentialed CORS. |
-| **Native wrapper** | **Capacitor 8** (`@capacitor/core`, `@capacitor/android`), **`@capacitor-community/bluetooth-le` 8** for native BLE scanning. |
+| **Native wrapper** | **Capacitor 8** (`@capacitor/core`, `@capacitor/android`), **`@capgo/capacitor-bluetooth-low-energy` 8** for native BLE scan + advertise. |
 | **Backend** | Node.js, **Express 5**, Mongoose 9, Passport + `passport-google-oauth20`, `express-session` + **`connect-mongo`**, **`helmet`**, **`express-rate-limit`**, `cors`, `dotenv`. |
 | **Data** | MongoDB (people, courses, lecture sessions, attendance, sessions). |
 | **Tooling** | `concurrently` for `npm run dev`; optional Excel export via `xlsx` (`matrixExcel.js`). |
@@ -74,7 +74,8 @@ flowchart LR
 ```
 
 - **Capacitor WebView**: the React `build/` folder is loaded inside a native Android WebView. All existing React components, API calls, and auth flow work without changes.
-- **Native BLE path**: `Capacitor.isNativePlatform()` is checked at runtime in `LectureEntry.jsx`. On Android, `BleClient.requestLEScan` is used directly; on a browser, `navigator.bluetooth.requestDevice` is used as a fallback.
+- **Native BLE path**: `Capacitor.isNativePlatform()` in `LectureEntry.jsx`. On Android, `@capgo/capacitor-bluetooth-low-energy` scans and extracts the token from advertised service UUIDs (see `utils/bleToken.js`). The broadcaster packs each 16-char hex token into a 128-bit UUID with a fixed `UOPA` prefix because native advertising cannot carry arbitrary manufacturer bytes.
+- **Browser fallback**: Web Bluetooth `requestDevice` + `watchAdvertisements`; same UUID decoding. Scanning works; **broadcasting does not** (Android Chrome has no peripheral/advertise API — use the native app to broadcast).
 - **Single-process API** in `server/index.js` (models, auth helpers, and HTTP handlers).
 - **Session-based auth**: Passport serializes `Person._id`; staff vs student routes use `sessionStaffAuth` / `sessionStudentAuth` after reloading from MongoDB.
 - **BLE token state** is persisted in **MongoDB** (`BleToken` collection via `bluetoothCode.js`) and survives server restarts; a TTL index auto-expires stale tokens.
@@ -102,7 +103,7 @@ flowchart LR
 │   ├── layouts/            # MarketingLayout, StudentLayout, AdminLayout
 │   ├── components/         # Login, GoogleSuccess, LectureEntry, AdminDashboard, …
 │   ├── api.js              # All HTTP helpers; safeFetchJson; 401 → notifySessionInvalid
-│   └── utils/              # safeStorage, authRedirect, matrixExcel
+│   └── utils/              # safeStorage, authRedirect, matrixExcel, bleToken
 ├── server/
 │   ├── index.js            # Express app, OAuth, all API routes
 │   ├── models/             # Person, Course, LectureSession, Attendance, BleToken
@@ -126,9 +127,10 @@ Create a **`.env`** in the project root (not committed).
 | `GOOGLE_CLIENT_ID` | Yes | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Yes | Google OAuth secret |
 | `SESSION_SECRET` | **Required in production** | Server fails to boot in production if missing. |
+| `BLE_SECRET` | Optional | BLE payload secret. If unset, server uses built-in default `uop-ble-dev-secret-change-me`. Override in production. |
 | `FRONTEND_URL` | Strongly recommended | Allowed CORS origin(s), comma-separated. |
 | `APP_BASE_URL` | Recommended | Public origin for Google OAuth `callbackURL`. |
-| `REACT_APP_API_BASE` | Optional | Absolute API origin when SPA and API differ. |
+| `REACT_APP_API_BASE` | **Required for native APK** | Absolute API origin baked into the build. The Capacitor WebView origin is `https://localhost`, so without this the app cannot reach your server. Example: `https://attendance.eng.pdn.ac.lk` or `http://192.168.x.x:5000` for LAN dev. |
 | `NODE_ENV` | Deployment | `production` enables Secure + SameSite=None cookies. |
 | `PORT` | Optional | Express listen port; default **5000** |
 | `TZ` | Optional | Server timezone. If unset, uses host system timezone. |
@@ -150,6 +152,11 @@ npm run dev
 ```
 - Frontend: `http://localhost:3000`
 - API: `http://localhost:5000`
+
+**Run server unit tests (cross-platform):**
+```bash
+npm run test:server
+```
 
 **Production web build:**
 ```bash
@@ -298,6 +305,12 @@ Make sure your phone and computer are on the same Wi-Fi network.
 REACT_APP_API_BASE=https://attendance.eng.pdn.ac.lk
 ```
 
+**CORS for the native app:** The Capacitor WebView origin is `https://localhost`. Add it to `FRONTEND_URL` on the server so cookie-based auth works from the APK:
+```bash
+FRONTEND_URL=https://attendance.eng.pdn.ac.lk,https://localhost
+```
+Then rebuild the APK after changing `REACT_APP_API_BASE`, and restart the server after changing `FRONTEND_URL`.
+
 ---
 
 ### Step 8 — BLE Permissions (already configured)
@@ -314,9 +327,10 @@ The `android/app/src/main/AndroidManifest.xml` already has all required BLE perm
 <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
     android:usesPermissionFlags="neverForLocation" />
 <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+<uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
 ```
 
-The `neverForLocation` flag means the app does **not** need location permission on Android 12+ — it only uses Bluetooth for attendance, not positioning.
+`BLUETOOTH_ADVERTISE` is required for the lecturer **Start Broadcasting** flow (peripheral mode). `neverForLocation` on `BLUETOOTH_SCAN` means students do not need location permission on Android 12+.
 
 On first scan the app will show a **"Allow Bluetooth?"** system dialog. The user must accept it.
 
@@ -384,33 +398,52 @@ npx cap sync android     # re-syncs config and plugin settings
 
 The scan path is chosen at runtime by `Capacitor.isNativePlatform()` in `LectureEntry.jsx`.
 
+**Token transport:** The rotating 16-char hex server token is packed into a **128-bit BLE service UUID** (`utils/bleToken.js`, prefix `554f5041` = ASCII "UOPA"). Native `@capgo/capacitor-bluetooth-low-energy` advertising cannot carry manufacturer bytes, so the UUID is the transport on this branch.
+
 1. `GET /api/courses/running` populates the course combobox (polling every 10 s).
 2. Student picks a running course and taps **📡 Scan for Bluetooth Attendance**.
 3. Client calls `GET /api/bluetooth-target?courseId=…` → `{ deviceName }`. If BT is disabled the scan aborts.
 
-**Native Android app path (this branch):**
+**Native Android app path (recommended):**
 
-4. `BleClient.initialize({ androidNeverForLocation: true })` — requests Bluetooth permission from the user if not yet granted.
-5. `BleClient.requestLEScan({ name: deviceName }, callback)` — starts scanning in the background, no device picker dialog. Filters for the session's `UOP-XXXXXXXX` beacon.
-6. `callback` fires for each matching advertisement. Manufacturer data for company ID `0xFFFF` is read as 8 bytes → 16-char hex token. `BleClient.stopLEScan()` is called once a token is found.
+4. `BluetoothLowEnergy.initialize({ mode: 'central' })` + `requestPermissions()`.
+5. `BluetoothLowEnergy.startScan({ allowDuplicates: true })` — background scan, no picker. Each `deviceScanned` event is checked for a `UOPA`-prefixed service UUID; the token is extracted with `extractTokenFromUuids()`.
+6. On match, scan stops and token is submitted.
 
-**Browser fallback path (Chrome on Android):**
+**Browser fallback (Chrome on Android, scan-only):**
 
-4. `navigator.bluetooth.requestDevice({ filters: [{ name: deviceName }] })` — opens the OS BLE picker, pre-filtered to the beacon.
-5. `device.watchAdvertisements({ signal: abortController.signal })` — listens for advertisements. A 30 s timeout aborts if no packet arrives.
-6. On `advertisementreceived`: manufacturer data for `0xFFFF` → 16-char hex token.
+4. `navigator.bluetooth.requestDevice({ acceptAllDevices: true })` — user picks a nearby device.
+5. `device.watchAdvertisements()` — reads advertised service UUIDs from each packet.
+6. Same `extractTokenFromUuids()` decoding.
 
 **Both paths continue:**
 
 7. `POST /api/bluetooth-attendance` `{ courseId, token }` — server calls `bluetoothCode.verifyToken(sessionId, token)`. On match, creates `Attendance` with `method: 'bluetooth'`.
 8. On `{ success }` or `{ duplicate }`, the success screen is shown.
 
-**Staff live control:**
-- **📡 BT on / BT off** pill buttons on each session card control `bluetoothEnabled`.
-- Enabling BT reveals the **BLE token panel**: rotating token, countdown bar, and **📡 Start Broadcasting** / **⏹ Stop Broadcasting** buttons.
-- On the **native Android app**: `BleClient.startAdvertising` broadcasts the token directly. In a **browser**: `navigator.bluetooth.advertise` (Experimental Web Platform features, Chrome only).
-- The token auto-refreshes every 8 s; the advertisement is updated silently while broadcasting.
-- The **blinking Live badge** pauses/resumes student submissions independently of BLE broadcasting.
+---
+
+## Lecturer BLE broadcast flow (native Android app)
+
+> **Broadcasting requires the native APK.** Android Chrome cannot act as a BLE peripheral — the staff dashboard shows an explicit error if you tap Start Broadcasting in a browser.
+
+1. Build and install the app (`npm run cap:android`). Set `REACT_APP_API_BASE` to your server before building.
+2. Lecturer opens **Sessions** → **📡 BT on** (enables BLE for the session, seeds token via server).
+3. BLE panel shows device name (`UOP-XXXXXXXX`), current token, countdown.
+4. Tap **📡 Start Broadcasting** → `BluetoothLowEnergy.initialize({ mode: 'peripheral' })` → `startAdvertising({ name, services: [tokenToServiceUuid(token)] })`.
+5. Token rotates every **15 s** server-side; dashboard polls every **8 s** and re-advertises with the new UUID automatically.
+6. Students (native app or browser) scan and decode the UUID → submit token.
+7. **Live badge** on the session card pauses/resumes student submissions independently of broadcasting (`GET /api/admin/sessions/running` + `PATCH .../attendance-paused`).
+8. **⏹ Stop Broadcasting** or **BT off** ends the beacon.
+
+**End-to-end test (two phones):**
+
+| Phone | Role | Steps |
+|-------|------|-------|
+| A | Lecturer | Install APK → sign in as lecturer → activate session → BT on → Start Broadcasting |
+| B | Student | Install APK (or Chrome) → sign in as student → pick course → Scan for Bluetooth Attendance |
+
+Both phones must be on the same Wi‑Fi as the server (or use production URL). Bluetooth must be ON on both devices.
 
 ---
 
@@ -459,6 +492,7 @@ The scan path is chosen at runtime by `Capacitor.isNativePlatform()` in `Lecture
 | GET | `/api/admin/courses/:courseId/sessions` | |
 | POST | `/api/admin/courses/:courseId/sessions` | Create session (rejects overlapping time windows) |
 | GET | `/api/admin/sessions` | |
+| GET | `/api/admin/sessions/running` | Sessions live right now (Live badge + pause control). Scoped to lecturer's courses; admins see all. |
 | PATCH | `/api/admin/sessions/:sessionId/activate` | |
 | PATCH | `/api/admin/sessions/:sessionId/deactivate` | |
 | DELETE | `/api/admin/sessions/:sessionId` | Soft-delete; attendance preserved |
@@ -499,13 +533,14 @@ form-action 'self' https://accounts.google.com;
 
 | Topic | Detail |
 |-------|--------|
-| **BLE on native app** | Full BLE scanning via `@capacitor-community/bluetooth-le` on the Android app. No browser dialog — scans directly. Requires Android 6+ with Bluetooth enabled. |
-| **BLE in browser** | `navigator.bluetooth.requestDevice` + `watchAdvertisements` is only available on **Chrome for Android** (and Chrome OS). Not available in Safari, Firefox, or Chrome on iOS. Students on unsupported browsers see an explicit error message. |
-| **iOS** | Capacitor supports iOS with `@capacitor/ios`, but this branch only ships the Android project. An iOS build would require adding `npx cap add ios` on a Mac with Xcode. |
-| **BLE broadcaster** | Broadcasting is built into the Sessions tab of the staff dashboard. On the **native Android app** `BleClient.startAdvertising` is used; in a browser, `navigator.bluetooth.advertise` (Experimental Web Platform features, Chrome Android only) is the fallback. |
-| **BLE token rotation** | **15 s** rotation window in `bluetoothCode.js`, applied lazily when the token is next read (e.g. by the broadcaster poll). The previous token is accepted for a short grace window after rotation. |
-| **Token storage** | Persisted in MongoDB (`BleToken` collection); durable across server restarts. A TTL index auto-expires tokens after 1 hour of inactivity. |
-| **Emulator BLE** | Android emulators do not support real Bluetooth hardware. BLE scanning requires a physical device. |
+| **BLE scanning (native app)** | Full background scan via `@capgo/capacitor-bluetooth-low-energy`. No browser dialog. Requires Android 6+ with Bluetooth enabled. |
+| **BLE scanning (browser)** | Web Bluetooth `watchAdvertisements` on Chrome for Android only. User must pick a device in the OS dialog. |
+| **BLE broadcasting** | **Native Android app only.** `BluetoothLowEnergy.startAdvertising` packs the token into a service UUID. Browsers cannot advertise on Android — staff see an explicit error in the dashboard. |
+| **Token encoding** | 16-char hex token → 128-bit service UUID with `UOPA` prefix (`utils/bleToken.js`). Not manufacturer data `0xFFFF` (that path is used on the web-only `feature/bluetooth` branch). |
+| **iOS** | Capacitor supports iOS, but this branch only ships the Android project. |
+| **BLE token rotation** | **15 s** in `bluetoothCode.js`, lazy on access. Previous token accepted for a short grace window. |
+| **Token storage** | MongoDB `BleToken` collection; TTL index expires after 1 h inactivity. |
+| **Emulator BLE** | Android emulators have no real Bluetooth. Use physical devices for end-to-end testing. |
 
 ---
 

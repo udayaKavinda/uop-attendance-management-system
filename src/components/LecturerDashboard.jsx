@@ -3,7 +3,7 @@ import React, {
 } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
-import { BleClient } from '@capacitor-community/bluetooth-le';
+import { BluetoothLowEnergy } from '@capgo/capacitor-bluetooth-low-energy';
 import {
   getAdminCourses,
   createAdminCourse,
@@ -12,17 +12,19 @@ import {
   enableAdminCourse,
   createAdminSession,
   getAdminAllSessions,
+  getAdminRunningSessions,
   activateAdminSession,
   deactivateAdminSession,
   deleteAdminSession,
+  patchAdminSessionAttendancePaused,
   startSessionBluetooth,
   stopSessionBluetooth,
   getLecturerBroadcastToken,
 } from '../api';
+import { tokenToServiceUuid } from '../utils/bleToken';
 
 const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 const DAY_ORDER = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
-const BLE_COMPANY_ID = 0xFFFF;
 const BLE_POLL_INTERVAL_MS = 8_000;
 const IS_NATIVE = Capacitor.isNativePlatform();
 
@@ -51,7 +53,7 @@ export default function LecturerDashboard() {
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('10:00');
   const [recurring, setRecurring] = useState(true);
-  const [rotationEnabled, setRotationEnabled] = useState(false);
+  const [runningSessionCodes, setRunningSessionCodes] = useState({});
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
@@ -64,8 +66,10 @@ export default function LecturerDashboard() {
   const [bleBroadcasting, setBleBroadcasting] = useState({});
   const [bleAdErrors, setBleAdErrors] = useState({});
   const pollRefsMap = useRef({});
-  // Native: stores true when advertising; web: stores the advertise handle object
+  // Stores true while a session is advertising (native peripheral mode).
   const adHandlesMap = useRef({});
+  // Last token we pushed into the advertisement, so we only re-advertise on rotation.
+  const lastAdvertisedTokenRef = useRef({});
 
   const loadCourses = useCallback(async () => {
     const resp = await getAdminCourses();
@@ -105,6 +109,25 @@ export default function LecturerDashboard() {
     const t = setTimeout(() => setToast(''), 4200);
     return () => clearTimeout(t);
   }, [message]);
+
+  // Poll which sessions are live right now to drive the Live/Paused badge.
+  useEffect(() => {
+    let cancelled = false;
+    let timer = null;
+    async function refreshRunning() {
+      if (activeTab !== 'sessions') return;
+      const resp = await getAdminRunningSessions();
+      if (cancelled) return;
+      if (!resp.error) {
+        const next = {};
+        (resp.items || []).forEach((item) => { next[String(item.sessionId)] = item; });
+        setRunningSessionCodes(next);
+      }
+      if (!cancelled) timer = setTimeout(refreshRunning, 5000);
+    }
+    refreshRunning();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [activeTab]);
 
   const sortedFilteredSessions = useMemo(() => {
     const q = sessionSearch.trim().toLowerCase();
@@ -188,7 +211,7 @@ export default function LecturerDashboard() {
     setWorking(true);
     setError('');
     const resp = await createAdminSession(selectedCourseId, {
-      lectureDay, startTime, endTime, recurring, rotationEnabled,
+      lectureDay, startTime, endTime, recurring,
     });
     if (resp.error) setError(resp.error);
     else {
@@ -197,7 +220,6 @@ export default function LecturerDashboard() {
       setStartTime('08:00');
       setEndTime('10:00');
       setRecurring(true);
-      setRotationEnabled(false);
       await loadSessions();
     }
     setWorking(false);
@@ -232,6 +254,24 @@ export default function LecturerDashboard() {
     setWorking(false);
   };
 
+  const onToggleAttendancePaused = async (sessionId) => {
+    const sid = String(sessionId);
+    const rc = runningSessionCodes[sid];
+    const nextPaused = !rc?.attendancePaused;
+    setWorking(true);
+    setError('');
+    const resp = await patchAdminSessionAttendancePaused(sessionId, nextPaused);
+    if (resp.error) setError(resp.error);
+    else {
+      setMessage(nextPaused ? 'Student attendance paused for this session.' : 'Student attendance resumed.');
+      setRunningSessionCodes((prev) => (
+        prev[sid] ? { ...prev, [sid]: { ...prev[sid], attendancePaused: nextPaused } } : prev
+      ));
+      await loadSessions();
+    }
+    setWorking(false);
+  };
+
   const onStartBluetooth = async (sessionId) => {
     setWorking(true);
     setError('');
@@ -259,21 +299,20 @@ export default function LecturerDashboard() {
       setBleCountdowns((prev) => ({ ...prev, [sid]: data.rotatesIn }));
     }
     const handle = adHandlesMap.current[sid];
-    if (handle && data.token) {
+    if (handle && data.token && IS_NATIVE) {
+      // Only re-advertise when the rotating token actually changed.
+      if (lastAdvertisedTokenRef.current[sid] === data.token) return;
       try {
-        const tokenBytes = new TextEncoder().encode(data.token);
-        if (IS_NATIVE) {
-          // Restart native advertising with updated token
-          await BleClient.stopAdvertising();
-          await BleClient.startAdvertising({
-            name: data.deviceName,
-            manufacturerData: { [BLE_COMPANY_ID]: tokenBytes },
-          });
-        } else if (typeof handle.updateData === 'function') {
-          await handle.updateData({ manufacturerData: [{ companyIdentifier: BLE_COMPANY_ID, data: tokenBytes }] });
-        }
+        await BluetoothLowEnergy.stopAdvertising();
+        await BluetoothLowEnergy.startAdvertising({
+          name: data.deviceName,
+          services: [tokenToServiceUuid(data.token)],
+          includeName: true,
+        });
+        lastAdvertisedTokenRef.current[sid] = data.token;
       } catch (err) {
         adHandlesMap.current[sid] = null;
+        lastAdvertisedTokenRef.current[sid] = null;
         setBleBroadcasting((prev) => ({ ...prev, [sid]: false }));
         setBleAdErrors((prev) => ({ ...prev, [sid]: 'Broadcast interrupted — token rotated: ' + err.message }));
       }
@@ -298,11 +337,10 @@ export default function LecturerDashboard() {
         delete pollRefsMap.current[sid];
         const handle = adHandlesMap.current[sid];
         if (IS_NATIVE && handle) {
-          BleClient.stopAdvertising().catch(() => {});
-        } else if (handle && typeof handle.stop === 'function') {
-          handle.stop().catch(() => {});
+          BluetoothLowEnergy.stopAdvertising().catch(() => {});
         }
         adHandlesMap.current[sid] = null;
+        lastAdvertisedTokenRef.current[sid] = null;
         setBleBroadcasting((prev) => { const n = { ...prev }; delete n[sid]; return n; });
         setBleStates((prev) => { const n = { ...prev }; delete n[sid]; return n; });
         setBleCountdowns((prev) => { const n = { ...prev }; delete n[sid]; return n; });
@@ -329,9 +367,7 @@ export default function LecturerDashboard() {
     Object.values(pollRefsMap.current).forEach(clearInterval);
     const handles = Object.values(adHandlesMap.current).filter(Boolean);
     if (IS_NATIVE && handles.length > 0) {
-      BleClient.stopAdvertising().catch(() => {});
-    } else {
-      handles.forEach((h) => { if (h?.stop) h.stop().catch(() => {}); });
+      BluetoothLowEnergy.stopAdvertising().catch(() => {});
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -344,29 +380,24 @@ export default function LecturerDashboard() {
       return;
     }
     setBleAdErrors((prev) => ({ ...prev, [sid]: '' }));
+    // Browsers cannot act as a BLE peripheral — broadcasting needs the native app.
+    if (!IS_NATIVE) {
+      setBleAdErrors((prev) => ({
+        ...prev,
+        [sid]: 'Broadcasting requires the native Android app (BLE advertising is not available in the browser). Build and run the app with "npm run cap:android".',
+      }));
+      return;
+    }
     try {
-      const tokenBytes = new TextEncoder().encode(state.token);
-      if (IS_NATIVE) {
-        await BleClient.initialize();
-        await BleClient.startAdvertising({
-          name: state.deviceName,
-          manufacturerData: { [BLE_COMPANY_ID]: tokenBytes },
-        });
-        adHandlesMap.current[sid] = true;
-      } else {
-        if (!navigator.bluetooth?.advertise) {
-          setBleAdErrors((prev) => ({
-            ...prev,
-            [sid]: 'BLE advertising requires the native Android app. In browser, enable "Experimental Web Platform features" at chrome://flags on Android Chrome.',
-          }));
-          return;
-        }
-        const handle = await navigator.bluetooth.advertise({
-          type: 'manufacturer',
-          manufacturerData: [{ companyIdentifier: BLE_COMPANY_ID, data: tokenBytes }],
-        });
-        adHandlesMap.current[sid] = handle;
-      }
+      await BluetoothLowEnergy.initialize({ mode: 'peripheral' });
+      await BluetoothLowEnergy.requestPermissions();
+      await BluetoothLowEnergy.startAdvertising({
+        name: state.deviceName,
+        services: [tokenToServiceUuid(state.token)],
+        includeName: true,
+      });
+      adHandlesMap.current[sid] = true;
+      lastAdvertisedTokenRef.current[sid] = state.token;
       setBleBroadcasting((prev) => ({ ...prev, [sid]: true }));
     } catch (err) {
       setBleAdErrors((prev) => ({ ...prev, [sid]: 'Broadcast failed: ' + err.message }));
@@ -375,15 +406,11 @@ export default function LecturerDashboard() {
 
   const handleStopBroadcast = async (sessionId) => {
     const sid = String(sessionId);
-    const handle = adHandlesMap.current[sid];
     try {
-      if (IS_NATIVE) {
-        await BleClient.stopAdvertising();
-      } else if (handle && typeof handle.stop === 'function') {
-        await handle.stop();
-      }
+      if (IS_NATIVE) await BluetoothLowEnergy.stopAdvertising();
     } catch (_) {}
     adHandlesMap.current[sid] = null;
+    lastAdvertisedTokenRef.current[sid] = null;
     setBleBroadcasting((prev) => ({ ...prev, [sid]: false }));
   };
 
@@ -508,11 +535,6 @@ export default function LecturerDashboard() {
                   <option value="yes">Yes</option>
                   <option value="no">No</option>
                 </select>
-                <label className="field-label" htmlFor="rotationSelect" style={{ marginTop: '0.75rem' }}>Enable pin rotation</label>
-                <select id="rotationSelect" className="input" value={rotationEnabled ? 'yes' : 'no'} onChange={(e) => setRotationEnabled(e.target.value === 'yes')}>
-                  <option value="no">No</option>
-                  <option value="yes">Yes</option>
-                </select>
               </div>
 
               <div className="form-section">
@@ -526,7 +548,7 @@ export default function LecturerDashboard() {
               <header className="section-head">
                 <p className="section-kicker">Operations</p>
                 <h2 className="section-title">Session control</h2>
-                <p className="section-desc">Activate sessions to allow attendance. Enable Bluetooth to broadcast the BLE token for proximity attendance.</p>
+                <p className="section-desc">Activate sessions to allow attendance. Click the blinking Live badge to pause or resume student submissions. Enable Bluetooth to broadcast the BLE token.</p>
               </header>
               <input
                 className="input"
@@ -536,9 +558,25 @@ export default function LecturerDashboard() {
               />
               <div className="session-list">
                 {sortedFilteredSessions.map((s) => (
-                  <div key={s._id} className={`session-item ${s.active ? 'state-active' : 'state-inactive'}`}>
+                  <div key={s._id} className={`session-item ${s.active ? 'state-active' : 'state-inactive'} ${runningSessionCodes[String(s._id)] ? 'state-running' : ''}`}>
                     <div>
-                      <p className="session-main">{s.course?.code} — {s.lectureDay} {s.startTime}–{s.endTime}</p>
+                      <div className="session-item__head">
+                        <p className="session-main">{s.course?.code} — {s.lectureDay} {s.startTime}–{s.endTime}</p>
+                        {runningSessionCodes[String(s._id)] ? (() => {
+                          const rc = runningSessionCodes[String(s._id)];
+                          return (
+                            <button
+                              type="button"
+                              className={`session-live-badge ${rc.attendancePaused ? 'session-live-badge--attendance-paused' : 'session-live-badge--blink'}`}
+                              disabled={working}
+                              onClick={() => onToggleAttendancePaused(s._id)}
+                              title={rc.attendancePaused ? 'Click to resume student attendance' : 'Click to pause student attendance'}
+                            >
+                              {rc.attendancePaused ? 'Paused' : 'Live'}
+                            </button>
+                          );
+                        })() : null}
+                      </div>
                       <p className="session-sub">{s.recurring ? 'Recurring' : 'One-time'}</p>
                     </div>
                     <div className="bt-row">

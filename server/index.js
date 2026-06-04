@@ -34,6 +34,13 @@ if (isProd && !process.env.SESSION_SECRET) {
   process.exit(1);
 }
 
+// BLE payload secret. Falls back to a built-in value so the app runs with zero
+// extra configuration in development; override BLE_SECRET in production.
+const BLE_SECRET = process.env.BLE_SECRET || 'uop-ble-dev-secret-change-me';
+if (isProd && BLE_SECRET === 'uop-ble-dev-secret-change-me') {
+  console.warn('WARNING: BLE_SECRET is using the built-in default. Set BLE_SECRET in production.');
+}
+
 /**
  * Classifies common Mongo/Mongoose errors so handlers don't return 500 for client mistakes
  * and don't leak driver internals.
@@ -530,6 +537,7 @@ if (require.main === module) {
         await Attendance.syncIndexes();
         await Person.syncIndexes();
         await Course.syncIndexes();
+        await BleToken.syncIndexes();
       } catch (e) {
         console.warn('Index sync:', e.message);
       }
@@ -703,6 +711,8 @@ app.delete('/api/admin/courses/:courseId', async (req, res) => {
     await Attendance.deleteMany({ course: course._id });
     await LectureSession.deleteMany({ course: course._id });
     await Course.deleteOne({ _id: course._id });
+    // Drop any rotating BLE tokens left behind by the deleted sessions.
+    await Promise.all(sessionIds.map((id) => bluetoothCode.removeToken(String(id))));
     return res.json({ success: true });
   } catch (err) {
     return respondError(res, err);
@@ -835,7 +845,9 @@ app.delete('/api/admin/sessions/:sessionId', async (req, res) => {
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     sessionItem.deleted = true;
     sessionItem.active = false;
+    sessionItem.bluetoothEnabled = false;
     await sessionItem.save();
+    await bluetoothCode.removeToken(String(sessionItem._id));
     return res.json({ success: true });
   } catch (err) { return respondError(res, err); }
 });
@@ -882,6 +894,41 @@ app.get('/api/admin/sessions', async (req, res) => {
     const items = await LectureSession.find({ deleted: false, ...scope })
       .populate('course', 'code name active batch lecturer')
       .sort({ updatedAt: -1 });
+    return res.json({ items });
+  } catch (err) {
+    return respondError(res, err);
+  }
+});
+
+// Sessions that are live right now (active + inside their weekly time window).
+// Drives the blinking "Live" badge and the pause/resume control in the staff console.
+app.get('/api/admin/sessions/running', async (req, res) => {
+  try {
+    const auth = await sessionStaffAuth(req);
+    if (!auth.ok) return res.status(auth.status || 403).json({ error: auth.message });
+    const scope = await staffSessionMatch(auth.person, auth.isAdmin);
+    const now = new Date();
+    const day = DAY_INDEX[now.getDay()];
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const sessions = await LectureSession.find({
+      deleted: false,
+      active: true,
+      lectureDay: day,
+      ...scope,
+    }).populate('course', 'active');
+    const items = sessions
+      .filter((s) => {
+        if (!s.course?.active) return false;
+        const start = toMinutes(s.startTime);
+        const end = toMinutes(s.endTime);
+        return start !== null && end !== null && currentMinutes >= start && currentMinutes <= end;
+      })
+      .map((s) => ({
+        sessionId: String(s._id),
+        attendancePaused: Boolean(s.attendancePaused),
+        bluetoothEnabled: Boolean(s.bluetoothEnabled),
+        deviceName: s.bluetoothDeviceName || null,
+      }));
     return res.json({ items });
   } catch (err) {
     return respondError(res, err);
