@@ -1,5 +1,6 @@
 # UOP Attendance Management System
 
+
 Role-based web application for lecture attendance at the **University of Peradeniya**. Students mark attendance for live sessions by scanning a **rotating BLE token** broadcast from the lecturer's device; lecturers and admins manage courses, sessions, and reporting.
 
 > **This branch:** `feature/bluetooth` — web-only version using the **Web Bluetooth API** (`navigator.bluetooth`). No Capacitor, no native Android build. Runs entirely in a browser or Android WebView.
