@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
+import { startGoogleLogin } from '../utils/googleAuth';
 
 export default function Login() {
   const location = useLocation();
@@ -61,11 +62,12 @@ export default function Login() {
         <button
           type="button"
           className="primary-btn"
-          onClick={() => {
-            const base = process.env.REACT_APP_API_BASE
-              || (window.location.port === '3000' ? 'http://localhost:5000' : '')
-              || '';
-            window.location.href = `${base}/auth/google`;
+          onClick={async () => {
+            try {
+              await startGoogleLogin();
+            } catch (err) {
+              setError(err?.message || 'Could not start Google sign-in.');
+            }
           }}
         >
           Continue with Google

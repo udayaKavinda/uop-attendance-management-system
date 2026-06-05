@@ -30,6 +30,14 @@ async function safeFetchJson(url, init = {}) {
 }
 
 export async function getMe() { return safeFetchJson(`${apiBase()}/api/me`); }
+
+export async function exchangeOAuthCode(code) {
+  return safeFetchJson(`${apiBase()}/api/auth/exchange-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+}
 export async function logoutSession() { return safeFetchJson(`${apiBase()}/api/logout`, { method: 'POST' }); }
 
 export async function getAttendanceStatus(courseId) {

@@ -1,15 +1,28 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { getMe } from '../api';
+import { Capacitor } from '@capacitor/core';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { exchangeOAuthCode, getMe } from '../api';
 
 const VALID_ROLES = new Set(['admin', 'lecturer', 'student']);
 
 export default function GoogleSuccess() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [lockupOk, setLockupOk] = useState(true);
 
   useEffect(() => {
     async function completeLogin() {
+      const params = new URLSearchParams(location.search);
+      const code = params.get('code');
+
+      if (code && Capacitor.isNativePlatform()) {
+        const exchanged = await exchangeOAuthCode(code);
+        if (exchanged?.error) {
+          navigate('/?error=session');
+          return;
+        }
+      }
+
       let last;
       for (let attempt = 0; attempt < 8; attempt += 1) {
         last = await getMe();
@@ -35,7 +48,7 @@ export default function GoogleSuccess() {
     }
 
     completeLogin();
-  }, [navigate]);
+  }, [location.search, navigate]);
 
   return (
     <div className="marketing-card page-fade">

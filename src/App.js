@@ -1,5 +1,12 @@
-import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { Capacitor } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
+import { Navigate, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  isNativeOAuthReturnUrl,
+  pathFromOAuthReturnUrl,
+} from './utils/googleAuth';
 import Login from './components/Login';
 import LectureEntry from './components/LectureEntry';
 import GoogleSuccess from './components/GoogleSuccess';
@@ -49,8 +56,45 @@ function RequireAuth({ sessionReady, user }) {
 }
 
 function App() {
+  const navigate = useNavigate();
   const [sessionReady, setSessionReady] = useState(false);
   const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return undefined;
+
+    async function handleOAuthReturn(url) {
+      if (!isNativeOAuthReturnUrl(url)) return;
+      await Browser.close().catch(() => {});
+      navigate(pathFromOAuthReturnUrl(url), { replace: true });
+    }
+
+    CapApp.getLaunchUrl()
+      .then((launch) => {
+        if (launch?.url) handleOAuthReturn(launch.url);
+      })
+      .catch(() => {});
+
+    let urlListener;
+    let resumeListener;
+
+    CapApp.addListener('appUrlOpen', ({ url }) => {
+      handleOAuthReturn(url).catch(() => {});
+    }).then((handle) => {
+      urlListener = handle;
+    });
+
+    CapApp.addListener('resume', () => {
+      Browser.close().catch(() => {});
+    }).then((handle) => {
+      resumeListener = handle;
+    });
+
+    return () => {
+      urlListener?.remove();
+      resumeListener?.remove();
+    };
+  }, [navigate]);
 
   useEffect(() => {
     let cancelled = false;
