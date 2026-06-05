@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Navigate, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   isNativeOAuthReturnUrl,
   pathFromOAuthReturnUrl,
@@ -96,21 +96,33 @@ function App() {
     };
   }, [navigate]);
 
+  const applySessionUser = useCallback((me) => {
+    const role = me.role || 'student';
+    const sessionUser = {
+      studentId: String(me.studentId),
+      role,
+      email: me.email || '',
+      lecturerId: me.lecturerId || null,
+    };
+    storeSessionUser(sessionUser);
+    setUser(sessionUser);
+    return sessionUser;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     async function hydrateSession() {
+      // GoogleSuccess establishes the session after native OAuth; skip early
+      // getMe here so a stale 401 cannot clear state after login succeeds.
+      if (window.location.pathname === '/login/success') {
+        if (!cancelled) setSessionReady(true);
+        return;
+      }
+
       const me = await getMe();
       if (cancelled) return;
       if (me && !me.error && me.studentId) {
-        const role = me.role || 'student';
-        const sessionUser = {
-          studentId: String(me.studentId),
-          role,
-          email: me.email || '',
-          lecturerId: me.lecturerId || null,
-        };
-        storeSessionUser(sessionUser);
-        setUser(sessionUser);
+        applySessionUser(me);
       } else {
         clearSessionUser();
         setUser(null);
@@ -138,7 +150,10 @@ function App() {
       <Routes>
         <Route element={<MarketingLayout />}>
           <Route path="/" element={<Login />} />
-          <Route path="/login/success" element={<GoogleSuccess />} />
+          <Route
+            path="/login/success"
+            element={<GoogleSuccess onAuthenticated={(me) => applySessionUser(me)} />}
+          />
         </Route>
 
         <Route element={<RequireAuth sessionReady={sessionReady} user={user} />}>

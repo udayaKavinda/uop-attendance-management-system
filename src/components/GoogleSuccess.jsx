@@ -1,16 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { exchangeOAuthCode, getMe } from '../api';
 
 const VALID_ROLES = new Set(['admin', 'lecturer', 'student']);
 
-export default function GoogleSuccess() {
+export default function GoogleSuccess({ onAuthenticated }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [lockupOk, setLockupOk] = useState(true);
+  const loginStarted = useRef(false);
 
   useEffect(() => {
+    if (loginStarted.current) return undefined;
+    loginStarted.current = true;
+
     async function completeLogin() {
       const params = new URLSearchParams(location.search);
       const code = params.get('code');
@@ -36,19 +40,19 @@ export default function GoogleSuccess() {
       }
 
       const role = VALID_ROLES.has(last.role) ? last.role : 'student';
-      const studentId = last.studentId != null ? String(last.studentId) : '';
-
-      localStorage.setItem('student', JSON.stringify({
-        studentId,
+      const sessionUser = {
+        studentId: last.studentId != null ? String(last.studentId) : '',
         role,
         email: last.email || '',
         lecturerId: last.lecturerId || null,
-      }));
-      navigate(role === 'admin' || role === 'lecturer' ? '/admin' : '/lecture');
+      };
+
+      onAuthenticated?.(sessionUser);
+      navigate(role === 'admin' || role === 'lecturer' ? '/admin' : '/lecture', { replace: true });
     }
 
     completeLogin();
-  }, [location.search, navigate]);
+  }, [location.search, navigate, onAuthenticated]);
 
   return (
     <div className="marketing-card page-fade">
