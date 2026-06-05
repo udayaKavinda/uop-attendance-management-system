@@ -12,6 +12,7 @@ import {
   getRunningCourses,
 } from '../api';
 import { readStoredStudent } from '../utils/safeStorage';
+import { extractTokenFromUuids } from '../utils/bleToken';
 
 
 const BT_PHASE_LABEL = {
@@ -198,13 +199,12 @@ export default function LectureEntry() {
     setBtPhase('requesting');
     let device;
     try {
-      // The browser broadcaster (navigator.bluetooth.advertise) can only set
-      // manufacturer data, not a custom BLE local name, so filter by the 0xFFFF
-      // company ID rather than the UOP-XXXX device name (which is never advertised
-      // on this web-only branch). The token check below rejects any wrong device.
+      // Listen only to the native APK broadcaster, which packs the token into a
+      // UOPA-prefixed service UUID (not manufacturer data). The token UUID rotates
+      // every 15 s, so show all devices in the picker and match the prefix in
+      // watchAdvertisements — same approach as the Google Web Bluetooth sample.
       device = await navigator.bluetooth.requestDevice({
-        filters: [{ manufacturerData: [{ companyIdentifier: 0xFFFF }] }],
-        optionalManufacturerData: [0xFFFF],
+        acceptAllDevices: true,
       });
     } catch (err) {
       setBtPhase('idle');
@@ -238,8 +238,8 @@ export default function LectureEntry() {
 
     const handleAdvertisement = async (evt) => {
       if (tokenFound) return;
-      const mfData = evt.manufacturerData?.get(0xFFFF);
-      if (!mfData) return;
+      const token = extractTokenFromUuids(evt.uuids);
+      if (!token) return;
       // Set flag synchronously before any await to prevent duplicate submissions
       tokenFound = true;
       clearTimeout(timeout);
@@ -247,9 +247,6 @@ export default function LectureEntry() {
       try { device.removeEventListener('advertisementreceived', handleAdvertisement); } catch (_) {}
       ac.abort();
       cancelScanRef.current = null;
-
-      // Decode manufacturer bytes as UTF-8 — matches how LecturerDashboard encodes the token
-      const token = new TextDecoder().decode(mfData.buffer instanceof ArrayBuffer ? mfData.buffer : mfData).trim().replace(/\0/g, '');
 
       setBtPhase('submitting');
       const resp = await submitBluetoothAttendance({ courseId, token });
