@@ -17,8 +17,9 @@ import { extractTokenFromUuids } from '../utils/bleToken';
 
 const BT_PHASE_LABEL = {
   fetching: 'Looking up session…',
-  requesting: 'Select the device in the browser dialog…',
-  watching: 'Receiving Bluetooth signal…',
+  requesting: 'Starting Bluetooth scan…',
+  picking: 'Select a device in the browser dialog…',
+  watching: 'Scanning for classroom signal…',
   submitting: 'Verifying attendance…',
 };
 
@@ -38,7 +39,6 @@ export default function LectureEntry() {
   const [checkingStatus, setCheckingStatus] = useState(false);
   const blurCloseTimer = useRef(null);
   const comboboxRef = useRef(null);
-  const abortRef = useRef(null);
   const listboxId = 'running-course-listbox';
 
   const clearBlurTimer = () => {
@@ -184,28 +184,47 @@ export default function LectureEntry() {
   };
 
   
-  // ── Web Bluetooth fallback path (Chrome on Android) ──────────────────────────
+  // ── Web Bluetooth path (Chrome on Android) — Path 3 only ────────────────────
+  // 1) requestDevice picker (must run on click — preserves user gesture)
+  // 2) requestLEScan({ listenOnlyGrantedDevices: true }) — works when
+  //    watchAdvertisements() is missing on Android Chrome
+  // Matches UOPA-prefixed service UUIDs from the native APK broadcaster only.
   const startBtScanWeb = useCallback(async () => {
-    if (!navigator.bluetooth?.requestDevice) {
-      setError('Web Bluetooth is not supported on this browser. Please use Chrome on Android.');
+    const bt = navigator.bluetooth;
+    if (!bt?.requestDevice || !bt?.requestLEScan) {
+      setError(
+        'Web Bluetooth scanning is not available in this browser. '
+        + 'Use Chrome on Android (recent version) or the native attendance app.',
+      );
       return;
     }
 
     setError(null);
+    let tokenFound = false;
+    let stopped = false;
+    let scan = null;
+    let leScanListener = null;
 
-    // requestDevice must run while the click user-gesture is still active.
-    // Awaiting getBluetoothTarget() first expires that gesture and Chrome shows
-    // an empty device picker (see Google Web Bluetooth watch-advertisements sample).
-    setBtPhase('requesting');
-    let device;
+    const stopScan = async () => {
+      if (stopped) return;
+      stopped = true;
+      cancelScanRef.current = null;
+      if (leScanListener) {
+        try { bt.removeEventListener('advertisementreceived', leScanListener); } catch (_) {}
+        leScanListener = null;
+      }
+      if (scan?.active) {
+        try { await scan.stop(); } catch (_) {}
+      }
+      scan = null;
+    };
+    cancelScanRef.current = stopScan;
+
+    setBtPhase('picking');
     try {
-      // Listen only to the native APK broadcaster, which packs the token into a
-      // UOPA-prefixed service UUID (not manufacturer data). The token UUID rotates
-      // every 15 s, so show all devices in the picker and match the prefix in
-      // watchAdvertisements — same approach as the Google Web Bluetooth sample.
-      device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-      });
+      // APK beacons often appear as "Unknown or Unsupported Device" — select the
+      // lecturer phone anyway; token matching uses the UOPA service UUID in software.
+      await bt.requestDevice({ acceptAllDevices: true });
     } catch (err) {
       setBtPhase('idle');
       if (err.name === 'NotFoundError') return;
@@ -219,35 +238,28 @@ export default function LectureEntry() {
 
     setBtPhase('fetching');
     const target = await getBluetoothTarget(courseId);
-    if (target.error) { setError(target.error); setBtPhase('idle'); return; }
+    if (target.error) {
+      setError(target.error);
+      setBtPhase('idle');
+      return;
+    }
 
     setBtPhase('watching');
-    const ac = new AbortController();
-    abortRef.current = ac;
-    cancelScanRef.current = () => ac.abort();
-    let tokenFound = false;
-
-    const timeout = setTimeout(() => {
+    const timeoutId = setTimeout(async () => {
       if (!tokenFound) {
-        ac.abort();
-        cancelScanRef.current = null;
+        await stopScan();
         setBtPhase('idle');
-        setError('No Bluetooth signal received in 30 s. Make sure you are near the room and the broadcaster is running.');
+        setError('No Bluetooth signal received in 30 s. Make sure the lecturer APK is broadcasting and you are near the room.');
       }
     }, 30000);
 
-    const handleAdvertisement = async (evt) => {
-      if (tokenFound) return;
+    leScanListener = async (evt) => {
+      if (tokenFound || stopped) return;
       const token = extractTokenFromUuids(evt.uuids);
       if (!token) return;
-      // Set flag synchronously before any await to prevent duplicate submissions
       tokenFound = true;
-      clearTimeout(timeout);
-      // Stop watching immediately before async work
-      try { device.removeEventListener('advertisementreceived', handleAdvertisement); } catch (_) {}
-      ac.abort();
-      cancelScanRef.current = null;
-
+      clearTimeout(timeoutId);
+      await stopScan();
       setBtPhase('submitting');
       const resp = await submitBluetoothAttendance({ courseId, token });
       if (resp.success || resp.duplicate) {
@@ -259,14 +271,17 @@ export default function LectureEntry() {
       setBtPhase('idle');
     };
 
-    device.addEventListener('advertisementreceived', handleAdvertisement);
     try {
-      await device.watchAdvertisements({ signal: ac.signal });
+      scan = await bt.requestLEScan({
+        acceptAllAdvertisements: true,
+        listenOnlyGrantedDevices: true,
+      });
+      bt.addEventListener('advertisementreceived', leScanListener);
     } catch (err) {
-      clearTimeout(timeout);
-      if (err.name === 'AbortError') return;
+      clearTimeout(timeoutId);
+      await stopScan();
       setBtPhase('idle');
-      setError(err.message || 'Bluetooth watch failed.');
+      setError(err.message || 'Could not watch Bluetooth advertisements.');
     }
   }, [courseId]);
 
