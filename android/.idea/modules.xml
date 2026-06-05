@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/app/android.app.androidTest.iml" filepath="$PROJECT_DIR$/.idea/modules/app/android.app.androidTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/app/android.app.main.iml" filepath="$PROJECT_DIR$/.idea/modules/app/android.app.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/app/android.app.unitTest.iml" filepath="$PROJECT_DIR$/.idea/modules/app/android.app.unitTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/-1403253597/android.capacitor-android.androidTest.iml" filepath="$PROJECT_DIR$/.idea/modules/-1403253597/android.capacitor-android.androidTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/-1403253597/android.capacitor-android.main.iml" filepath="$PROJECT_DIR$/.idea/modules/-1403253597/android.capacitor-android.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/-1403253597/android.capacitor-android.unitTest.iml" filepath="$PROJECT_DIR$/.idea/modules/-1403253597/android.capacitor-android.unitTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/-695271486/android.capacitor-app.androidTest.iml" filepath="$PROJECT_DIR$/.idea/modules/-695271486/android.capacitor-app.androidTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/-695271486/android.capacitor-app.main.iml" filepath="$PROJECT_DIR$/.idea/modules/-695271486/android.capacitor-app.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/-695271486/android.capacitor-app.unitTest.iml" filepath="$PROJECT_DIR$/.idea/modules/-695271486/android.capacitor-app.unitTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/1042624841/android.capacitor-browser.iml" filepath="$PROJECT_DIR$/.idea/modules/1042624841/android.capacitor-browser.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/1042624841/android.capacitor-browser.androidTest.iml" filepath="$PROJECT_DIR$/.idea/modules/1042624841/android.capacitor-browser.androidTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/1042624841/android.capacitor-browser.main.iml" filepath="$PROJECT_DIR$/.idea/modules/1042624841/android.capacitor-browser.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/1042624841/android.capacitor-browser.unitTest.iml" filepath="$PROJECT_DIR$/.idea/modules/1042624841/android.capacitor-browser.unitTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/capacitor-cordova-android-plugins/android.capacitor-cordova-android-plugins.iml" filepath="$PROJECT_DIR$/.idea/modules/capacitor-cordova-android-plugins/android.capacitor-cordova-android-plugins.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/capacitor-cordova-android-plugins/android.capacitor-cordova-android-plugins.androidTest.iml" filepath="$PROJECT_DIR$/.idea/modules/capacitor-cordova-android-plugins/android.capacitor-cordova-android-plugins.androidTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/capacitor-cordova-android-plugins/android.capacitor-cordova-android-plugins.main.iml" filepath="$PROJECT_DIR$/.idea/modules/capacitor-cordova-android-plugins/android.capacitor-cordova-android-plugins.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/capacitor-cordova-android-plugins/android.capacitor-cordova-android-plugins.unitTest.iml" filepath="$PROJECT_DIR$/.idea/modules/capacitor-cordova-android-plugins/android.capacitor-cordova-android-plugins.unitTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/1314963154/android.capgo-capacitor-bluetooth-low-energy.iml" filepath="$PROJECT_DIR$/.idea/modules/1314963154/android.capgo-capacitor-bluetooth-low-energy.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/1314963154/android.capgo-capacitor-bluetooth-low-energy.androidTest.iml" filepath="$PROJECT_DIR$/.idea/modules/1314963154/android.capgo-capacitor-bluetooth-low-energy.androidTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/1314963154/android.capgo-capacitor-bluetooth-low-energy.main.iml" filepath="$PROJECT_DIR$/.idea/modules/1314963154/android.capgo-capacitor-bluetooth-low-energy.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/1314963154/android.capgo-capacitor-bluetooth-low-energy.unitTest.iml" filepath="$PROJECT_DIR$/.idea/modules/1314963154/android.capgo-capacitor-bluetooth-low-energy.unitTest.iml" />
+    </modules>
+  </component>
+</project>

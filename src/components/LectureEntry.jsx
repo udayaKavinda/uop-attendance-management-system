@@ -191,11 +191,10 @@ export default function LectureEntry() {
     }
 
     setError(null);
-    setBtPhase('fetching');
 
-    const target = await getBluetoothTarget(courseId);
-    if (target.error) { setError(target.error); setBtPhase('idle'); return; }
-
+    // requestDevice must run while the click user-gesture is still active.
+    // Awaiting getBluetoothTarget() first expires that gesture and Chrome shows
+    // an empty device picker (see Google Web Bluetooth watch-advertisements sample).
     setBtPhase('requesting');
     let device;
     try {
@@ -217,6 +216,10 @@ export default function LectureEntry() {
       );
       return;
     }
+
+    setBtPhase('fetching');
+    const target = await getBluetoothTarget(courseId);
+    if (target.error) { setError(target.error); setBtPhase('idle'); return; }
 
     setBtPhase('watching');
     const ac = new AbortController();
