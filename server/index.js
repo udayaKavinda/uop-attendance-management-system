@@ -283,12 +283,96 @@ function normalizeLecturerIds(rawLecturerIds) {
 
 const app = express();
 
+const CAPACITOR_RETURN_ORIGINS = ['https://localhost'];
+const NATIVE_OAUTH_RETURN_BASES = ['lk.uop.attendance://oauth'];
+
 const corsOrigins = (process.env.FRONTEND_URL
   || process.env.APP_BASE_URL
   || 'http://localhost:3000')
   .split(',')
   .map((s) => s.trim().replace(/\/$/, ''))
   .filter(Boolean);
+
+for (const origin of CAPACITOR_RETURN_ORIGINS) {
+  if (!corsOrigins.includes(origin)) corsOrigins.push(origin);
+}
+
+function defaultFrontendOrigin() {
+  return (process.env.FRONTEND_URL || process.env.APP_BASE_URL || 'http://localhost:3000')
+    .split(',')[0]
+    .trim()
+    .replace(/\/$/, '');
+}
+
+function allowedOAuthReturnOrigins() {
+  return new Set([...corsOrigins, ...CAPACITOR_RETURN_ORIGINS, ...NATIVE_OAUTH_RETURN_BASES]);
+}
+
+function pickOAuthReturnBase(req) {
+  const allowed = allowedOAuthReturnOrigins();
+  const requested = String(req.query.returnTo || '').trim().replace(/\/$/, '');
+  if (requested && allowed.has(requested)) return requested;
+  return defaultFrontendOrigin();
+}
+
+const oauthExchangeCodes = new Map();
+
+function issueOAuthExchangeCode(userId) {
+  const code = crypto.randomBytes(32).toString('hex');
+  oauthExchangeCodes.set(code, {
+    userId: String(userId),
+    expires: Date.now() + 2 * 60 * 1000,
+  });
+  return code;
+}
+
+function consumeOAuthExchangeCode(code) {
+  const entry = oauthExchangeCodes.get(code);
+  if (!entry) return null;
+  oauthExchangeCodes.delete(code);
+  if (entry.expires < Date.now()) return null;
+  return entry.userId;
+}
+
+const oauthExchangeSweep = setInterval(() => {
+  const now = Date.now();
+  for (const [code, entry] of oauthExchangeCodes) {
+    if (entry.expires < now) oauthExchangeCodes.delete(code);
+  }
+}, 5 * 60 * 1000);
+if (typeof oauthExchangeSweep.unref === 'function') oauthExchangeSweep.unref();
+
+function isCustomSchemeOAuthReturn(returnBase) {
+  return NATIVE_OAUTH_RETURN_BASES.includes(returnBase)
+    || (returnBase.includes('://') && !returnBase.startsWith('http://') && !returnBase.startsWith('https://'));
+}
+
+function publicAppOrigin() {
+  return (process.env.APP_BASE_URL || process.env.FRONTEND_URL || '')
+    .split(',')[0]
+    .trim()
+    .replace(/\/$/, '');
+}
+
+function redirectAfterOAuth(res, returnBase, relativePath, userId) {
+  const base = String(returnBase || '').replace(/\/$/, '');
+  let target = `${base}${relativePath}`;
+
+  if (isCustomSchemeOAuthReturn(base) && userId) {
+    const code = issueOAuthExchangeCode(userId);
+    const join = relativePath.includes('?') ? '&' : '?';
+    target = `${base}${relativePath}${join}code=${encodeURIComponent(code)}`;
+  }
+
+  if (isCustomSchemeOAuthReturn(base)) {
+    const appOrigin = publicAppOrigin();
+    if (appOrigin) {
+      return res.redirect(`${appOrigin}/auth/native-return?target=${encodeURIComponent(target)}`);
+    }
+  }
+
+  return res.redirect(target);
+}
 
 // Content Security Policy: production-only enforcement (CRA dev uses `eval` for
 // source maps, which CSP would block). Allow-list is built from the actual
@@ -514,17 +598,57 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
     }
   }));
 
-  app.get('/auth/google', oauthLimiter, passport.authenticate('google', { scope: ['email'] }));
-  const frontendUrl = process.env.FRONTEND_URL || process.env.APP_BASE_URL || 'http://localhost:3000';
-  app.get(
-    '/auth/google/callback',
-    oauthLimiter,
-    passport.authenticate('google', { failureRedirect: `${frontendUrl}/?error=auth` }),
-    (req, res) => {
-      const base = String(frontendUrl || '').replace(/\/$/, '');
-      res.redirect(`${base}/login/success`);
+  const frontendUrl = defaultFrontendOrigin();
+
+  app.get('/auth/google', oauthLimiter, (req, res, next) => {
+    req.session.oauthReturnBase = pickOAuthReturnBase(req);
+    req.session.save((err) => {
+      if (err) return next(err);
+      passport.authenticate('google', { scope: ['email'] })(req, res, next);
+    });
+  });
+
+  app.get('/auth/native-return', oauthLimiter, (req, res) => {
+    const target = String(req.query.target || '');
+    if (!target.startsWith('lk.uop.attendance://oauth')) {
+      return res.status(400).send('Invalid return target');
     }
-  );
+    const safeHref = target
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Return to app</title></head>
+<body style="font-family:system-ui,sans-serif;text-align:center;padding:2rem">
+<p>Returning to UOP Attendance…</p>
+<p><a id="open" href="${safeHref}">Tap here if you are not redirected</a></p>
+<script>
+(function () {
+  var url = ${JSON.stringify(target)};
+  window.location.replace(url);
+  setTimeout(function () { document.getElementById('open').click(); }, 300);
+})();
+</script>
+</body></html>`);
+  });
+
+  app.get('/auth/google/callback', oauthLimiter, (req, res, next) => {
+    const returnBase = String(req.session.oauthReturnBase || frontendUrl).replace(/\/$/, '');
+    passport.authenticate('google', (err, user) => {
+      if (err || !user) {
+        return redirectAfterOAuth(res, returnBase, '/?error=auth', null);
+      }
+      req.logIn(user, (loginErr) => {
+        if (loginErr) {
+          return redirectAfterOAuth(res, returnBase, '/?error=auth', null);
+        }
+        delete req.session.oauthReturnBase;
+        return redirectAfterOAuth(res, returnBase, '/login/success', user._id);
+      });
+    })(req, res, next);
+  });
 }
 
 if (require.main === module) {
@@ -554,6 +678,23 @@ if (require.main === module) {
 app.get('/api/healthz', async (req, res) => {
   const mongoState = mongoose.connection?.readyState === 1 ? 'ok' : 'down';
   res.status(mongoState === 'ok' ? 200 : 503).json({ status: mongoState });
+});
+
+app.post('/api/auth/exchange-code', oauthLimiter, async (req, res) => {
+  try {
+    const code = String(req.body?.code || '').trim();
+    if (!code) return res.status(400).json({ error: 'Missing code' });
+    const userId = consumeOAuthExchangeCode(code);
+    if (!userId) return res.status(401).json({ error: 'Invalid or expired code' });
+    const person = await Person.findById(userId);
+    if (!person) return res.status(401).json({ error: 'User not found' });
+    req.logIn(person, (err) => {
+      if (err) return res.status(500).json({ error: 'Session error' });
+      return res.json({ success: true });
+    });
+  } catch (err) {
+    return respondError(res, err);
+  }
 });
 
 app.get('/api/me', async (req, res) => {
@@ -711,7 +852,7 @@ app.delete('/api/admin/courses/:courseId', async (req, res) => {
     await Attendance.deleteMany({ course: course._id });
     await LectureSession.deleteMany({ course: course._id });
     await Course.deleteOne({ _id: course._id });
-    // Remove any rotating BLE tokens left behind by the deleted sessions.
+    // Drop any rotating BLE tokens left behind by the deleted sessions.
     await Promise.all(sessionIds.map((id) => bluetoothCode.removeToken(String(id))));
     return res.json({ success: true });
   } catch (err) {
@@ -900,8 +1041,8 @@ app.get('/api/admin/sessions', async (req, res) => {
   }
 });
 
-// Sessions that are live right now (active + within their weekly time window).
-// Drives the blinking "Live" badge and pause/resume control in the staff console.
+// Sessions that are live right now (active + inside their weekly time window).
+// Drives the blinking "Live" badge and the pause/resume control in the staff console.
 app.get('/api/admin/sessions/running', async (req, res) => {
   try {
     const auth = await sessionStaffAuth(req);
@@ -915,22 +1056,20 @@ app.get('/api/admin/sessions/running', async (req, res) => {
       active: true,
       lectureDay: day,
       ...scope,
-    }).populate('course', 'code active');
-    const items = [];
-    sessions.forEach((s) => {
-      if (!s.course?.active) return;
-      const start = toMinutes(s.startTime);
-      const end = toMinutes(s.endTime);
-      if (start === null || end === null) return;
-      if (currentMinutes < start || currentMinutes > end) return;
-      items.push({
+    }).populate('course', 'active');
+    const items = sessions
+      .filter((s) => {
+        if (!s.course?.active) return false;
+        const start = toMinutes(s.startTime);
+        const end = toMinutes(s.endTime);
+        return start !== null && end !== null && currentMinutes >= start && currentMinutes <= end;
+      })
+      .map((s) => ({
         sessionId: String(s._id),
         attendancePaused: Boolean(s.attendancePaused),
         bluetoothEnabled: Boolean(s.bluetoothEnabled),
         deviceName: s.bluetoothDeviceName || null,
-        secondsRemaining: Math.max(0, (end - currentMinutes) * 60 - now.getSeconds()),
-      });
-    });
+      }));
     return res.json({ items });
   } catch (err) {
     return respondError(res, err);
