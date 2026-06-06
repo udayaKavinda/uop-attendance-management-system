@@ -545,7 +545,7 @@ export default function AdminDashboard() {
       await BluetoothLowEnergy.startAdvertising({
         name: data.deviceName,
         services: [tokenToServiceUuid(data.token)],
-        includeName: true,
+        includeName:false,
       });
       lastAdvertisedTokenRef.current[sid] = data.token;
     } catch (err) {
@@ -632,7 +632,7 @@ export default function AdminDashboard() {
       await BluetoothLowEnergy.startAdvertising({
         name: state.deviceName,
         services: [tokenToServiceUuid(state.token)],
-        includeName: true,
+        includeName: false,
       });
       adHandlesMap.current[sid] = true;
       lastAdvertisedTokenRef.current[sid] = state.token;
