@@ -18,7 +18,6 @@ import { extractTokenFromUuids } from '../utils/bleToken';
 const BT_PHASE_LABEL = {
   fetching: 'Looking up session…',
   requesting: 'Starting Bluetooth scan…',
-  picking: 'Select a device in the browser dialog…',
   watching: 'Scanning for classroom signal…',
   submitting: 'Verifying attendance…',
 };
@@ -184,17 +183,18 @@ export default function LectureEntry() {
   };
 
   
-  // ── Web Bluetooth path (Chrome on Android) — Path 3 only ────────────────────
-  // 1) requestDevice picker (must run on click — preserves user gesture)
-  // 2) requestLEScan({ listenOnlyGrantedDevices: true }) — works when
-  //    watchAdvertisements() is missing on Android Chrome
-  // Matches UOPA-prefixed service UUIDs from the native APK broadcaster only.
+  // ── Web Bluetooth path (Chrome on Android) ───────────────────────────────────
+  // Background scan via requestLEScan — same idea as the native APK central scan:
+  // no device picker; match UOPA-prefixed service UUIDs from capacitor-bluetooth.
+  // requestLEScan must be the first await (preserves the tap user-gesture).
   const startBtScanWeb = useCallback(async () => {
     const bt = navigator.bluetooth;
-    if (!bt?.requestDevice || !bt?.requestLEScan) {
+    if (!bt?.requestLEScan) {
       setError(
         'Web Bluetooth scanning is not available in this browser. '
-        + 'Use Chrome on Android (recent version) or the native attendance app.',
+        + 'Use Chrome on Android (recent version), enable '
+        + 'chrome://flags/#enable-experimental-web-platform-features, '
+        + 'or use the native attendance app.',
       );
       return;
     }
@@ -220,18 +220,16 @@ export default function LectureEntry() {
     };
     cancelScanRef.current = stopScan;
 
-    setBtPhase('picking');
+    setBtPhase('requesting');
     try {
-      // APK beacons often appear as "Unknown or Unsupported Device" — select the
-      // lecturer phone anyway; token matching uses the UOPA service UUID in software.
-      await bt.requestDevice({ acceptAllDevices: true });
+      scan = await bt.requestLEScan({ acceptAllAdvertisements: true });
     } catch (err) {
       setBtPhase('idle');
       if (err.name === 'NotFoundError') return;
       setError(
         err.name === 'SecurityError'
           ? 'Bluetooth permission denied. Enable Bluetooth and try again.'
-          : err.message || 'Could not open Bluetooth scanner.',
+          : err.message || 'Could not start Bluetooth scan.',
       );
       return;
     }
@@ -239,6 +237,7 @@ export default function LectureEntry() {
     setBtPhase('fetching');
     const target = await getBluetoothTarget(courseId);
     if (target.error) {
+      await stopScan();
       setError(target.error);
       setBtPhase('idle');
       return;
@@ -271,18 +270,7 @@ export default function LectureEntry() {
       setBtPhase('idle');
     };
 
-    try {
-      scan = await bt.requestLEScan({
-        acceptAllAdvertisements: true,
-        listenOnlyGrantedDevices: true,
-      });
-      bt.addEventListener('advertisementreceived', leScanListener);
-    } catch (err) {
-      clearTimeout(timeoutId);
-      await stopScan();
-      setBtPhase('idle');
-      setError(err.message || 'Could not watch Bluetooth advertisements.');
-    }
+    bt.addEventListener('advertisementreceived', leScanListener);
   }, [courseId]);
 
   // ── Entry point: pick the right path ─────────────────────────────────────────
