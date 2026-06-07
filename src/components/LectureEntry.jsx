@@ -296,8 +296,15 @@ export default function LectureEntry() {
           <>
             <h2 className="card-title">Lecture attendance</h2>
             <p className="card-subtitle">
-              Select your running course, then scan for the classroom Bluetooth signal.
-            </p>
+  To use Bluetooth Attendance in Chrome on Android, enable the Experimental Web Platform Features flag at{" "}
+  <a
+    href="chrome://flags/#enable-experimental-web-platform-features"
+    target="_blank"
+    rel="noopener noreferrer"
+  >
+    chrome://flags/#enable-experimental-web-platform-features
+  </a>.
+</p>
           </>
         )}
 
