@@ -6,6 +6,7 @@ on:
       - main
       - feature/gps-pin-rotation
       - feature/bluetooth
+      - Android-app+refined-sever
   workflow_dispatch:
 
 concurrency:
