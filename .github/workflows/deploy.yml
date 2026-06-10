@@ -6,6 +6,7 @@ on:
       - main
       - feature/gps-pin-rotation
       - feature/bluetooth
+      - Android-app+refined-sever
   workflow_dispatch:
 
 concurrency:
@@ -40,7 +41,7 @@ jobs:
       - name: Server syntax check
         run: |
           cd "$APP_DIR"
-          /usr/bin/node --check server/index.js
+          /usr/bin/node --check server/src/sever.js
 
       - name: Install dependencies
         run: |
