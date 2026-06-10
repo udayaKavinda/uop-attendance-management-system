@@ -10,9 +10,14 @@ const lectureSessionSchema = new mongoose.Schema({
   startTime: { type: String, required: true }, // HH:mm
   endTime: { type: String, required: true }, // HH:mm
   recurring: { type: Boolean, default: true },
-  /** When true during a live window, students cannot record attendance (session stays active). */
-  attendancePaused: { type: Boolean, default: false },
-  bluetoothEnabled: { type: Boolean, default: false },
+  /**
+   * True while a lecturer device is actively broadcasting the rotating BLE token.
+   * Single switch replacing the old bluetoothEnabled + attendancePaused pair:
+   * attendance is open iff broadcasting is true (and the heartbeat is fresh).
+   */
+  broadcasting: { type: Boolean, default: false },
+  /** Heartbeat: stamped on every broadcast-token poll (~5s); lets the server auto-close dead channels. */
+  lastBroadcastSeenAt: { type: Date, default: null },
   bluetoothDeviceName: { type: String, default: null },
   active: { type: Boolean, default: true, index: true },
   deleted: { type: Boolean, default: false, index: true },

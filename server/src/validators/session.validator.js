@@ -24,6 +24,15 @@ function validateSessionCreateBody(body) {
   };
 }
 
+/** Body for PATCH /:sessionId/broadcast — strictly `{ on: boolean }`. */
+function validateBroadcastBody(body) {
+  const on = body?.on;
+  if (typeof on !== 'boolean') {
+    return { ok: false, status: 400, error: 'on must be a boolean' };
+  }
+  return { ok: true, on };
+}
+
 async function checkSessionOverlap(LectureSession, courseId, day, startTime, endTime) {
   const sameDaySessions = await LectureSession.find({
     course: courseId,
@@ -39,6 +48,7 @@ async function checkSessionOverlap(LectureSession, courseId, day, startTime, end
 
 module.exports = {
   validateSessionCreateBody,
+  validateBroadcastBody,
   checkSessionOverlap,
   ALLOWED_DAYS,
 };

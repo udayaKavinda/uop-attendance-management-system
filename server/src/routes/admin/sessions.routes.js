@@ -15,10 +15,8 @@ router.get('/running', requireStaff, asyncHandler(sessionsController.listRunning
 router.delete('/:sessionId', requireStaff, sessionGuard, asyncHandler(sessionsController.remove));
 router.patch('/:sessionId/activate', requireStaff, sessionWithCourse, asyncHandler(sessionsController.activate));
 router.patch('/:sessionId/deactivate', requireStaff, sessionGuard, asyncHandler(sessionsController.deactivate));
-router.patch('/:sessionId/bluetooth/start', requireStaff, sessionGuard, asyncHandler(sessionsController.startBluetooth));
-router.patch('/:sessionId/bluetooth/stop', requireStaff, sessionGuard, asyncHandler(sessionsController.stopBluetooth));
-router.get('/:sessionId/bluetooth-broadcast', requireStaff, sessionGuard, asyncHandler(sessionsController.bluetoothBroadcast));
-router.patch('/:sessionId/attendance-paused', requireStaff, sessionGuard, asyncHandler(sessionsController.setAttendancePaused));
+router.patch('/:sessionId/broadcast', requireStaff, sessionGuard, asyncHandler(sessionsController.setBroadcast));
+router.get('/:sessionId/broadcast', requireStaff, sessionGuard, asyncHandler(sessionsController.getBroadcast));
 router.get('/:sessionId/attendance', requireStaff, sessionGuard, asyncHandler(sessionsController.sessionAttendance));
 
 module.exports = router;

@@ -2,6 +2,7 @@ const authService = require('../../services/auth.service');
 const lectureSessionService = require('../../services/lectureSession.service');
 const attendanceService = require('../../services/attendance.service');
 const sessionService = require('../../services/session.service');
+const { validateBroadcastBody } = require('../../validators/session.validator');
 
 async function remove(req, res) {
   await lectureSessionService.softDeleteSession(req.sessionItem);
@@ -30,26 +31,17 @@ async function listRunning(req, res) {
   return res.json({ items });
 }
 
-async function startBluetooth(req, res) {
-  const result = await lectureSessionService.startBluetooth(req.sessionItem);
+async function setBroadcast(req, res) {
+  const validated = validateBroadcastBody(req.body);
+  if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
+  const result = await lectureSessionService.setBroadcasting(req.sessionItem, validated.on);
   return res.json({ success: true, session: result.session });
 }
 
-async function stopBluetooth(req, res) {
-  const result = await lectureSessionService.stopBluetooth(req.sessionItem);
-  return res.json({ success: true, session: result.session });
-}
-
-async function bluetoothBroadcast(req, res) {
-  const result = await lectureSessionService.getBluetoothBroadcast(req.sessionItem);
+async function getBroadcast(req, res) {
+  const result = await lectureSessionService.getBroadcast(req.sessionItem);
   if (!result.ok) return res.status(result.status).json({ error: result.error });
   return res.json(result.data);
-}
-
-async function setAttendancePaused(req, res) {
-  const paused = Boolean(req.body?.paused);
-  const result = await lectureSessionService.setAttendancePaused(req.sessionItem, paused);
-  return res.json({ success: true, session: result.session, attendancePaused: result.attendancePaused });
 }
 
 async function sessionAttendance(req, res) {
@@ -63,9 +55,7 @@ module.exports = {
   deactivate,
   list,
   listRunning,
-  startBluetooth,
-  stopBluetooth,
-  bluetoothBroadcast,
-  setAttendancePaused,
+  setBroadcast,
+  getBroadcast,
   sessionAttendance,
 };
