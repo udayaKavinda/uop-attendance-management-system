@@ -41,7 +41,7 @@ jobs:
       - name: Server syntax check
         run: |
           cd "$APP_DIR"
-          /usr/bin/node --check server/src/sever.js
+          /usr/bin/node --check server/src/server.js
 
       - name: Install dependencies
         run: |
