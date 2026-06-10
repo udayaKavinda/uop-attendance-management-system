@@ -6,7 +6,7 @@ require('./config/env');
 const app = require('./app');
 const { port } = require('./config/env');
 const { connectDatabase, syncAllIndexes, closeDatabase } = require('./config/database');
-const { ensureBootstrapAdmin } = require('./services/bootstrap.service');
+const { ensureBootstrapAdmin, migrateLegacyBroadcastFields } = require('./services/bootstrap.service');
 const { startNonRecurringExpiryJob } = require('./services/sessionExpiry.service');
 
 async function start() {
@@ -16,6 +16,11 @@ async function start() {
     await ensureBootstrapAdmin();
   } catch (e) {
     console.warn('Bootstrap admin:', e.message);
+  }
+  try {
+    await migrateLegacyBroadcastFields();
+  } catch (e) {
+    console.warn('Broadcast field migration:', e.message);
   }
   startNonRecurringExpiryJob();
 

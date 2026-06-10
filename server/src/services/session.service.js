@@ -1,7 +1,7 @@
 const Course = require('../models/Course');
 const LectureSession = require('../models/LectureSession');
 const { DAY_INDEX, toMinutes } = require('../utils/schedule');
-const { SESSION_RESOLVE_CACHE_TTL_MS } = require('../utils/constants');
+const { SESSION_RESOLVE_CACHE_TTL_MS, BROADCAST_STALE_MS } = require('../utils/constants');
 
 // 5 s cache cuts repeated Course + LectureSession reads under 100-student polling load.
 const _sessionResolveCache = new Map();
@@ -39,6 +39,17 @@ function isWithinScheduleWindow(sessionItem, now = new Date()) {
 
 function checkScheduleWindow(sessionConfig) {
   return evaluateScheduleWindow(sessionConfig);
+}
+
+/**
+ * True iff the session's broadcast channel is open AND its heartbeat is fresh.
+ * Read-time staleness check: even before the sweep job flips `broadcasting`
+ * off, a dead broadcaster stops admitting attendance within BROADCAST_STALE_MS.
+ */
+function isBroadcastLive(sessionItem, now = Date.now()) {
+  if (!sessionItem?.broadcasting) return false;
+  const seenAt = sessionItem.lastBroadcastSeenAt ? new Date(sessionItem.lastBroadcastSeenAt).getTime() : 0;
+  return now - seenAt <= BROADCAST_STALE_MS;
 }
 
 /** Drops the cached active-session resolution for a course so state changes apply at once. */
@@ -113,8 +124,9 @@ async function getRunningSessionsForStaff(scope, now = new Date()) {
     .filter((s) => s.course?.active && isWithinScheduleWindow(s, now))
     .map((s) => ({
       sessionId: String(s._id),
-      attendancePaused: Boolean(s.attendancePaused),
-      bluetoothEnabled: Boolean(s.bluetoothEnabled),
+      // Raw flag (not staleness-checked): the dashboard uses it to reconcile —
+      // auto-resume the broadcast or turn it off on the server.
+      broadcasting: Boolean(s.broadcasting),
       deviceName: s.bluetoothDeviceName || null,
     }));
 }
@@ -122,6 +134,7 @@ async function getRunningSessionsForStaff(scope, now = new Date()) {
 module.exports = {
   isWithinScheduleWindow,
   checkScheduleWindow,
+  isBroadcastLive,
   invalidateActiveSessionCache,
   resolveActiveSessionForCourse,
   getRunningCoursesForStudent,

@@ -41,6 +41,7 @@ const Course = require('../models/Course');
 const LectureSession = require('../models/LectureSession');
 const Attendance = require('../models/Attendance');
 const bluetoothCode = require('../services/bluetoothCode.service');
+const { BROADCAST_STALE_MS } = require('../utils/constants');
 
 const app = require('../app');
 
@@ -50,11 +51,6 @@ const DAY_NAMES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
 function todayDay() {
   return DAY_NAMES[new Date().getDay()];
-}
-
-function todayYmd() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function makeId() {
@@ -72,9 +68,9 @@ function makeSession(overrides = {}) {
     recurring: true,
     active: true,
     deleted: false,
-    bluetoothEnabled: true,
+    broadcasting: true,
+    lastBroadcastSeenAt: new Date(),
     bluetoothDeviceName: 'UOP-TESTDEV1',
-    attendancePaused: false,
     save: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -119,11 +115,14 @@ beforeEach(() => {
   Object.keys(_bleTokenStore).forEach(k => delete _bleTokenStore[k]);
 });
 
-// ─── bluetooth/start and bluetooth/stop ──────────────────────────────────────
+// ─── PATCH /broadcast (on/off toggle) ────────────────────────────────────────
 
-describe('PATCH /api/admin/sessions/:id/bluetooth/start', () => {
+describe('PATCH /api/admin/sessions/:id/broadcast', () => {
   test('401 when not authenticated', async () => {
-    const res = await request(app).patch(`/api/admin/sessions/${makeId()}/bluetooth/start`).set(csrfHeader);
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${makeId()}/broadcast`)
+      .set(csrfHeader)
+      .send({ on: true });
     expect(res.status).toBe(401);
   });
 
@@ -132,8 +131,9 @@ describe('PATCH /api/admin/sessions/:id/bluetooth/start', () => {
     Person.findById.mockResolvedValue(student);
 
     const res = await request(app)
-      .patch(`/api/admin/sessions/${makeId()}/bluetooth/start`)
-      .set(headers(student));
+      .patch(`/api/admin/sessions/${makeId()}/broadcast`)
+      .set(headers(student))
+      .send({ on: true });
     expect(res.status).toBe(403);
     expect(res.body.error).toMatch(/staff/i);
   });
@@ -144,8 +144,9 @@ describe('PATCH /api/admin/sessions/:id/bluetooth/start', () => {
     LectureSession.findOne.mockResolvedValue(null);
 
     const res = await request(app)
-      .patch(`/api/admin/sessions/${makeId()}/bluetooth/start`)
-      .set(headers(admin));
+      .patch(`/api/admin/sessions/${makeId()}/broadcast`)
+      .set(headers(admin))
+      .send({ on: true });
     expect(res.status).toBe(404);
   });
 
@@ -159,17 +160,39 @@ describe('PATCH /api/admin/sessions/:id/bluetooth/start', () => {
     Course.findById.mockResolvedValue(course);
 
     const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/bluetooth/start`)
-      .set(headers(lecturer));
+      .patch(`/api/admin/sessions/${session._id}/broadcast`)
+      .set(headers(lecturer))
+      .send({ on: true });
     expect(res.status).toBe(403);
   });
 
-  test('200 — lecturer with course access enables BT and gets a token seeded', async () => {
+  test('400 when `on` is missing or not a boolean', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const course = makeCourse();
+    const session = makeSession({ course: course._id });
+
+    Person.findById.mockResolvedValue(admin);
+    LectureSession.findOne.mockResolvedValue(session);
+    Course.findById.mockResolvedValue(course);
+
+    for (const body of [{}, { on: 'yes' }, { on: 1 }]) {
+      const res = await request(app)
+        .patch(`/api/admin/sessions/${session._id}/broadcast`)
+        .set(headers(admin))
+        .send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/boolean/i);
+    }
+    expect(session.save).not.toHaveBeenCalled();
+  });
+
+  test('200 — {on:true} turns broadcast on, seeds device name + token, stamps heartbeat', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const course = makeCourse({ lecturers: [String(lecturer._id)] });
     const session = makeSession({
       course: course._id,
-      bluetoothEnabled: false,
+      broadcasting: false,
+      lastBroadcastSeenAt: null,
       bluetoothDeviceName: '',
     });
 
@@ -178,13 +201,15 @@ describe('PATCH /api/admin/sessions/:id/bluetooth/start', () => {
     Course.findById.mockResolvedValue(course);
 
     const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/bluetooth/start`)
-      .set(headers(lecturer));
+      .patch(`/api/admin/sessions/${session._id}/broadcast`)
+      .set(headers(lecturer))
+      .send({ on: true });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(session.save).toHaveBeenCalled();
-    expect(session.bluetoothEnabled).toBe(true);
+    expect(session.broadcasting).toBe(true);
+    expect(session.lastBroadcastSeenAt).toBeInstanceOf(Date);
     expect(session.bluetoothDeviceName).toMatch(/^UOP-[0-9A-F]{8}$/);
 
     // Token must be seeded in the in-memory store
@@ -194,33 +219,7 @@ describe('PATCH /api/admin/sessions/:id/bluetooth/start', () => {
     await bluetoothCode.removeToken(String(session._id));
   });
 
-  test('200 — admin can enable BT for any session without course ownership', async () => {
-    const admin = makePerson({ role: 'admin' });
-    const course = makeCourse({ lecturers: [] });
-    const session = makeSession({ course: course._id, bluetoothEnabled: false });
-
-    Person.findById.mockResolvedValue(admin);
-    LectureSession.findOne.mockResolvedValue(session);
-    Course.findById.mockResolvedValue(course);
-
-    const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/bluetooth/start`)
-      .set(headers(admin));
-
-    expect(res.status).toBe(200);
-    expect(session.bluetoothEnabled).toBe(true);
-
-    await bluetoothCode.removeToken(String(session._id));
-  });
-});
-
-describe('PATCH /api/admin/sessions/:id/bluetooth/stop', () => {
-  test('401 when not authenticated', async () => {
-    const res = await request(app).patch(`/api/admin/sessions/${makeId()}/bluetooth/stop`).set(csrfHeader);
-    expect(res.status).toBe(401);
-  });
-
-  test('200 — lecturer with course access disables BT and removes token', async () => {
+  test('200 — {on:false} turns broadcast off and removes the token', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const course = makeCourse({ lecturers: [String(lecturer._id)] });
     const session = makeSession({ course: course._id });
@@ -233,62 +232,68 @@ describe('PATCH /api/admin/sessions/:id/bluetooth/stop', () => {
     Course.findById.mockResolvedValue(course);
 
     const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/bluetooth/stop`)
-      .set(headers(lecturer));
+      .patch(`/api/admin/sessions/${session._id}/broadcast`)
+      .set(headers(lecturer))
+      .send({ on: false });
 
     expect(res.status).toBe(200);
-    expect(session.bluetoothEnabled).toBe(false);
+    expect(session.broadcasting).toBe(false);
+    expect(session.lastBroadcastSeenAt).toBeNull();
     // Token removed
     expect(await bluetoothCode.verifyToken(String(session._id), 'anytoken')).toBe(false);
   });
 
-  test('200 — admin can stop BT for any session', async () => {
+  test('200 — admin can toggle broadcast for any session without course ownership', async () => {
     const admin = makePerson({ role: 'admin' });
     const course = makeCourse({ lecturers: [] });
-    const session = makeSession({ course: course._id });
+    const session = makeSession({ course: course._id, broadcasting: false });
 
     Person.findById.mockResolvedValue(admin);
     LectureSession.findOne.mockResolvedValue(session);
     Course.findById.mockResolvedValue(course);
 
     const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/bluetooth/stop`)
-      .set(headers(admin));
+      .patch(`/api/admin/sessions/${session._id}/broadcast`)
+      .set(headers(admin))
+      .send({ on: true });
 
     expect(res.status).toBe(200);
-    expect(session.bluetoothEnabled).toBe(false);
+    expect(session.broadcasting).toBe(true);
+
+    await bluetoothCode.removeToken(String(session._id));
   });
 });
 
-// ─── bluetooth-broadcast ─────────────────────────────────────────────────────
+// ─── GET /broadcast (token poll + heartbeat) ─────────────────────────────────
 
-describe('GET /api/admin/sessions/:id/bluetooth-broadcast', () => {
+describe('GET /api/admin/sessions/:id/broadcast', () => {
   test('401 when not authenticated', async () => {
-    const res = await request(app).get(`/api/admin/sessions/${makeId()}/bluetooth-broadcast`);
+    const res = await request(app).get(`/api/admin/sessions/${makeId()}/broadcast`);
     expect(res.status).toBe(401);
   });
 
-  test('400 when BT not enabled', async () => {
+  test('400 when broadcast is off', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const course = makeCourse({ lecturers: [String(lecturer._id)] });
-    const session = makeSession({ course: course._id, bluetoothEnabled: false });
+    const session = makeSession({ course: course._id, broadcasting: false });
 
     Person.findById.mockResolvedValue(lecturer);
     LectureSession.findOne.mockResolvedValue(session);
     Course.findById.mockResolvedValue(course);
 
     const res = await request(app)
-      .get(`/api/admin/sessions/${session._id}/bluetooth-broadcast`)
+      .get(`/api/admin/sessions/${session._id}/broadcast`)
       .set(headers(lecturer));
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/not enabled/i);
+    expect(res.body.error).toMatch(/not on/i);
   });
 
-  test('200 — returns deviceName, token, rotatesIn, rotationMs for lecturer', async () => {
+  test('200 — returns deviceName, token, rotatesIn, rotationMs and stamps heartbeat', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const course = makeCourse({ lecturers: [String(lecturer._id)] });
-    const session = makeSession({ course: course._id });
+    const staleStamp = new Date(Date.now() - 60_000);
+    const session = makeSession({ course: course._id, lastBroadcastSeenAt: staleStamp });
 
     await bluetoothCode.getToken(String(session._id)); // seed
 
@@ -297,14 +302,19 @@ describe('GET /api/admin/sessions/:id/bluetooth-broadcast', () => {
     Course.findById.mockResolvedValue(course);
 
     const res = await request(app)
-      .get(`/api/admin/sessions/${session._id}/bluetooth-broadcast`)
+      .get(`/api/admin/sessions/${session._id}/broadcast`)
       .set(headers(lecturer));
 
     expect(res.status).toBe(200);
+    expect(res.body.broadcasting).toBe(true);
     expect(res.body.deviceName).toBe('UOP-TESTDEV1');
     expect(res.body.token).toMatch(/^[0-9a-f]{16}$/);
     expect(typeof res.body.rotatesIn).toBe('number');
     expect(res.body.rotationMs).toBe(15000);
+
+    // The poll doubles as the heartbeat: the stale stamp must be refreshed.
+    expect(session.save).toHaveBeenCalled();
+    expect(session.lastBroadcastSeenAt.getTime()).toBeGreaterThan(staleStamp.getTime());
 
     await bluetoothCode.removeToken(String(session._id));
   });
@@ -321,7 +331,7 @@ describe('GET /api/admin/sessions/:id/bluetooth-broadcast', () => {
     Course.findById.mockResolvedValue(course);
 
     const res = await request(app)
-      .get(`/api/admin/sessions/${session._id}/bluetooth-broadcast`)
+      .get(`/api/admin/sessions/${session._id}/broadcast`)
       .set(headers(admin));
 
     expect(res.status).toBe(200);
@@ -375,10 +385,10 @@ describe('GET /api/bluetooth-target', () => {
     expect(res.body.error).toMatch(/no active lecture session/i);
   });
 
-  test('400 when BT is not enabled on the session', async () => {
+  test('400 when broadcast is off', async () => {
     const student = makePerson({ role: 'student' });
     const course = makeCourse();
-    const session = makeSession({ course: course._id, bluetoothEnabled: false });
+    const session = makeSession({ course: course._id, broadcasting: false });
 
     Person.findById.mockResolvedValue(student);
     Course.findById.mockResolvedValue(course);
@@ -388,10 +398,30 @@ describe('GET /api/bluetooth-target', () => {
       .get(`/api/bluetooth-target?courseId=${course._id}`)
       .set(headers(student));
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/not enabled/i);
+    expect(res.body.error).toMatch(/not open/i);
   });
 
-  test('200 — returns only deviceName when BT is enabled', async () => {
+  test('400 when broadcast heartbeat is stale (dead broadcaster)', async () => {
+    const student = makePerson({ role: 'student' });
+    const course = makeCourse();
+    const session = makeSession({
+      course: course._id,
+      broadcasting: true,
+      lastBroadcastSeenAt: new Date(Date.now() - BROADCAST_STALE_MS - 1_000),
+    });
+
+    Person.findById.mockResolvedValue(student);
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const res = await request(app)
+      .get(`/api/bluetooth-target?courseId=${course._id}`)
+      .set(headers(student));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/not open/i);
+  });
+
+  test('200 — returns only deviceName when broadcast is live', async () => {
     const student = makePerson({ role: 'student' });
     const course = makeCourse();
     const session = makeSession({ course: course._id });
@@ -468,10 +498,10 @@ describe('POST /api/bluetooth-attendance', () => {
     expect(res.status).toBe(400);
   });
 
-  test('400 when BT not enabled on session', async () => {
+  test('400 when broadcast is off', async () => {
     const student = makePerson({ role: 'student' });
     const course = makeCourse();
-    const session = makeSession({ course: course._id, bluetoothEnabled: false });
+    const session = makeSession({ course: course._id, broadcasting: false });
 
     Person.findById.mockResolvedValue(student);
     Course.findById.mockResolvedValue(course);
@@ -482,13 +512,17 @@ describe('POST /api/bluetooth-attendance', () => {
       .set(headers(student))
       .send({ courseId: String(course._id), token: 'aabbccddeeff0011' });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/not enabled/i);
+    expect(res.body.error).toMatch(/not open/i);
   });
 
-  test('400 when attendance is paused', async () => {
+  test('400 when broadcast heartbeat is stale (dead broadcaster)', async () => {
     const student = makePerson({ role: 'student' });
     const course = makeCourse();
-    const session = makeSession({ course: course._id, attendancePaused: true });
+    const session = makeSession({
+      course: course._id,
+      broadcasting: true,
+      lastBroadcastSeenAt: new Date(Date.now() - BROADCAST_STALE_MS - 1_000),
+    });
 
     Person.findById.mockResolvedValue(student);
     Course.findById.mockResolvedValue(course);
@@ -501,7 +535,7 @@ describe('POST /api/bluetooth-attendance', () => {
       .set(headers(student))
       .send({ courseId: String(course._id), token: 'aabbccddeeff0011' });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/paused/i);
+    expect(res.body.error).toMatch(/not open/i);
 
     await bluetoothCode.removeToken(String(session._id));
   });

@@ -6,7 +6,7 @@ const {
   studentDisplayIdFromEmail,
   formatAttendanceTableColumnLabel,
 } = require('../utils/attendanceLabels');
-const { resolveActiveSessionForCourse, checkScheduleWindow } = require('./session.service');
+const { resolveActiveSessionForCourse, checkScheduleWindow, isBroadcastLive } = require('./session.service');
 const bluetoothCode = require('./bluetoothCode.service');
 
 async function getAttendanceStatus(studentPk, courseId) {
@@ -34,12 +34,8 @@ async function getAttendanceStatus(studentPk, courseId) {
 async function getBluetoothTarget(courseId) {
   const resolved = await resolveActiveSessionForCourse(courseId);
   if (resolved.error) return { ok: false, status: 400, error: resolved.error };
-  if (!resolved.session.bluetoothEnabled) {
-    return { ok: false, status: 400, error: 'Bluetooth attendance is not enabled for this session' };
-  }
-  // Mirror the record path: don't advertise a target while attendance is paused.
-  if (resolved.session.attendancePaused) {
-    return { ok: false, status: 400, error: 'Attendance is paused. Please wait until your lecturer resumes.' };
+  if (!isBroadcastLive(resolved.session)) {
+    return { ok: false, status: 400, error: 'Attendance is not open for this session right now.' };
   }
   return { ok: true, deviceName: resolved.session.bluetoothDeviceName };
 }
@@ -47,11 +43,8 @@ async function getBluetoothTarget(courseId) {
 async function recordBluetoothAttendance(studentPk, courseId, token) {
   const resolved = await resolveActiveSessionForCourse(courseId);
   if (resolved.error) return { ok: false, status: 400, error: resolved.error };
-  if (!resolved.session.bluetoothEnabled) {
-    return { ok: false, status: 400, error: 'Bluetooth attendance is not enabled for this session' };
-  }
-  if (resolved.session.attendancePaused) {
-    return { ok: false, status: 400, error: 'Attendance is paused. Please wait until your lecturer resumes.' };
+  if (!isBroadcastLive(resolved.session)) {
+    return { ok: false, status: 400, error: 'Attendance is not open for this session right now.' };
   }
   const schedule = checkScheduleWindow(resolved.session);
   if (!schedule.ok) return { ok: false, status: 400, error: schedule.reason };

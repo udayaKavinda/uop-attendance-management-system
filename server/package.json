@@ -2,6 +2,21 @@
   "name": "uop-attendance-server",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "jest"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/src/tests/**/*.test.js"
+    ],
+    "testTimeout": 10000
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  },
   "dependencies": {
     "express": "^5.2.1",
     "mongoose": "^9.0.0",

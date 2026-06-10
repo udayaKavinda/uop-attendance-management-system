@@ -130,24 +130,18 @@ server/src/
 ### Install & Run
 
 ```bash
-# from repo root
+# from the server/ folder
 npm install
 cp .env.example .env       # then fill in values
 
-# run the server only
-npm run server
-
-# run server + React frontend together
-npm run dev
+# run the server
+npm start
 
 # run server tests
-npm run test:server
+npm test
 ```
 
 The server listens on `PORT` (default **5000**).
-
-> **Note:** the root `package.json` holds the dev tooling (`jest`, `cross-env`,
-> `concurrently`). Run `npm install` at the repo root before `npm run test:server`.
 
 ---
 
@@ -211,9 +205,9 @@ Indexes: unique `{ code, batch }`, `{ code }`, `{ lecturers }`.
 | `lectureDay`          | enum    | `MON`..`SUN` |
 | `startTime`/`endTime` | String  | `HH:mm` |
 | `recurring`           | Boolean | weekly repeat (default `true`) |
-| `bluetoothEnabled`    | Boolean | BLE broadcast on/off |
+| `broadcasting`        | Boolean | single BLE attendance switch — attendance is open iff `true` (replaces the old `bluetoothEnabled` + `attendancePaused` pair; migrated automatically on startup) |
+| `lastBroadcastSeenAt` | Date    | heartbeat — stamped on every broadcast-token poll (~5s) |
 | `bluetoothDeviceName` | String  | advertised name (`UOP-XXXXXXXX`) |
-| `attendancePaused`    | Boolean | when true during a live window, attendance is blocked |
 | `active`/`deleted`    | Boolean | indexed |
 
 Index: `{ course, lectureDay, startTime, endTime }`.
@@ -324,7 +318,7 @@ All error responses are `{ "error": "<message>" }`. Mutating `/api/*` calls requ
 | GET    | `/api/courses`                         | any auth | Active courses (id, code, batch, name). |
 | GET    | `/api/courses/running`                 | any auth | Courses with a session running now. |
 | GET    | `/api/attendance-status?courseId=`     | student  | Whether the student is marked today for this course. Uses the live session when one is running; otherwise falls back to any record made earlier today, so it still confirms attendance after the lecture window closes. |
-| GET    | `/api/bluetooth-target?courseId=`      | student  | BLE device name for the active session. Returns the same "paused" error as recording when `attendancePaused` is set. |
+| GET    | `/api/bluetooth-target?courseId=`      | student  | BLE device name for the active session. Errors with "Attendance is not open…" unless the broadcast is live (broadcasting + fresh heartbeat). |
 | POST   | `/api/bluetooth-attendance`            | student* | Record attendance via BLE token. *rate-limited.* Body: `{ courseId, token }`. |
 
 ### Admin / Staff — Courses (`/api/admin/courses`)
@@ -344,14 +338,12 @@ All error responses are `{ "error": "<message>" }`. Mutating `/api/*` calls requ
 | Method | Path                                  | Auth  | Description |
 |--------|---------------------------------------|-------|-------------|
 | GET    | `/`                                   | staff | All sessions in scope. |
-| GET    | `/running`                            | staff | Sessions running now (with pause/BLE status). |
-| DELETE | `/:sessionId`                         | staff + session access | Soft-delete a session. |
+| GET    | `/running`                            | staff | Sessions running now (with `broadcasting` status). |
+| DELETE | `/:sessionId`                         | staff + session access | Soft-delete a session (turns broadcast off, removes token). |
 | PATCH  | `/:sessionId/activate`                | staff + session access | Activate (fails if course disabled). |
-| PATCH  | `/:sessionId/deactivate`              | staff + session access | Deactivate (clears pause). |
-| PATCH  | `/:sessionId/bluetooth/start`         | staff + session access | Enable BLE, seed device name + token. |
-| PATCH  | `/:sessionId/bluetooth/stop`          | staff + session access | Disable BLE, remove token. |
-| GET    | `/:sessionId/bluetooth-broadcast`     | staff + session access | Current token + `rotatesIn`/`rotationMs`. |
-| PATCH  | `/:sessionId/attendance-paused`       | staff + session access | Pause/resume attendance. Body `{ paused }`. |
+| PATCH  | `/:sessionId/deactivate`              | staff + session access | Deactivate (turns broadcast off, removes token). |
+| PATCH  | `/:sessionId/broadcast`               | staff + session access | Single broadcast switch. Body `{ on: boolean }`. On: seed device name + token; off: remove token. |
+| GET    | `/:sessionId/broadcast`               | staff + session access | Current token + `rotatesIn`/`rotationMs`. Each poll stamps the broadcaster **heartbeat**; `400` when off. |
 | GET    | `/:sessionId/attendance`              | staff + session access | Attendance records for the session. |
 
 ### Admin — Lecturers (`/api/admin/lecturers`)
@@ -374,23 +366,31 @@ Token logic lives in `services/bluetoothCode.service.js`.
   rotation boundary so a student who scanned just before rotation still succeeds.
 - Tokens persist in the `BleToken` collection (survive restarts) and auto-expire via a
   1-hour TTL index.
+- **Heartbeat:** the broadcasting phone polls `GET /:id/broadcast` every ~5s; each poll
+  stamps `lastBroadcastSeenAt`. A broadcast with no poll for `BROADCAST_STALE_MS` (30s,
+  ~6 missed polls) is considered dead: students are rejected at read time immediately,
+  and the background sweep flips `broadcasting` off and removes the token. So the server
+  never accepts attendance against a dead channel for more than ~30s, even if the
+  broadcaster crashed and could not call the off switch.
 
 **Recording (`POST /api/bluetooth-attendance`)** validates, in order:
 1. Course resolves to an active session running now.
-2. `bluetoothEnabled` is true.
-3. `attendancePaused` is false.
-4. Current time is inside the session window.
-5. Submitted token verifies (current or grace `prevToken`).
-6. Idempotent write — a duplicate (same student/session/day) returns `{ duplicate: true }`
+2. The broadcast is **live**: `broadcasting` is true *and* the heartbeat is fresh
+   (single check replacing the old enabled/paused pair; error: "Attendance is not open
+   for this session right now.").
+3. Current time is inside the session window.
+4. Submitted token verifies (current or grace `prevToken`).
+5. Idempotent write — a duplicate (same student/session/day) returns `{ duplicate: true }`
    instead of erroring; the `11000` unique-key race is caught and resolved to the existing row.
 
 ---
 
 ## Background Jobs
 
-- **Non-recurring session expiry** (`services/sessionExpiry.service.js`) — runs at startup
-  and every `SESSION_EXPIRE_JOB_MS` (default 60s, min 10s). Deactivates non-recurring
-  sessions whose end time has passed, independent of API traffic.
+- **Non-recurring session expiry + stale-broadcast sweep** (`services/sessionExpiry.service.js`)
+  — runs at startup and every `SESSION_EXPIRE_JOB_MS` (default 60s, min 10s). Deactivates
+  non-recurring sessions whose end time has passed, and turns off broadcasts whose
+  heartbeat is older than 30s (`BROADCAST_STALE_MS`), independent of API traffic.
 - **OAuth exchange-code sweep** (`services/oauth.service.js`) — every 5 minutes, purges
   expired native exchange codes. *(In-memory `Map`; single-process only — move to a shared
   store for horizontal scaling.)*
@@ -403,8 +403,8 @@ Token logic lives in `services/bluetoothCode.service.js`.
 (`SESSION_RESOLVE_CACHE_TTL_MS`) of "active session for course X right now" to absorb
 heavy student polling. The cache is **explicitly invalidated** via
 `invalidateActiveSessionCache(courseId)` whenever relevant state changes — session
-activate/deactivate/delete, BLE start/stop, attendance pause/resume, and course
-enable/disable/delete — so pause and similar toggles take effect immediately.
+activate/deactivate/delete, broadcast on/off (including the stale-broadcast sweep), and
+course enable/disable/delete — so toggles take effect immediately.
 
 > The cache is per-process. Under horizontal scaling, move it (and the OAuth exchange-code
 > store) to Redis.
@@ -431,14 +431,16 @@ instead of hanging the request.
 
 ## Testing
 
-Jest config: `jest.server.config.js` (Node env, 10s timeout, `server/src/tests/**/*.test.js`).
+Jest config lives in `server/package.json` (Node env, 10s timeout, `src/tests/**/*.test.js`).
 
 ```bash
-npm run test:server
+# from the server/ folder
+npm test
 ```
 
 Suites:
-- `ble.routes.test.js` — BLE start/stop/broadcast/target/record, auth + validation paths.
+- `ble.routes.test.js` — broadcast on/off toggle, token poll + heartbeat, target/record,
+  staleness rejection, auth + validation paths.
 - `bluetoothCode.test.js` — token generation, rotation, grace window, verification, removal.
 - `schedule.test.js` — `toMinutes`, overlap detection, non-recurring expiry.
 - `auth.service.test.js` — role authorization (`getPersonFromRequest`, staff/admin/student).

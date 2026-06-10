@@ -39,7 +39,8 @@ async function findSessionById(sessionId) {
 async function softDeleteSession(sessionItem) {
   sessionItem.deleted = true;
   sessionItem.active = false;
-  sessionItem.bluetoothEnabled = false;
+  sessionItem.broadcasting = false;
+  sessionItem.lastBroadcastSeenAt = null;
   await sessionItem.save();
   await bluetoothCode.removeToken(String(sessionItem._id));
   invalidateActiveSessionCache(sessionItem.course);
@@ -61,8 +62,10 @@ async function activateSession(sessionItem) {
 
 async function deactivateSession(sessionItem) {
   sessionItem.active = false;
-  sessionItem.attendancePaused = false;
+  sessionItem.broadcasting = false;
+  sessionItem.lastBroadcastSeenAt = null;
   await sessionItem.save();
+  await bluetoothCode.removeToken(String(sessionItem._id));
   invalidateActiveSessionCache(sessionItem.course);
   return { ok: true, session: sessionItem };
 }
@@ -74,50 +77,50 @@ async function listAllForStaff(auth) {
     .sort({ updatedAt: -1 });
 }
 
-async function startBluetooth(sessionItem) {
-  if (!sessionItem.bluetoothDeviceName) {
-    sessionItem.bluetoothDeviceName = bluetoothCode.generateDeviceName();
+/**
+ * Idempotent on/off switch for the session's BLE attendance broadcast.
+ * On: seeds the device name (once) + rotating token and stamps the heartbeat.
+ * Off: closes the channel and removes the token.
+ */
+async function setBroadcasting(sessionItem, on) {
+  if (on) {
+    if (!sessionItem.bluetoothDeviceName) {
+      sessionItem.bluetoothDeviceName = bluetoothCode.generateDeviceName();
+    }
+    sessionItem.broadcasting = true;
+    // Stamp immediately so the channel counts as live before the first token poll.
+    sessionItem.lastBroadcastSeenAt = new Date();
+    await sessionItem.save();
+    await bluetoothCode.getToken(String(sessionItem._id));
+  } else {
+    sessionItem.broadcasting = false;
+    sessionItem.lastBroadcastSeenAt = null;
+    await sessionItem.save();
+    await bluetoothCode.removeToken(String(sessionItem._id));
   }
-  sessionItem.bluetoothEnabled = true;
-  await sessionItem.save();
-  await bluetoothCode.getToken(String(sessionItem._id));
   invalidateActiveSessionCache(sessionItem.course);
   return { ok: true, session: sessionItem };
 }
 
-async function stopBluetooth(sessionItem) {
-  sessionItem.bluetoothEnabled = false;
-  await sessionItem.save();
-  await bluetoothCode.removeToken(String(sessionItem._id));
-  invalidateActiveSessionCache(sessionItem.course);
-  return { ok: true, session: sessionItem };
-}
-
-async function getBluetoothBroadcast(sessionItem) {
-  if (!sessionItem.bluetoothEnabled) {
-    return { ok: false, status: 400, error: 'Bluetooth not enabled for this session' };
+/** Current token for the broadcasting phone. Each poll doubles as the heartbeat. */
+async function getBroadcast(sessionItem) {
+  if (!sessionItem.broadcasting) {
+    return { ok: false, status: 400, error: 'Broadcast is not on for this session' };
   }
+  sessionItem.lastBroadcastSeenAt = new Date();
+  await sessionItem.save();
   const { token, rotatesIn } = await bluetoothCode.getToken(String(sessionItem._id));
   return {
     ok: true,
     data: {
       sessionId: sessionItem._id,
+      broadcasting: true,
       deviceName: sessionItem.bluetoothDeviceName,
       token,
       rotatesIn,
       rotationMs: bluetoothCode.ROTATION_MS,
-      attendancePaused: Boolean(sessionItem.attendancePaused),
     },
   };
-}
-
-async function setAttendancePaused(sessionItem, paused) {
-  sessionItem.attendancePaused = paused;
-  await sessionItem.save();
-  // Invalidate the resolve cache so the pause/resume takes effect immediately
-  // rather than after the 5s TTL window.
-  invalidateActiveSessionCache(sessionItem.course);
-  return { ok: true, session: sessionItem, attendancePaused: paused };
 }
 
 module.exports = {
@@ -128,8 +131,6 @@ module.exports = {
   activateSession,
   deactivateSession,
   listAllForStaff,
-  startBluetooth,
-  stopBluetooth,
-  getBluetoothBroadcast,
-  setAttendancePaused,
+  setBroadcasting,
+  getBroadcast,
 };
