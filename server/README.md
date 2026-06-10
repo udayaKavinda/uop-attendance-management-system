@@ -8,8 +8,6 @@ courses, lecture sessions, the BLE broadcast, and attendance reporting.
 The server is an **application factory** (`app.js`) with a clean layered architecture
 (routes → controllers → services → models) and no business logic in routes.
 
-
-
 ---
 
 ## Table of Contents
