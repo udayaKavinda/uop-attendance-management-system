@@ -3,7 +3,7 @@
  * No database connection or HTTP listen here — safe to require in tests via supertest.
  * dotenv is loaded once in server.js (and transitively via the config modules below).
  */
-
+console.log('app.js');
 const express = require('express');
 const {
   applySecurity,
