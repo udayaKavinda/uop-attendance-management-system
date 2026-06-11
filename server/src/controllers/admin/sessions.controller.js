@@ -35,6 +35,7 @@ async function setBroadcast(req, res) {
   const validated = validateBroadcastBody(req.body);
   if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
   const result = await lectureSessionService.setBroadcasting(req.sessionItem, validated.on);
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
   return res.json({ success: true, session: result.session });
 }
 

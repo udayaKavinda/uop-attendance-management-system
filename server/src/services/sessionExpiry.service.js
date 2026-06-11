@@ -1,8 +1,8 @@
 const LectureSession = require('../models/LectureSession');
 const { isNonRecurringExpired } = require('../utils/schedule');
 const { BROADCAST_STALE_MS } = require('../utils/constants');
-const bluetoothCode = require('./bluetoothCode.service');
-const { invalidateActiveSessionCache } = require('./session.service');
+const { isWithinScheduleWindow } = require('./session.service');
+const { closeBroadcast } = require('./lectureSession.service');
 
 async function deactivateExpiredNonRecurringSessions(filter = {}) {
   const candidates = await LectureSession.find({ ...filter, active: true, recurring: false, deleted: false });
@@ -25,11 +25,17 @@ async function closeStaleBroadcasts(now = Date.now()) {
     $or: [{ lastBroadcastSeenAt: null }, { lastBroadcastSeenAt: { $lt: cutoff } }],
   });
   for (const s of stale) {
-    s.broadcasting = false;
-    s.lastBroadcastSeenAt = null;
-    await s.save();
-    await bluetoothCode.removeToken(String(s._id));
-    invalidateActiveSessionCache(s.course);
+    await closeBroadcast(s);
+  }
+}
+
+/** Turns off broadcasts that outlived their scheduled lecture window. */
+async function closeOutOfWindowBroadcasts(now = new Date()) {
+  const live = await LectureSession.find({ broadcasting: true, deleted: false });
+  for (const s of live) {
+    if (!isWithinScheduleWindow(s, now)) {
+      await closeBroadcast(s);
+    }
   }
 }
 
@@ -46,6 +52,9 @@ function startNonRecurringExpiryJob() {
     closeStaleBroadcasts().catch((err) => {
       console.error('[broadcast-sweep]', err);
     });
+    closeOutOfWindowBroadcasts().catch((err) => {
+      console.error('[broadcast-window-sweep]', err);
+    });
   };
   setImmediate(tick);
   return setInterval(tick, intervalMs);
@@ -54,6 +63,7 @@ function startNonRecurringExpiryJob() {
 module.exports = {
   deactivateExpiredNonRecurringSessions,
   closeStaleBroadcasts,
+  closeOutOfWindowBroadcasts,
   startNonRecurringExpiryJob,
   isNonRecurringExpired,
 };
