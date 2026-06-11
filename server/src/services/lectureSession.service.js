@@ -3,7 +3,11 @@ const Course = require('../models/Course');
 const bluetoothCode = require('./bluetoothCode.service');
 const { validateSessionCreateBody, checkSessionOverlap } = require('../validators/session.validator');
 const { staffSessionMatch } = require('./auth.service');
-const { invalidateActiveSessionCache } = require('./session.service');
+const {
+  BROADCAST_WINDOW_ERROR,
+  invalidateActiveSessionCache,
+  isWithinScheduleWindow,
+} = require('./session.service');
 
 async function listForCourse(courseId) {
   return LectureSession.find({ course: courseId, deleted: false }).sort({ lectureDay: 1, startTime: 1 });
@@ -77,13 +81,48 @@ async function listAllForStaff(auth) {
     .sort({ updatedAt: -1 });
 }
 
+async function resolveCourseForSession(sessionItem) {
+  if (sessionItem.populated?.('course') && sessionItem.course) return sessionItem.course;
+  return Course.findById(sessionItem.course);
+}
+
+/** Whether a broadcast may be started or kept alive right now (active, course on, in window). */
+async function assertCanBroadcastNow(sessionItem, now = new Date()) {
+  if (!sessionItem || sessionItem.deleted) {
+    return { ok: false, status: 400, error: 'Session not found' };
+  }
+  if (!sessionItem.active) {
+    return { ok: false, status: 400, error: 'Session is not active' };
+  }
+  const course = await resolveCourseForSession(sessionItem);
+  if (!course?.active) {
+    return { ok: false, status: 400, error: 'Course is disabled' };
+  }
+  if (!isWithinScheduleWindow(sessionItem, now)) {
+    return { ok: false, status: 400, error: BROADCAST_WINDOW_ERROR };
+  }
+  return { ok: true, course };
+}
+
+/** Turns broadcast off and removes the rotating token. Idempotent. */
+async function closeBroadcast(sessionItem) {
+  if (!sessionItem.broadcasting) return;
+  sessionItem.broadcasting = false;
+  sessionItem.lastBroadcastSeenAt = null;
+  await sessionItem.save();
+  await bluetoothCode.removeToken(String(sessionItem._id));
+  invalidateActiveSessionCache(sessionItem.course);
+}
+
 /**
  * Idempotent on/off switch for the session's BLE attendance broadcast.
- * On: seeds the device name (once) + rotating token and stamps the heartbeat.
- * Off: closes the channel and removes the token.
+ * On: requires active session + enabled course + schedule window; seeds token.
+ * Off: closes the channel unconditionally.
  */
 async function setBroadcasting(sessionItem, on) {
   if (on) {
+    const gate = await assertCanBroadcastNow(sessionItem);
+    if (!gate.ok) return gate;
     if (!sessionItem.bluetoothDeviceName) {
       sessionItem.bluetoothDeviceName = bluetoothCode.generateDeviceName();
     }
@@ -93,19 +132,24 @@ async function setBroadcasting(sessionItem, on) {
     await sessionItem.save();
     await bluetoothCode.getToken(String(sessionItem._id));
   } else {
-    sessionItem.broadcasting = false;
-    sessionItem.lastBroadcastSeenAt = null;
-    await sessionItem.save();
-    await bluetoothCode.removeToken(String(sessionItem._id));
+    await closeBroadcast(sessionItem);
   }
   invalidateActiveSessionCache(sessionItem.course);
   return { ok: true, session: sessionItem };
 }
 
-/** Current token for the broadcasting phone. Each poll doubles as the heartbeat. */
+/**
+ * Current token for the broadcasting phone. Each poll doubles as the heartbeat.
+ * Rejects (and auto-closes) when the session leaves its schedule window.
+ */
 async function getBroadcast(sessionItem) {
   if (!sessionItem.broadcasting) {
     return { ok: false, status: 400, error: 'Broadcast is not on for this session' };
+  }
+  const gate = await assertCanBroadcastNow(sessionItem);
+  if (!gate.ok) {
+    await closeBroadcast(sessionItem);
+    return gate;
   }
   sessionItem.lastBroadcastSeenAt = new Date();
   await sessionItem.save();
@@ -131,6 +175,8 @@ module.exports = {
   activateSession,
   deactivateSession,
   listAllForStaff,
+  assertCanBroadcastNow,
+  closeBroadcast,
   setBroadcasting,
   getBroadcast,
 };

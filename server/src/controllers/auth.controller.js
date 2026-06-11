@@ -16,7 +16,12 @@ function googleAuth(req, res, next) {
   req.session.oauthReturnBase = oauthService.pickOAuthReturnBase(req);
   req.session.save((err) => {
     if (err) return next(err);
-    passport.authenticate('google', { scope: ['email'] })(req, res, next);
+    // Server is native-app only; always show Google's account picker so sign-out
+    // does not silently re-use the Custom Tab's cached Google session.
+    passport.authenticate('google', {
+      scope: ['email'],
+      prompt: 'select_account',
+    })(req, res, next);
   });
 }
 

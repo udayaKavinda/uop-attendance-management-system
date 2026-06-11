@@ -53,6 +53,11 @@ function todayDay() {
   return DAY_NAMES[new Date().getDay()];
 }
 
+function otherDay() {
+  const today = todayDay();
+  return DAY_NAMES.find((d) => d !== today) || 'SUN';
+}
+
 function makeId() {
   return new mongoose.Types.ObjectId().toHexString();
 }
@@ -262,6 +267,68 @@ describe('PATCH /api/admin/sessions/:id/broadcast', () => {
 
     await bluetoothCode.removeToken(String(session._id));
   });
+
+  test('400 — {on:true} rejected outside the scheduled time window', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const course = makeCourse({ lecturers: [String(lecturer._id)] });
+    const session = makeSession({
+      course: course._id,
+      broadcasting: false,
+      lectureDay: otherDay(),
+    });
+
+    Person.findById.mockResolvedValue(lecturer);
+    LectureSession.findOne.mockResolvedValue(session);
+    Course.findById.mockResolvedValue(course);
+
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${session._id}/broadcast`)
+      .set(headers(lecturer))
+      .send({ on: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/scheduled time window/i);
+    expect(session.broadcasting).not.toBe(true);
+    expect(session.save).not.toHaveBeenCalled();
+  });
+
+  test('400 — {on:true} rejected when session is inactive', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const course = makeCourse();
+    const session = makeSession({ course: course._id, active: false, broadcasting: false });
+
+    Person.findById.mockResolvedValue(admin);
+    LectureSession.findOne.mockResolvedValue(session);
+    Course.findById.mockResolvedValue(course);
+
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${session._id}/broadcast`)
+      .set(headers(admin))
+      .send({ on: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/not active/i);
+    expect(session.save).not.toHaveBeenCalled();
+  });
+
+  test('400 — {on:true} rejected when course is disabled', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const course = makeCourse({ active: false });
+    const session = makeSession({ course: course._id, broadcasting: false });
+
+    Person.findById.mockResolvedValue(admin);
+    LectureSession.findOne.mockResolvedValue(session);
+    Course.findById.mockResolvedValue(course);
+
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${session._id}/broadcast`)
+      .set(headers(admin))
+      .send({ on: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/course is disabled/i);
+    expect(session.save).not.toHaveBeenCalled();
+  });
 });
 
 // ─── GET /broadcast (token poll + heartbeat) ─────────────────────────────────
@@ -315,6 +382,33 @@ describe('GET /api/admin/sessions/:id/broadcast', () => {
     // The poll doubles as the heartbeat: the stale stamp must be refreshed.
     expect(session.save).toHaveBeenCalled();
     expect(session.lastBroadcastSeenAt.getTime()).toBeGreaterThan(staleStamp.getTime());
+
+    await bluetoothCode.removeToken(String(session._id));
+  });
+
+  test('400 — poll outside the schedule window auto-closes the broadcast', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const course = makeCourse({ lecturers: [String(lecturer._id)] });
+    const session = makeSession({
+      course: course._id,
+      broadcasting: true,
+      lectureDay: otherDay(),
+    });
+
+    await bluetoothCode.getToken(String(session._id));
+
+    Person.findById.mockResolvedValue(lecturer);
+    LectureSession.findOne.mockResolvedValue(session);
+    Course.findById.mockResolvedValue(course);
+
+    const res = await request(app)
+      .get(`/api/admin/sessions/${session._id}/broadcast`)
+      .set(headers(lecturer));
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/scheduled time window/i);
+    expect(session.broadcasting).toBe(false);
+    expect(session.lastBroadcastSeenAt).toBeNull();
 
     await bluetoothCode.removeToken(String(session._id));
   });

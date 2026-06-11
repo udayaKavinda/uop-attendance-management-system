@@ -342,8 +342,8 @@ All error responses are `{ "error": "<message>" }`. Mutating `/api/*` calls requ
 | DELETE | `/:sessionId`                         | staff + session access | Soft-delete a session (turns broadcast off, removes token). |
 | PATCH  | `/:sessionId/activate`                | staff + session access | Activate (fails if course disabled). |
 | PATCH  | `/:sessionId/deactivate`              | staff + session access | Deactivate (turns broadcast off, removes token). |
-| PATCH  | `/:sessionId/broadcast`               | staff + session access | Single broadcast switch. Body `{ on: boolean }`. On: seed device name + token; off: remove token. |
-| GET    | `/:sessionId/broadcast`               | staff + session access | Current token + `rotatesIn`/`rotationMs`. Each poll stamps the broadcaster **heartbeat**; `400` when off. |
+| PATCH  | `/:sessionId/broadcast`               | staff + session access | Single broadcast switch. Body `{ on: boolean }`. **On** requires an active session, enabled course, and the current time inside the session's schedule window; seeds device name + token. **Off** is unconditional. |
+| GET    | `/:sessionId/broadcast`               | staff + session access | Current token + `rotatesIn`/`rotationMs`. Each poll stamps the **heartbeat**; `400` when off or outside the schedule window (poll auto-closes the broadcast). |
 | GET    | `/:sessionId/attendance`              | staff + session access | Attendance records for the session. |
 
 ### Admin — Lecturers (`/api/admin/lecturers`)
@@ -366,6 +366,10 @@ Token logic lives in `services/bluetoothCode.service.js`.
   rotation boundary so a student who scanned just before rotation still succeeds.
 - Tokens persist in the `BleToken` collection (survive restarts) and auto-expire via a
   1-hour TTL index.
+- **Schedule window:** `PATCH …/broadcast {on:true}` and `GET …/broadcast` both require
+  the session to be active, its course enabled, and the current time inside the
+  configured weekly window (same rule as `/running`). A poll outside the window
+  auto-closes the broadcast; a background sweep also turns off out-of-window broadcasts.
 - **Heartbeat:** the broadcasting phone polls `GET /:id/broadcast` every ~5s; each poll
   stamps `lastBroadcastSeenAt`. A broadcast with no poll for `BROADCAST_STALE_MS` (30s,
   ~6 missed polls) is considered dead: students are rejected at read time immediately,
@@ -375,9 +379,9 @@ Token logic lives in `services/bluetoothCode.service.js`.
 
 **Recording (`POST /api/bluetooth-attendance`)** validates, in order:
 1. Course resolves to an active session running now.
-2. The broadcast is **live**: `broadcasting` is true *and* the heartbeat is fresh
-   (single check replacing the old enabled/paused pair; error: "Attendance is not open
-   for this session right now.").
+2. The broadcast is **live**: `broadcasting` is true, the heartbeat is fresh, and the
+   session is still inside its schedule window (error: "Attendance is not open for
+   this session right now.").
 3. Current time is inside the session window.
 4. Submitted token verifies (current or grace `prevToken`).
 5. Idempotent write — a duplicate (same student/session/day) returns `{ duplicate: true }`
@@ -387,10 +391,11 @@ Token logic lives in `services/bluetoothCode.service.js`.
 
 ## Background Jobs
 
-- **Non-recurring session expiry + stale-broadcast sweep** (`services/sessionExpiry.service.js`)
+- **Non-recurring session expiry + broadcast sweeps** (`services/sessionExpiry.service.js`)
   — runs at startup and every `SESSION_EXPIRE_JOB_MS` (default 60s, min 10s). Deactivates
-  non-recurring sessions whose end time has passed, and turns off broadcasts whose
-  heartbeat is older than 30s (`BROADCAST_STALE_MS`), independent of API traffic.
+  non-recurring sessions whose end time has passed, turns off broadcasts whose heartbeat
+  is older than 30s (`BROADCAST_STALE_MS`), and turns off broadcasts that have left their
+  schedule window, independent of API traffic.
 - **OAuth exchange-code sweep** (`services/oauth.service.js`) — every 5 minutes, purges
   expired native exchange codes. *(In-memory `Map`; single-process only — move to a shared
   store for horizontal scaling.)*

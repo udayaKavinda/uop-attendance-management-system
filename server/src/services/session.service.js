@@ -41,13 +41,18 @@ function checkScheduleWindow(sessionConfig) {
   return evaluateScheduleWindow(sessionConfig);
 }
 
+/** Shared copy for staff broadcast toggle, token poll, and student admission. */
+const BROADCAST_WINDOW_ERROR =
+  'Broadcast can only run while this session is in its scheduled time window.';
+
 /**
- * True iff the session's broadcast channel is open AND its heartbeat is fresh.
- * Read-time staleness check: even before the sweep job flips `broadcasting`
- * off, a dead broadcaster stops admitting attendance within BROADCAST_STALE_MS.
+ * True iff the session's broadcast channel is open, inside its schedule window,
+ * and its heartbeat is fresh. Read-time checks let students and polls fail fast
+ * before the sweep job flips `broadcasting` off.
  */
 function isBroadcastLive(sessionItem, now = Date.now()) {
   if (!sessionItem?.broadcasting) return false;
+  if (!isWithinScheduleWindow(sessionItem, new Date(now))) return false;
   const seenAt = sessionItem.lastBroadcastSeenAt ? new Date(sessionItem.lastBroadcastSeenAt).getTime() : 0;
   return now - seenAt <= BROADCAST_STALE_MS;
 }
@@ -132,6 +137,7 @@ async function getRunningSessionsForStaff(scope, now = new Date()) {
 }
 
 module.exports = {
+  BROADCAST_WINDOW_ERROR,
   isWithinScheduleWindow,
   checkScheduleWindow,
   isBroadcastLive,
