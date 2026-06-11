@@ -1,9 +1,11 @@
 # UOP Attendance Management System — Server
 
-Express.js + MongoDB backend for a university lecture-attendance platform. Students sign in
-with Google, see which of their courses have a lecture running *right now*, and record
-attendance over a rotating-token Bluetooth (BLE) handshake. Lecturers and admins manage
-courses, lecture sessions, the BLE broadcast, and attendance reporting.
+Express.js + MongoDB backend for a university lecture-attendance platform. The production
+clients are **native mobile apps** (Android in this repo); there is no web SPA checked in
+here. Students sign in with Google, see which of their courses have a lecture running
+*right now*, and record attendance over a rotating-token Bluetooth (BLE) handshake.
+Lecturers and admins manage courses, lecture sessions, the BLE broadcast, and attendance
+reporting.
 
 The server is an **application factory** (`app.js`) with a clean layered architecture
 (routes → controllers → services → models) and no business logic in routes.
@@ -156,7 +158,7 @@ Defined / consumed in `config/env.js`, `config/cors.js`, `config/passport.js`,
 | `PORT`                    | no                | `5000`                               | HTTP listen port. |
 | `MONGO_URI`               | no (prod: yes)    | `mongodb://localhost:27017/attendance` | MongoDB connection string. |
 | `SESSION_SECRET`          | **prod: yes**     | `dev-only-secret` (dev only)         | Session cookie signing secret. Server **exits** if unset in production. |
-| `BLE_SECRET`              | **prod: yes**     | `uop-ble-dev-secret-change-me` (dev) | BLE payload secret. Server **exits** if unset in production. |
+| `BLE_SECRET`              | **prod: yes**     | `uop-ble-dev-secret-change-me` (dev) | Required in production (fail-fast). Rotating BLE tokens are random values stored in `BleToken`; this env var is reserved for future signing — not used by `bluetoothCode.service.js` today. |
 | `GOOGLE_CLIENT_ID`        | for OAuth         | —                                    | Google OAuth client id. If missing, `/auth/google` returns 503. |
 | `GOOGLE_CLIENT_SECRET`    | for OAuth         | —                                    | Google OAuth client secret. |
 | `APP_BASE_URL`            | for OAuth         | —                                    | Public base URL of the server; used to build the OAuth callback URL. |
@@ -242,15 +244,19 @@ TTL index: auto-delete 3600s after `updatedAt` (safety cleanup).
 ## Authentication & Authorization
 
 ### Sign-in (Google OAuth 2.0)
-1. Browser hits `GET /auth/google` → redirect to Google.
+1. Client hits `GET /auth/google?returnTo=<native-scheme>` → redirect to Google with
+   `prompt=select_account` (always — server is native-app only, so users pick a Google
+   account after app sign-out instead of silently reusing the Custom Tab session).
 2. Google redirects back to `GET /auth/google/callback`.
 3. On first login a `Person` (role `student`) is created from the Google profile.
 4. If a matching active **lecturer** record exists for that email, the role is honored;
    a lecturer whose account is no longer active is demoted to `student`.
 5. Passport serializes `user._id` into the session; `deserializeUser` loads the `Person`.
 
-Native/mobile (`lk.uop.attendance://`) logins use a one-time **exchange code** (32-byte
-random, 2-minute TTL) consumed at `POST /api/auth/exchange-code`.
+Native logins (`lk.ac.pdn.eng.attendance://oauth` or legacy `lk.uop.attendance://oauth`,
+both in `NATIVE_OAUTH_RETURN_BASES`) bounce through `/auth/native-return` and use a
+one-time **exchange code** (32-byte random, 2-minute TTL) consumed at
+`POST /api/auth/exchange-code`.
 
 ### Authorization guards (`middlewares/requireAuth.js`)
 | Guard                 | Allows |
@@ -299,7 +305,7 @@ All error responses are `{ "error": "<message>" }`. Mutating `/api/*` calls requ
 ### Auth / Session
 | Method | Path                      | Auth          | Description |
 |--------|---------------------------|---------------|-------------|
-| GET    | `/auth/google`            | none          | Start Google OAuth (saves `returnTo`). 503 if OAuth not configured. |
+| GET    | `/auth/google`            | none          | Start Google OAuth (saves `returnTo`, adds `prompt=select_account`). 503 if OAuth not configured. |
 | GET    | `/auth/google/callback`   | none          | OAuth callback; logs in and redirects. |
 | GET    | `/auth/native-return`     | none          | HTML deep-link bounce for native apps (validates `target`). |
 | POST   | `/api/auth/exchange-code` | none (code)   | Consume a one-time native exchange code → establishes a session. |
@@ -328,8 +334,8 @@ All error responses are `{ "error": "<message>" }`. Mutating `/api/*` calls requ
 | POST   | `/`                                 | staff | Create a course (admin assigns lecturers; lecturer self-assigns). |
 | PATCH  | `/:courseId/assign-lecturer`        | admin | Replace the lecturer set (1–5). |
 | DELETE | `/:courseId`                        | staff + course access | Delete course (cascades sessions, attendance, BLE tokens). |
-| PATCH  | `/:courseId/disable`                | staff + course access | Disable course (deactivates its sessions). |
-| PATCH  | `/:courseId/enable`                 | staff + course access | Enable course. |
+| PATCH  | `/:courseId/disable`                | staff + course access | Disable course (deactivates its sessions). Returns `{ success, course }` with populated `lecturers`. |
+| PATCH  | `/:courseId/enable`                 | staff + course access | Enable course. Returns `{ success, course }` with populated `lecturers`. |
 | GET    | `/:courseId/sessions`               | staff + course access | List the course's sessions. |
 | POST   | `/:courseId/sessions`               | staff + course access | Create a session (validates overlap; `409` if course disabled). |
 | GET    | `/:courseId/attendance-matrix`      | staff + course access | Student × session attendance grid for export. Rows expose `displayId` (email local-part, for the export column) and `email`; only sessions with at least one record appear as columns. |
@@ -349,7 +355,7 @@ All error responses are `{ "error": "<message>" }`. Mutating `/api/*` calls requ
 ### Admin — Lecturers (`/api/admin/lecturers`)
 | Method | Path        | Auth  | Description |
 |--------|-------------|-------|-------------|
-| GET    | `/?q=`      | admin | Search lecturers by name/email/phone. |
+| GET    | `/?q=`      | admin | Search lecturers by name/email/phone (used by the Android admin Courses filter and Owners dialog). |
 | POST   | `/`         | admin | Create or upsert a lecturer. |
 | PATCH  | `/:id`      | admin | Update name/phone/email/active. |
 | DELETE | `/:id`      | admin | Soft-delete; reassigns courses that would be left lecturer-less. |
@@ -376,6 +382,9 @@ Token logic lives in `services/bluetoothCode.service.js`.
   and the background sweep flips `broadcasting` off and removes the token. So the server
   never accepts attendance against a dead channel for more than ~30s, even if the
   broadcaster crashed and could not call the off switch.
+- **On-air encoding (Android):** the lecturer phone advertises a **non-connectable** BLE
+  packet whose service UUID embeds the token (`554f5041-…` / `UOPA` prefix). Student phones
+  scan without a fixed filter (the UUID rotates) and submit the recovered token over HTTPS.
 
 **Recording (`POST /api/bluetooth-attendance`)** validates, in order:
 1. Course resolves to an active session running now.
@@ -484,4 +493,6 @@ Before deploying:
   running multiple instances.
 - Large reports (`attendance-matrix`, session attendance lists) are unpaginated and built in
   memory — consider aggregation/pagination for very large cohorts.
-```
+
+See also `../Android/README.md` for the native client (OAuth Custom Tab, admin dashboard UX,
+BLE scan/broadcast behaviour).

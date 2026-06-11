@@ -57,6 +57,7 @@ async function disableCourse(course) {
   await course.save();
   await LectureSession.updateMany({ course: course._id }, { $set: { active: false } });
   invalidateActiveSessionCache(course._id);
+  await course.populate('lecturers', 'name email phone');
   return { ok: true, course };
 }
 
@@ -64,6 +65,7 @@ async function enableCourse(course) {
   course.active = true;
   await course.save();
   invalidateActiveSessionCache(course._id);
+  await course.populate('lecturers', 'name email phone');
   return { ok: true, course };
 }
 
