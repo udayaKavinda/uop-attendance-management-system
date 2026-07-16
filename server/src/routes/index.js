@@ -4,6 +4,7 @@ const coursesRoutes = require('./courses.routes');
 const attendanceRoutes = require('./attendance.routes');
 const bluetoothRoutes = require('./bluetooth.routes');
 const adminRoutes = require('./admin');
+const pagesRoutes = require('./pages.routes');
 
 /**
  * Mounts all HTTP routers on the Express app.
@@ -17,6 +18,7 @@ function registerRoutes(app) {
   app.use('/api', attendanceRoutes);
   app.use('/api', bluetoothRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/', pagesRoutes);
 }
 
 module.exports = registerRoutes;
