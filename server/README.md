@@ -163,12 +163,12 @@ Defined / consumed in `config/env.js`, `config/cors.js`, `config/passport.js`,
 | `GOOGLE_CLIENT_SECRET`    | for OAuth         | —                                    | Google OAuth client secret. |
 | `APP_BASE_URL`            | for OAuth         | —                                    | Public base URL of the server; used to build the OAuth callback URL. |
 | `FRONTEND_URL`            | yes               | `http://localhost:3000`              | Comma-separated allowed origins (CORS + OAuth return). First entry is the default redirect target. |
-| `REACT_APP_API_BASE`      | frontend          | —                                    | API base used by the React app. |
+| `REACT_APP_API_BASE`      | no                | —                                    | Legacy/optional. Used only as a last-resort fallback for the OAuth callback base in `config/passport.js` when `APP_BASE_URL` and `FRONTEND_URL` are both unset. There is **no web frontend** in this repo — the only client is the native Android app. |
 | `CSP_EXTRA_CONNECT_SRC`   | no                | —                                    | Comma-separated extra `connect-src` origins for CSP. |
 | `CSP_REPORT_ONLY`         | no                | `false`                              | `1`/`true` puts production CSP in report-only mode. |
 | `SESSION_EXPIRE_JOB_MS`   | no                | `60000` (min `10000`)                | Interval for the non-recurring session expiry job. |
 | `BOOTSTRAP_ADMIN_EMAIL`   | see note          | (hardcoded constant)                 | Email auto-promoted to admin on startup. *Currently a constant in `utils/constants.js` — move to env for real deployments.* |
-| `TZ`                      | recommended       | system                               | Attendance dates/windows use local time; set e.g. `Asia/Colombo` in production. |
+| `TZ`                      | **required (prod)** | system                             | **Functionally required.** `attendanceDate` and the schedule-window checks use the server's *local* time, so a server running in UTC (e.g. a default container) computes the wrong calendar day near local midnight — shifting the attendance unique key and the "running now" day. Set to the institution's zone, e.g. `Asia/Colombo`. |
 
 ---
 
@@ -181,7 +181,7 @@ All users — students, lecturers, admins — share one collection.
 |------------|---------|-------|
 | `email`    | String  | unique, required |
 | `studentId`| String  | unique, required (Google subject, or synthetic `dir:` id for directory-only lecturers) |
-| `role`     | enum    | `student` \| `lecturer` \| `admin` (default `student`) |
+| `role`     | enum    | `student` \| `admin` \| `lecturer` (default `student`) |
 | `name`     | String  | display name |
 | `phone`    | String  | optional |
 | `active`   | Boolean | default `true` |
@@ -275,13 +275,16 @@ Passport session — never from client headers.
 
 ## Security
 
-- **Helmet CSP** — enforced in production, **report-only in development** (CRA dev uses
-  `eval`). Allowlist for self, Google Fonts, Google OAuth form-action; `frame-ancestors 'none'`.
+- **Helmet CSP** — enforced in production, **report-only in development** (so policy
+  regressions surface in logs without blocking local work). Allowlist for self, Google
+  Fonts, Google OAuth form-action; `frame-ancestors 'none'`.
 - **HSTS** — enabled in production (`max-age=31536000; includeSubDomains; preload`).
 - **CSRF** — mutating `/api/*` requests must send `X-Requested-With`. Form-based cross-site
   POSTs cannot set this header, neutralizing CSRF against `SameSite=None` session cookies.
-- **Sessions** — `httpOnly` cookies; `Secure` + `SameSite=None` in production (cross-site SPA);
-  stored in MongoDB with 7-day TTL and 1-hour touch throttle. The session store reuses the
+- **Sessions** — `httpOnly` cookies; `Secure` + `SameSite=None` in production (`Lax` in dev).
+  The only client is the native Android app, whose OkHttp stack ignores `SameSite` entirely,
+  so the value has no functional effect here — `SameSite=Lax` would be the tighter default.
+  Stored in MongoDB with a 7-day TTL and 1-hour touch throttle. The session store reuses the
   Mongoose connection (single connection pool).
 - **Rate limiting** — `studentRecordLimiter` (60/min, keyed by user id or IP) on attendance
   recording; `oauthLimiter` (20/min) on OAuth endpoints.
@@ -316,6 +319,7 @@ All error responses are `{ "error": "<message>" }`. Mutating `/api/*` calls requ
 > frontend keys on. The model's own `Person.studentId` (Google subject) is internal and not
 > exposed. The attendance matrix uses a separate `displayId` (email local-part) for its
 > human-readable export column, so `studentId` never means two different things.
+> `lecturerId` is populated only when `role` is `lecturer`; it is `null` for students and admins.
 | POST   | `/api/logout`             | any           | Ends the session. |
 
 ### Student
@@ -384,7 +388,9 @@ Token logic lives in `services/bluetoothCode.service.js`.
   broadcaster crashed and could not call the off switch.
 - **On-air encoding (Android):** the lecturer phone advertises a **non-connectable** BLE
   packet whose service UUID embeds the token (`554f5041-…` / `UOPA` prefix). Student phones
-  scan without a fixed filter (the UUID rotates) and submit the recovered token over HTTPS.
+  scan with a service-UUID filter that matches the fixed `UOPA` prefix while masking out the
+  rotating token bytes (so the filter still matches as the UUID rotates, and scanning keeps
+  delivering results with the screen off), then submit the recovered token over HTTPS.
 
 **Recording (`POST /api/bluetooth-attendance`)** validates, in order:
 1. Course resolves to an active session running now.
