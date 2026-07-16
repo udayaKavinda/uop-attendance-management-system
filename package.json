@@ -1,0 +1,32 @@
+{
+  "name": "uop-attendance-server",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "jest"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/src/tests/**/*.test.js"
+    ],
+    "testTimeout": 10000
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "mongoose": "^9.0.0",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "express-session": "^1.18.0",
+    "connect-mongo": "^5.1.0",
+    "helmet": "^8.0.0",
+    "cors": "^2.8.5",
+    "express-rate-limit": "^7.0.0",
+    "dotenv": "^16.0.0"
+  }
+}
