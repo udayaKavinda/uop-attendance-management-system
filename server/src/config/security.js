@@ -1,9 +1,7 @@
 const helmet = require('helmet');
 const { isProd } = require('./env');
 
-// Content Security Policy: production-only enforcement (CRA dev uses `eval` for
-// source maps, which CSP would block). Allow-list is built from the actual
-// external origins this app loads — see README "Content Security Policy".
+// Content Security Policy allow-list for backend-generated public pages.
 const cspExtraConnect = String(process.env.CSP_EXTRA_CONNECT_SRC || '')
   .split(',')
   .map((s) => s.trim())
@@ -29,8 +27,7 @@ const cspDirectives = {
 
 function applySecurity(app) {
   app.use(helmet({
-    // Enforce CSP in production; report-only in dev so regressions surface early
-    // without breaking CRA's eval-based source maps.
+    // Enforce CSP in production and report violations during development.
     contentSecurityPolicy: {
       useDefaults: false,
       directives: cspDirectives,

@@ -44,7 +44,7 @@ function nativeReturn(req, res) {
 }
 
 function googleCallback(req, res, next) {
-  const returnBase = String(req.session.oauthReturnBase || oauthService.defaultFrontendOrigin()).replace(/\/$/, '');
+  const returnBase = String(req.session.oauthReturnBase || oauthService.defaultAppOrigin()).replace(/\/$/, '');
   passport.authenticate('google', (err, user) => {
     if (err || !user) {
       return oauthService.redirectAfterOAuth(res, returnBase, '/?error=auth', null);

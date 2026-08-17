@@ -5,7 +5,7 @@ const MongoStore = connectMongo.MongoStore || connectMongo.default || connectMon
 const { isProd, sessionSecret } = require('./env');
 
 const sessionCookieSecure = isProd;
-// Cross-site SPA (different subdomain/port) needs None + Secure in production.
+// OAuth and Capacitor clients require cross-site cookies in production.
 const sessionSameSite = sessionCookieSecure ? 'none' : 'lax';
 
 // Reuse the Mongoose connection's underlying MongoClient instead of opening a

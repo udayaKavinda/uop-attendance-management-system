@@ -99,7 +99,7 @@ server/src/
 │   ├── env.js              # Loads .env, validates secrets, exports config
 │   ├── database.js         # connect/sync-indexes/close + connection events
 │   ├── security.js         # Helmet CSP + HSTS
-│   ├── cors.js             # CORS allowlist (FRONTEND_URL/APP_BASE_URL + Capacitor)
+│   ├── cors.js             # CORS allowlist (CORS_ORIGINS/APP_BASE_URL + Capacitor)
 │   ├── session.js          # express-session backed by MongoStore
 │   ├── passport.js         # Google OAuth strategy + (de)serialize
 │   ├── rateLimit.js        # studentRecordLimiter, oauthLimiter
@@ -164,8 +164,7 @@ Defined / consumed in `config/env.js`, `config/cors.js`, `config/passport.js`,
 | `GOOGLE_CLIENT_ID`        | **yes**           | —                                    | The **Web** OAuth client id. Used twice: the OAuth flow, and as the **audience** when verifying Credential Manager ID tokens. Must equal the app's `GOOGLE_WEB_CLIENT_ID` or every native sign-in fails with `Invalid Google token`. If missing, `/auth/google` and `/api/auth/google-nonce` return 503. |
 | `GOOGLE_CLIENT_SECRET`    | for OAuth         | —                                    | Google OAuth client secret. Needed only for the Custom Tab fallback — ID-token verification does not use it. |
 | `APP_BASE_URL`            | for OAuth         | —                                    | Public base URL of the server; used to build the OAuth callback URL. |
-| `FRONTEND_URL`            | yes               | `http://localhost:3000`              | Comma-separated allowed origins (CORS + OAuth return). First entry is the default redirect target. |
-| `REACT_APP_API_BASE`      | no                | —                                    | Legacy/optional. Used only as a last-resort fallback for the OAuth callback base in `config/passport.js` when `APP_BASE_URL` and `FRONTEND_URL` are both unset. There is **no web frontend** in this repo — the only client is the native Android app. |
+| `CORS_ORIGINS`            | no                | `APP_BASE_URL`                        | Comma-separated browser/Capacitor origins. Native requests without an Origin header are accepted. |
 | `CSP_EXTRA_CONNECT_SRC`   | no                | —                                    | Comma-separated extra `connect-src` origins for CSP. |
 | `CSP_REPORT_ONLY`         | no                | `false`                              | `1`/`true` puts production CSP in report-only mode. |
 | `SESSION_EXPIRE_JOB_MS`   | no                | `60000` (min `10000`)                | Interval for the non-recurring session expiry job. |
@@ -544,7 +543,7 @@ Before deploying:
    `GOOGLE_WEB_CLIENT_ID`; also register an **Android** OAuth client (package +
    SHA-1 of every signing key, incl. Play App Signing) or native sign-in fails.
    Run `npm install` after pulling this change — `google-auth-library` is a new dependency.
-6. Set `FRONTEND_URL` to the real origin(s); set `TZ` to your institution's timezone.
+6. Set `APP_BASE_URL`, configure `CORS_ORIGINS` if needed, and set `TZ` to your institution's timezone.
 7. Review `BOOTSTRAP_ADMIN_EMAIL` (currently a constant) so an unintended account isn't
    auto-promoted to admin.
 

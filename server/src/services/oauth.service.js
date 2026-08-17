@@ -3,7 +3,7 @@ const {
   CAPACITOR_RETURN_ORIGINS,
   NATIVE_OAUTH_RETURN_BASES,
 } = require('../utils/constants');
-const { corsOrigins, defaultFrontendOrigin } = require('../config/cors');
+const { corsOrigins, defaultAppOrigin } = require('../config/cors');
 
 function allowedOAuthReturnOrigins() {
   return new Set([...corsOrigins, ...CAPACITOR_RETURN_ORIGINS, ...NATIVE_OAUTH_RETURN_BASES]);
@@ -13,7 +13,7 @@ function pickOAuthReturnBase(req) {
   const allowed = allowedOAuthReturnOrigins();
   const requested = String(req.query.returnTo || '').trim().replace(/\/$/, '');
   if (requested && allowed.has(requested)) return requested;
-  return defaultFrontendOrigin();
+  return defaultAppOrigin();
 }
 
 const oauthExchangeCodes = new Map();
@@ -49,7 +49,7 @@ function isCustomSchemeOAuthReturn(returnBase) {
 }
 
 function publicAppOrigin() {
-  return (process.env.APP_BASE_URL || process.env.FRONTEND_URL || '')
+  return (process.env.APP_BASE_URL || '')
     .split(',')[0]
     .trim()
     .replace(/\/$/, '');
@@ -102,5 +102,5 @@ module.exports = {
   consumeOAuthExchangeCode,
   redirectAfterOAuth,
   buildNativeReturnHtml,
-  defaultFrontendOrigin,
+  defaultAppOrigin,
 };

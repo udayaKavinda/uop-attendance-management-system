@@ -1,4 +1,4 @@
-const { applyCors, corsOrigins, defaultFrontendOrigin } = require('./cors');
+const { applyCors, corsOrigins, defaultAppOrigin } = require('./cors');
 const { applySecurity } = require('./security');
 const { applySession } = require('./session');
 const { applyPassport, isGoogleOAuthConfigured } = require('./passport');
@@ -12,7 +12,7 @@ module.exports = {
   applyPassport,
   isGoogleOAuthConfigured,
   corsOrigins,
-  defaultFrontendOrigin,
+  defaultAppOrigin,
   studentRecordLimiter,
   oauthLimiter,
   connectDatabase,

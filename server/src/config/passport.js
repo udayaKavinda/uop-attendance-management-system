@@ -8,7 +8,7 @@ function isGoogleOAuthConfigured() {
 }
 
 function getCallbackURL() {
-  const appBaseUrl = process.env.APP_BASE_URL || process.env.FRONTEND_URL || process.env.REACT_APP_API_BASE || '';
+  const appBaseUrl = process.env.APP_BASE_URL || '';
   return appBaseUrl ? `${appBaseUrl.replace(/\/$/, '')}/auth/google/callback` : '/auth/google/callback';
 }
 

@@ -36,7 +36,7 @@ jobs:
           cd "$APP_DIR"
           git fetch --all --prune
           git reset --hard origin/$DEPLOY_BRANCH
-          git clean -fdx -e .env -e build -e node_modules
+          git clean -fdx -e .env
 
       - name: Server syntax check
         run: |
@@ -46,12 +46,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd "$APP_DIR"
-          PATH=/usr/bin:$PATH /usr/bin/npm install --no-audit --no-fund
-
-      - name: Build SPA
-        run: |
-          cd "$APP_DIR"
-          PATH=/usr/bin:$PATH REACT_APP_API_BASE="" CI=false /usr/bin/npm run build
+          PATH=/usr/bin:$PATH /usr/bin/npm --prefix server ci --omit=dev --no-audit --no-fund
 
       - name: Restart attendance service
         run: sudo /bin/systemctl restart attendance
