@@ -31,7 +31,12 @@ jest.mock('../models/BleToken', () => ({
 jest.mock('../models/Person', () => ({ findById: jest.fn(), findOne: jest.fn() }));
 jest.mock('../models/Course', () => ({ findById: jest.fn(), findOne: jest.fn() }));
 jest.mock('../models/LectureSession', () => ({ findOne: jest.fn(), find: jest.fn() }));
-jest.mock('../models/Attendance', () => ({ findOne: jest.fn(), create: jest.fn(), distinct: jest.fn() }));
+jest.mock('../models/Attendance', () => ({
+  findOne: jest.fn(),
+  create: jest.fn(),
+  distinct: jest.fn(),
+  countDocuments: jest.fn().mockResolvedValue(0),
+}));
 
 const request = require('supertest');
 const mongoose = require('mongoose');
@@ -356,13 +361,14 @@ describe('GET /api/admin/sessions/:id/broadcast', () => {
     expect(res.body.error).toMatch(/not on/i);
   });
 
-  test('200 — returns deviceName, token, rotatesIn, rotationMs and stamps heartbeat', async () => {
+  test('200 — returns deviceName, token, rotatesIn, rotationMs, attendanceCount, minutesRemaining and stamps heartbeat', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const course = makeCourse({ lecturers: [String(lecturer._id)] });
     const staleStamp = new Date(Date.now() - 60_000);
     const session = makeSession({ course: course._id, lastBroadcastSeenAt: staleStamp });
 
     await bluetoothCode.getToken(String(session._id)); // seed
+    Attendance.countDocuments.mockResolvedValueOnce(3);
 
     Person.findById.mockResolvedValue(lecturer);
     LectureSession.findOne.mockResolvedValue(session);
@@ -378,6 +384,10 @@ describe('GET /api/admin/sessions/:id/broadcast', () => {
     expect(res.body.token).toMatch(/^[0-9a-f]{16}$/);
     expect(typeof res.body.rotatesIn).toBe('number');
     expect(res.body.rotationMs).toBe(15000);
+    // Live "students marked" count and time-remaining, surfaced in the app's
+    // notification/dashboard instead of the raw token or rotation countdown.
+    expect(res.body.attendanceCount).toBe(3);
+    expect(typeof res.body.minutesRemaining).toBe('number');
 
     // The poll doubles as the heartbeat: the stale stamp must be refreshed.
     expect(session.save).toHaveBeenCalled();

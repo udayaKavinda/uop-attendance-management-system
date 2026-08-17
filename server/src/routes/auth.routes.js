@@ -19,6 +19,11 @@ if (!isGoogleOAuthConfigured()) {
 /** Session API under /api/* */
 const apiAuthRouter = express.Router();
 
+// Credential Manager (native Google sign-in) — the primary path for the Android app.
+apiAuthRouter.get('/auth/google-nonce', oauthLimiter, authController.googleNonce);
+apiAuthRouter.post('/auth/google-id-token', oauthLimiter, asyncHandler(authController.googleIdToken));
+
+// Custom Tab OAuth fallback — kept so already-installed app versions keep working.
 apiAuthRouter.post('/auth/exchange-code', oauthLimiter, asyncHandler(authController.exchangeCode));
 apiAuthRouter.get('/me', requireAnyAuth, asyncHandler(authController.me));
 apiAuthRouter.post('/logout', authController.logout);

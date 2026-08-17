@@ -1,6 +1,6 @@
 const session = require('express-session');
 const mongoose = require('mongoose');
-const MongoStore = require('connect-mongo');
+const { MongoStore } = require('connect-mongo');
 const { isProd, sessionSecret } = require('./env');
 
 const sessionCookieSecure = isProd;

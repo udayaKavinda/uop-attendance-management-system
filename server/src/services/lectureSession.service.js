@@ -1,8 +1,11 @@
 const LectureSession = require('../models/LectureSession');
 const Course = require('../models/Course');
+const Attendance = require('../models/Attendance');
 const bluetoothCode = require('./bluetoothCode.service');
 const { validateSessionCreateBody, checkSessionOverlap } = require('../validators/session.validator');
 const { staffSessionMatch } = require('./auth.service');
+const { localYmd } = require('../utils/date');
+const { toMinutes } = require('../utils/schedule');
 const {
   BROADCAST_WINDOW_ERROR,
   invalidateActiveSessionCache,
@@ -154,6 +157,19 @@ async function getBroadcast(sessionItem) {
   sessionItem.lastBroadcastSeenAt = new Date();
   await sessionItem.save();
   const { token, rotatesIn } = await bluetoothCode.getToken(String(sessionItem._id));
+
+  // Surfaced in the Android foreground-service notification and dashboard card so the
+  // broadcast is visibly doing something user-perceptible while backgrounded (Play FGS
+  // policy) — a live "students marked" count and time-remaining, not the raw token.
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const endMinutes = toMinutes(sessionItem.endTime);
+  const minutesRemaining = endMinutes === null ? null : Math.max(0, endMinutes - currentMinutes);
+  const attendanceCount = await Attendance.countDocuments({
+    session: sessionItem._id,
+    attendanceDate: localYmd(now),
+  });
+
   return {
     ok: true,
     data: {
@@ -163,6 +179,8 @@ async function getBroadcast(sessionItem) {
       token,
       rotatesIn,
       rotationMs: bluetoothCode.ROTATION_MS,
+      attendanceCount,
+      minutesRemaining,
     },
   };
 }

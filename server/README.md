@@ -39,6 +39,7 @@ The server is an **application factory** (`app.js`) with a clean layered archite
 | HTTP framework  | `express` ^5                         |
 | Database / ODM  | `mongoose` ^9 (MongoDB)              |
 | Auth            | `passport` + `passport-google-oauth20` |
+| Google ID tokens| `google-auth-library` (Credential Manager sign-in) |
 | Sessions        | `express-session` + `connect-mongo`  |
 | Security headers| `helmet`                             |
 | CORS            | `cors`                               |
@@ -111,13 +112,14 @@ server/src/
 │   ├── testAuth.js         # Test-only auth shim (NODE_ENV=test)
 │   └── index.js
 ├── models/                 # Person, Course, LectureSession, Attendance, BleToken
-├── controllers/            # auth, courses, attendance, bluetooth, health, admin/*
+├── controllers/            # auth, courses, attendance, bluetooth, health, pages, admin/*
 ├── services/               # auth, course, lectureSession, attendance, session,
-│                           # oauth, bluetoothCode, lecturer, bootstrap, sessionExpiry
-├── routes/                 # auth, courses, attendance, bluetooth, health, admin/*
+│                           # oauth, googleIdentity, bluetoothCode, lecturer,
+│                           # bootstrap, sessionExpiry
+├── routes/                 # auth, courses, attendance, bluetooth, health, pages, admin/*
 ├── validators/             # attendance, course, session, lecturer, oauth
 ├── utils/                  # constants, schedule, date, regex, attendanceLabels, lecturerIds
-└── tests/                  # jest suites (ble.routes, bluetoothCode, schedule, auth.service, session.window)
+└── tests/                  # jest suites (ble.routes, bluetoothCode, schedule, auth.service, session.window, pages.routes)
 ```
 
 ---
@@ -134,7 +136,7 @@ server/src/
 ```bash
 # from the server/ folder
 npm install
-cp .env.example .env       # then fill in values
+cp ../.env.example .env    # .env.example lives at the repo root; fill in values
 
 # run the server
 npm start
@@ -159,8 +161,8 @@ Defined / consumed in `config/env.js`, `config/cors.js`, `config/passport.js`,
 | `MONGO_URI`               | no (prod: yes)    | `mongodb://localhost:27017/attendance` | MongoDB connection string. |
 | `SESSION_SECRET`          | **prod: yes**     | `dev-only-secret` (dev only)         | Session cookie signing secret. Server **exits** if unset in production. |
 | `BLE_SECRET`              | **prod: yes**     | `uop-ble-dev-secret-change-me` (dev) | Required in production (fail-fast). Rotating BLE tokens are random values stored in `BleToken`; this env var is reserved for future signing — not used by `bluetoothCode.service.js` today. |
-| `GOOGLE_CLIENT_ID`        | for OAuth         | —                                    | Google OAuth client id. If missing, `/auth/google` returns 503. |
-| `GOOGLE_CLIENT_SECRET`    | for OAuth         | —                                    | Google OAuth client secret. |
+| `GOOGLE_CLIENT_ID`        | **yes**           | —                                    | The **Web** OAuth client id. Used twice: the OAuth flow, and as the **audience** when verifying Credential Manager ID tokens. Must equal the app's `GOOGLE_WEB_CLIENT_ID` or every native sign-in fails with `Invalid Google token`. If missing, `/auth/google` and `/api/auth/google-nonce` return 503. |
+| `GOOGLE_CLIENT_SECRET`    | for OAuth         | —                                    | Google OAuth client secret. Needed only for the Custom Tab fallback — ID-token verification does not use it. |
 | `APP_BASE_URL`            | for OAuth         | —                                    | Public base URL of the server; used to build the OAuth callback URL. |
 | `FRONTEND_URL`            | yes               | `http://localhost:3000`              | Comma-separated allowed origins (CORS + OAuth return). First entry is the default redirect target. |
 | `REACT_APP_API_BASE`      | no                | —                                    | Legacy/optional. Used only as a last-resort fallback for the OAuth callback base in `config/passport.js` when `APP_BASE_URL` and `FRONTEND_URL` are both unset. There is **no web frontend** in this repo — the only client is the native Android app. |
@@ -243,20 +245,53 @@ TTL index: auto-delete 3600s after `updatedAt` (safety cleanup).
 
 ## Authentication & Authorization
 
-### Sign-in (Google OAuth 2.0)
+Two sign-in paths converge on the **same Passport session**. Whichever is used, the
+server ends with `req.logIn(person)`, sets `attendance.sid`, and every guard, route and
+role check downstream behaves identically.
+
+### Path A — Google ID token (Credential Manager) — primary
+
+The Android app obtains a Google ID token natively (no browser) and posts it here.
+
+1. `GET /api/auth/google-nonce` issues a single-use nonce (32-byte random, 5-minute TTL).
+2. The app passes it to Credential Manager; Google embeds it in the ID token.
+3. `POST /api/auth/google-id-token` verifies the token with `google-auth-library`:
+   signature, **audience == `GOOGLE_CLIENT_ID`**, issuer, expiry — then requires
+   `email_verified` and consumes the nonce (single use, so a replayed token is rejected).
+4. `upsertGooglePerson()` resolves the `Person`, then `req.logIn()` opens the session.
+
+Only `GOOGLE_CLIENT_ID` is needed to verify — the client *secret* is not used on this path.
+
+### Path B — Google OAuth 2.0 via Custom Tab — fallback
+
+Kept for devices without Google Play services / a Google account, and for
+already-installed older app versions.
+
 1. Client hits `GET /auth/google?returnTo=<native-scheme>` → redirect to Google with
-   `prompt=select_account` (always — server is native-app only, so users pick a Google
-   account after app sign-out instead of silently reusing the Custom Tab session).
+   `prompt=select_account`.
 2. Google redirects back to `GET /auth/google/callback`.
-3. On first login a `Person` (role `student`) is created from the Google profile.
-4. If a matching active **lecturer** record exists for that email, the role is honored;
-   a lecturer whose account is no longer active is demoted to `student`.
-5. Passport serializes `user._id` into the session; `deserializeUser` loads the `Person`.
+3. Passport's verify callback calls the same `upsertGooglePerson()`.
+4. Passport serializes `user._id` into the session; `deserializeUser` loads the `Person`.
 
 Native logins (`lk.ac.pdn.eng.attendance://oauth` or legacy `lk.uop.attendance://oauth`,
 both in `NATIVE_OAUTH_RETURN_BASES`) bounce through `/auth/native-return` and use a
 one-time **exchange code** (32-byte random, 2-minute TTL) consumed at
 `POST /api/auth/exchange-code`.
+
+### Shared Person resolution
+
+`services/googleIdentity.service.js` owns `upsertGooglePerson({ email, googleSub })`, used
+by **both** paths so they can never drift:
+
+- On first login a `Person` (role `student`) is created from the Google identity.
+- `studentId` stores Google's stable subject — the ID token's `sub` equals Passport's
+  `profile.id`, so an account created on one path is found (not duplicated) on the other.
+- Email is matched case-insensitively and normalised to lower case.
+- Synthetic ids (`dir:`, `dir-`, `pending:`) are upgraded to the real Google subject.
+- If a matching active **lecturer** record exists for that email, the role is honored;
+  a lecturer whose account is no longer active is demoted to `student`.
+- The Google profile **name is deliberately not written** — lecturer display names are
+  curated by admins and must not be overwritten at sign-in.
 
 ### Authorization guards (`middlewares/requireAuth.js`)
 | Guard                 | Allows |
@@ -287,7 +322,11 @@ Passport session — never from client headers.
   Stored in MongoDB with a 7-day TTL and 1-hour touch throttle. The session store reuses the
   Mongoose connection (single connection pool).
 - **Rate limiting** — `studentRecordLimiter` (60/min, keyed by user id or IP) on attendance
-  recording; `oauthLimiter` (20/min) on OAuth endpoints.
+  recording; `oauthLimiter` (20/min) on OAuth endpoints, including the nonce and
+  ID-token routes (two calls per sign-in → ~10 attempts/min).
+- **ID token verification** — signature, audience (`GOOGLE_CLIENT_ID`), issuer and expiry
+  are checked by `google-auth-library`; `email_verified` is required; a single-use nonce
+  blocks replay of a captured token. Tokens are never trusted by decoding alone.
 - **Request body cap** — `express.json({ limit: '256kb' })`.
 - **Fail-fast secrets** — production exits if `SESSION_SECRET` or `BLE_SECRET` is unset.
 - **Regex injection** — user search input is escaped (`utils/regex.js`) before building queries.
@@ -305,12 +344,23 @@ All error responses are `{ "error": "<message>" }`. Mutating `/api/*` calls requ
 |--------|----------------|------|-------------|
 | GET    | `/api/healthz` | none | `200` `{ status:"ok", mongo, uptime, memory, version }`; `503` when MongoDB is down. |
 
+### Pages
+Plain HTML, mounted at `/` (not `/api`), no auth, no CSRF guard. Required for Google
+Play's privacy-policy and account-deletion listing requirements.
+
+| Method | Path       | Auth | Description |
+|--------|------------|------|-------------|
+| GET    | `/privacy` | none | Privacy policy page. |
+| GET    | `/delete`  | none | Account-deletion instructions (email-based request). |
+
 ### Auth / Session
 | Method | Path                      | Auth          | Description |
 |--------|---------------------------|---------------|-------------|
+| GET    | `/api/auth/google-nonce`    | none        | Single-use nonce (5-min TTL) for Credential Manager sign-in. `503` if `GOOGLE_CLIENT_ID` is unset. *rate-limited.* |
+| POST   | `/api/auth/google-id-token` | none (token)| Verify a Google ID token → establishes a session. Body `{ idToken }`. `400` malformed, `401` invalid/replayed nonce, `403` unverified email. *rate-limited.* |
 | GET    | `/auth/google`            | none          | Start Google OAuth (saves `returnTo`, adds `prompt=select_account`). 503 if OAuth not configured. |
 | GET    | `/auth/google/callback`   | none          | OAuth callback; logs in and redirects. |
-| GET    | `/auth/native-return`     | none          | HTML deep-link bounce for native apps (validates `target`). |
+| GET    | `/auth/native-return`     | none          | HTML deep-link bounce for native apps (validates `target`); sends a route-scoped CSP so the inline redirect runs. |
 | POST   | `/api/auth/exchange-code` | none (code)   | Consume a one-time native exchange code → establishes a session. |
 | GET    | `/api/me`                 | any           | `{ studentId, email, role, lecturerId }`. |
 
@@ -353,7 +403,7 @@ All error responses are `{ "error": "<message>" }`. Mutating `/api/*` calls requ
 | PATCH  | `/:sessionId/activate`                | staff + session access | Activate (fails if course disabled). |
 | PATCH  | `/:sessionId/deactivate`              | staff + session access | Deactivate (turns broadcast off, removes token). |
 | PATCH  | `/:sessionId/broadcast`               | staff + session access | Single broadcast switch. Body `{ on: boolean }`. **On** requires an active session, enabled course, and the current time inside the session's schedule window; seeds device name + token. **Off** is unconditional. |
-| GET    | `/:sessionId/broadcast`               | staff + session access | Current token + `rotatesIn`/`rotationMs`. Each poll stamps the **heartbeat**; `400` when off or outside the schedule window (poll auto-closes the broadcast). |
+| GET    | `/:sessionId/broadcast`               | staff + session access | Current token + `rotatesIn`/`rotationMs`, plus `attendanceCount` (today's marked count for this session) and `minutesRemaining` (time left in the schedule window) — the Android app surfaces these two in its foreground-service notification and dashboard card instead of the raw token. Each poll stamps the **heartbeat**; `400` when off or outside the schedule window (poll auto-closes the broadcast). |
 | GET    | `/:sessionId/attendance`              | staff + session access | Attendance records for the session. |
 
 ### Admin — Lecturers (`/api/admin/lecturers`)
@@ -414,6 +464,10 @@ Token logic lives in `services/bluetoothCode.service.js`.
 - **OAuth exchange-code sweep** (`services/oauth.service.js`) — every 5 minutes, purges
   expired native exchange codes. *(In-memory `Map`; single-process only — move to a shared
   store for horizontal scaling.)*
+- **Sign-in nonce sweep** (`services/googleIdentity.service.js`) — every 5 minutes, purges
+  expired Credential Manager nonces. *(Same in-memory caveat: with more than one instance
+  behind a load balancer, a nonce issued by one process is unknown to another and sign-in
+  fails intermittently — move to Redis before scaling out.)*
 
 ---
 
@@ -465,6 +519,12 @@ Suites:
 - `schedule.test.js` — `toMinutes`, overlap detection, non-recurring expiry.
 - `auth.service.test.js` — role authorization (`getPersonFromRequest`, staff/admin/student).
 - `session.window.test.js` — schedule-window resolution + cache-invalidation helper.
+- `googleIdToken.test.js` — Credential Manager sign-in: nonce issue/single-use, audience
+  check, CSRF guard, malformed/rejected tokens, unverified email, replay rejection,
+  Person create/reuse and lecturer demotion. Google's verifier and `Person` are mocked,
+  so it needs neither network nor MongoDB.
+- `pages.routes.test.js` — `/privacy` and `/delete` return 200 HTML and cross-link each
+  other; confirms neither route is gated by the CSRF middleware.
 
 Tests use the `testAuth` shim: when `NODE_ENV=test`, an `x-test-user` JSON header injects
 `req.user`, so authenticated requests can be simulated without mocking Passport.
@@ -480,6 +540,10 @@ Before deploying:
 3. Use an authenticated `MONGO_URI` (not `localhost`).
 4. Serve over HTTPS (required for `Secure`/`SameSite=None` cookies and HSTS).
 5. Configure `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` and a correct `APP_BASE_URL`.
+   `GOOGLE_CLIENT_ID` must be the **Web** client id and must match the Android app's
+   `GOOGLE_WEB_CLIENT_ID`; also register an **Android** OAuth client (package +
+   SHA-1 of every signing key, incl. Play App Signing) or native sign-in fails.
+   Run `npm install` after pulling this change — `google-auth-library` is a new dependency.
 6. Set `FRONTEND_URL` to the real origin(s); set `TZ` to your institution's timezone.
 7. Review `BOOTSTRAP_ADMIN_EMAIL` (currently a constant) so an unintended account isn't
    auto-promoted to admin.
@@ -495,8 +559,8 @@ Before deploying:
 - `/api/healthz` returns `503` when MongoDB is disconnected — wire it to your liveness/readiness probe.
 
 **Known scaling limits (single-process state)**
-- OAuth exchange codes and the session-resolve cache live in-memory; move to Redis before
-  running multiple instances.
+- OAuth exchange codes, Credential Manager sign-in nonces, and the session-resolve cache
+  live in-memory; move to Redis before running multiple instances.
 - Large reports (`attendance-matrix`, session attendance lists) are unpaginated and built in
   memory — consider aggregation/pagination for very large cohorts.
 

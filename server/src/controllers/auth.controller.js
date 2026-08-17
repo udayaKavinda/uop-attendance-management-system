@@ -1,7 +1,8 @@
 const passport = require('passport');
 const Person = require('../models/Person');
 const oauthService = require('../services/oauth.service');
-const { validateExchangeCode } = require('../validators/oauth.validator');
+const googleIdentityService = require('../services/googleIdentity.service');
+const { validateExchangeCode, validateGoogleIdToken } = require('../validators/oauth.validator');
 const { respondError } = require('../middlewares/errorHandler');
 const { NATIVE_OAUTH_RETURN_BASES } = require('../utils/constants');
 
@@ -71,6 +72,38 @@ async function exchangeCode(req, res) {
   });
 }
 
+/**
+ * Step 1 of Credential Manager sign-in: hand the app a single-use nonce that
+ * Google will embed in the ID token, so a replayed token cannot be reused.
+ */
+function googleNonce(req, res) {
+  if (!googleIdentityService.isIdTokenSignInConfigured()) {
+    return res.status(503).json({
+      error: 'Google sign-in not configured',
+      message: 'Add GOOGLE_CLIENT_ID to .env and restart the server.',
+    });
+  }
+  return res.json({ nonce: googleIdentityService.issueSignInNonce() });
+}
+
+/**
+ * Step 2 of Credential Manager sign-in: verify the Google ID token the app got
+ * natively, then establish the SAME Passport session the Custom Tab flow does —
+ * so every downstream route, guard and cookie behaves identically.
+ */
+async function googleIdToken(req, res) {
+  const validated = validateGoogleIdToken(req.body);
+  if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
+
+  const result = await googleIdentityService.signInWithGoogleIdToken(validated.idToken);
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  req.logIn(result.person, (err) => {
+    if (err) return res.status(500).json({ error: 'Session error' });
+    return res.json({ success: true });
+  });
+}
+
 async function me(req, res) {
   const person = req.auth.person;
   return res.json({
@@ -94,6 +127,8 @@ module.exports = {
   nativeReturn,
   googleCallback,
   exchangeCode,
+  googleNonce,
+  googleIdToken,
   me,
   logout,
 };

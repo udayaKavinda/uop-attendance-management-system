@@ -27,6 +27,7 @@
     "helmet": "^8.0.0",
     "cors": "^2.8.5",
     "express-rate-limit": "^7.0.0",
-    "dotenv": "^16.0.0"
+    "dotenv": "^16.0.0",
+    "google-auth-library": "^9.14.1"
   }
-}
+}
