@@ -10,11 +10,13 @@ const settingsSchema = new mongoose.Schema({
   manualCodeAllowed: { type: Boolean, default: true },
 
   /**
-   * Constrains which `verification` values a session may pick (see
-   * LectureSession.verification). Applies to NEW sessions only — an in-flight
-   * broadcast/geofence session is never stranded by a policy change.
+   * Per-policy global switches. The admin turns each verification policy on or
+   * off here; a lecturer then picks whichever enabled policy suits the session
+   * they're creating. Applies to NEW sessions only — an in-flight broadcast or
+   * geofence session is never stranded by a policy change.
    */
-  allowedModes: { type: String, enum: ['bluetooth', 'geofence', 'both'], default: 'bluetooth' },
+  bluetoothAllowed: { type: Boolean, default: true },
+  geofenceAllowed: { type: Boolean, default: false },
 
   /** Target concurrent BLE seeder count. 0 disables peer seeding entirely. */
   seedRate: { type: Number, default: 0, min: 0 },

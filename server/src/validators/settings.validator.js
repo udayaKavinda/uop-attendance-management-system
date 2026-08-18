@@ -1,5 +1,3 @@
-const ALLOWED_MODES = ['bluetooth', 'geofence', 'both'];
-
 /**
  * Body for PATCH /api/admin/settings. Every field is independently optional —
  * only recognized ones are applied. At least one must be present.
@@ -8,18 +6,13 @@ function validateSettingsBody(body) {
   const b = body || {};
   const result = {};
 
-  if ('manualCodeAllowed' in b) {
-    if (typeof b.manualCodeAllowed !== 'boolean') {
-      return { ok: false, status: 400, error: 'manualCodeAllowed must be a boolean' };
+  for (const flag of ['manualCodeAllowed', 'bluetoothAllowed', 'geofenceAllowed']) {
+    if (flag in b) {
+      if (typeof b[flag] !== 'boolean') {
+        return { ok: false, status: 400, error: `${flag} must be a boolean` };
+      }
+      result[flag] = b[flag];
     }
-    result.manualCodeAllowed = b.manualCodeAllowed;
-  }
-
-  if ('allowedModes' in b) {
-    if (!ALLOWED_MODES.includes(b.allowedModes)) {
-      return { ok: false, status: 400, error: 'allowedModes must be "bluetooth", "geofence", or "both"' };
-    }
-    result.allowedModes = b.allowedModes;
   }
 
   if ('seedRate' in b) {
@@ -60,4 +53,4 @@ function validateSettingsBody(body) {
   return { ok: true, ...result };
 }
 
-module.exports = { validateSettingsBody, ALLOWED_MODES };
+module.exports = { validateSettingsBody };

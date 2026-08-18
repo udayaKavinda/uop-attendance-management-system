@@ -4,7 +4,10 @@ const { validateSettingsBody } = require('../../validators/settings.validator');
 function shape(settings) {
   return {
     manualCodeAllowed: settings.manualCodeAllowed,
-    allowedModes: settings.allowedModes,
+    bluetoothAllowed: settings.bluetoothAllowed,
+    geofenceAllowed: settings.geofenceAllowed,
+    // Derived so the create-session UI doesn't have to re-implement the rule.
+    allowedVerifications: settingsService.allowedVerifications(settings),
     seedRate: settings.seedRate,
     seedWindowMs: settings.seedWindowMs,
     bufferGpsOnly: settings.bufferGpsOnly,

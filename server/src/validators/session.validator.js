@@ -48,11 +48,11 @@ function validateSessionCreateBody(body) {
 /** Async, mirrors checkSessionOverlap below: DB-backed rule, not a pure shape check. */
 async function checkVerificationAllowed(verification) {
   const settings = await settingsService.getSettings();
-  if (!settingsService.isVerificationAllowed(settings.allowedModes, verification)) {
+  if (!settingsService.isVerificationAllowed(settings, verification)) {
     return {
       ok: false,
       status: 400,
-      error: `Verification mode "${verification}" is not permitted (server is set to "${settings.allowedModes}")`,
+      error: `Verification mode "${verification}" is disabled by the administrator`,
     };
   }
   return { ok: true };

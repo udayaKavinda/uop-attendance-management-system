@@ -274,6 +274,9 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         recurring: Boolean,
         verification: String = "bluetooth",
         buildings: List<String> = emptyList(),
+        manualCodeEnabled: Boolean = false,
+        manualCodeRotationMode: String = "none",
+        manualCodeRotationSeconds: Int = 60,
     ) {
         if (courseId.isBlank()) { setError("Choose a course first."); return }
         if (verification != "bluetooth" && buildings.isEmpty()) {
@@ -283,7 +286,24 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val req = CreateSessionReq(day.uppercase(), start, end, recurring, verification, buildings)
             when (val res = repo.createSession(courseId, req)) {
-                is ApiResult.Success -> { setFlash("Session created."); refresh() }
+                is ApiResult.Success -> {
+                    val sessionId = res.data?.id
+                    // Manual code isn't part of session creation server-side (it's a
+                    // separate config surface, same as broadcast) — apply it as an
+                    // immediate follow-up so the whole form submits as one action.
+                    if (manualCodeEnabled && sessionId != null) {
+                        repo.setManualCode(
+                            sessionId,
+                            ManualCodeConfigReq(
+                                enabled = true,
+                                rotationMode = manualCodeRotationMode,
+                                rotationSeconds = manualCodeRotationSeconds,
+                            ),
+                        )
+                    }
+                    setFlash("Session created.")
+                    refresh()
+                }
                 is ApiResult.Error -> setError(res.message)
             }
         }
@@ -361,12 +381,6 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setManualCodeEnabled(sessionId: String, enabled: Boolean) =
-        patchManualCode(sessionId, ManualCodeConfigReq(enabled = enabled))
-
-    fun setManualCodeRotation(sessionId: String, rotationMode: String, rotationSeconds: Int) =
-        patchManualCode(sessionId, ManualCodeConfigReq(rotationMode = rotationMode, rotationSeconds = rotationSeconds))
-
     fun pauseManualCode(sessionId: String) = patchManualCode(sessionId, ManualCodeConfigReq(paused = true))
     fun resumeManualCode(sessionId: String) = patchManualCode(sessionId, ManualCodeConfigReq(paused = false))
     fun regenerateManualCode(sessionId: String) = patchManualCode(sessionId, ManualCodeConfigReq(regenerate = true))
@@ -402,8 +416,15 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    /** "bluetooth" | "geofence" | "both" — constrains verification for new sessions only. */
-    fun setAllowedModes(mode: String) = patchSettings(SettingsReq(allowedModes = mode), "Verification policy updated.")
+    fun setBluetoothAllowed(allowed: Boolean) = patchSettings(
+        SettingsReq(bluetoothAllowed = allowed),
+        if (allowed) "Bluetooth verification enabled." else "Bluetooth verification disabled.",
+    )
+
+    fun setGeofenceAllowed(allowed: Boolean) = patchSettings(
+        SettingsReq(geofenceAllowed = allowed),
+        if (allowed) "GPS geofence verification enabled." else "GPS geofence verification disabled.",
+    )
 
     fun setSeedingParams(seedRate: Int, seedWindowMs: Long) =
         patchSettings(SettingsReq(seedRate = seedRate, seedWindowMs = seedWindowMs), "Seeding settings updated.")

@@ -29,14 +29,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.MyLocation
+import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.Rule
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -87,7 +95,6 @@ import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
 import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
 import lk.ac.pdn.eng.feats.ui.components.AppCard
 import lk.ac.pdn.eng.feats.ui.components.AppTextField
-import lk.ac.pdn.eng.feats.ui.components.DeviceBadge
 import lk.ac.pdn.eng.feats.ui.components.EmptyState
 import lk.ac.pdn.eng.feats.ui.components.ErrorBanner
 import lk.ac.pdn.eng.feats.ui.components.PillButton
@@ -111,7 +118,7 @@ fun StaffDashboardScreen(
 
     val tabs = buildList {
         add("Courses"); add("Create session"); add("Sessions")
-        if (state.isAdmin) { add("Lecturers"); add("Geofences") }
+        if (state.isAdmin) { add("Lecturers"); add("Geofences"); add("Settings") }
     }
 
     LaunchedEffect(state.flash) {
@@ -160,6 +167,7 @@ fun StaffDashboardScreen(
             "Sessions" -> SessionsTab(state, vm)
             "Lecturers" -> LecturersTab(state, vm)
             "Geofences" -> GeofencesTab(state, vm)
+            "Settings" -> SettingsTab(state, vm)
         }
     }
 }
@@ -377,17 +385,23 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
     var showTimePicker by remember { mutableStateOf(false) }
     var pickingStart by remember { mutableStateOf(true) }
 
-    // The global policy constrains which modes may be picked at all; while it's
-    // still loading, fall back to the safe default (Bluetooth only, unchanged UX).
-    val allowedModes = state.settings?.allowedModes ?: "bluetooth"
-    var verification by remember(allowedModes) {
-        mutableStateOf(if (allowedModes == "both") "bluetooth" else allowedModes)
-    }
+    // Whichever policies the admin enabled globally; while settings are still
+    // loading, fall back to the safe default (Bluetooth only, unchanged UX).
+    val allowed = state.settings?.allowedVerifications ?: listOf("bluetooth")
+    var verification by remember(allowed) { mutableStateOf(allowed.firstOrNull() ?: "bluetooth") }
+    val manualCodeAllowedGlobally = state.settings?.manualCodeAllowed != false
     var selectedBuildingIds by remember { mutableStateOf(setOf<String>()) }
     val needsBuildings = verification != "bluetooth"
 
+    // Manual attendance code — configured here at creation time; the session card
+    // in the Sessions tab only shows live controls (reveal/pause/regenerate) once
+    // this is on, not a separate enable switch.
+    var manualCodeEnabled by remember { mutableStateOf(false) }
+    var manualCodeRotates by remember { mutableStateOf(false) }
+    var manualCodeSeconds by remember { mutableStateOf("60") }
+
     val canCreate = courseId != null && start.isNotBlank() && end.isNotBlank() &&
-        (!needsBuildings || selectedBuildingIds.isNotEmpty())
+        allowed.isNotEmpty() && (!needsBuildings || selectedBuildingIds.isNotEmpty())
 
     if (showTimePicker) {
         val (initH, initM) = parseTime(if (pickingStart) start else end)
@@ -456,16 +470,29 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
                     Text("Recurring (weekly) session", fontSize = 14.sp)
                 }
 
-                // Only rendered at all when the server's allowedModes policy permits a
-                // choice — a "bluetooth"-only or "geofence"-only policy forces the mode
-                // silently instead of showing a picker with nothing to pick.
-                if (allowedModes == "both") {
-                    Spacer(Modifier.height(8.dp))
-                    LabeledDropdown(
+                // Pick from whatever the admin enabled globally. With exactly one
+                // enabled there's nothing to choose, so show it as plain text rather
+                // than a single-option dropdown.
+                Spacer(Modifier.height(8.dp))
+                when {
+                    allowed.isEmpty() -> ErrorBanner(
+                        "No verification policy is enabled. Ask an administrator to enable one in Settings.",
+                    )
+                    allowed.size == 1 -> {
+                        Text("Verification", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            VERIFICATION_LABELS[verification].orEmpty(),
+                            color = Palette.Ink,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                    else -> LabeledDropdown(
                         label = "Verification",
                         selectedText = VERIFICATION_LABELS[verification].orEmpty(),
                         placeholder = "Choose verification",
-                        options = VERIFICATION_LABELS.map { (k, v) -> k to v },
+                        options = allowed.map { it to VERIFICATION_LABELS[it].orEmpty() },
                         onSelect = { verification = it },
                     )
                 }
@@ -499,13 +526,53 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
+                if (manualCodeAllowedGlobally) {
+                    Spacer(Modifier.height(14.dp))
+                    androidx.compose.material3.HorizontalDivider(color = Palette.Border)
+                    Spacer(Modifier.height(14.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("Manual attendance code", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Lecturer-controlled fallback alongside automatic verification.",
+                                color = Palette.Muted,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        Switch(checked = manualCodeEnabled, onCheckedChange = { manualCodeEnabled = it })
+                    }
+                }
+                if (manualCodeAllowedGlobally && manualCodeEnabled) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = manualCodeRotates, onCheckedChange = { manualCodeRotates = it })
+                        Text("Rotate automatically", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        if (manualCodeRotates) {
+                            AppTextField(
+                                manualCodeSeconds,
+                                { manualCodeSeconds = it.filter(Char::isDigit) },
+                                "",
+                                placeholder = "60",
+                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                                modifier = Modifier.width(90.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text("sec", color = Palette.Muted, fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
                 PrimaryButton(
                     text = "Create session",
                     onClick = {
                         vm.createSession(
                             courseId.orEmpty(), day, start, end, recurring,
                             verification, selectedBuildingIds.toList(),
+                            manualCodeEnabled = manualCodeEnabled,
+                            manualCodeRotationMode = if (manualCodeRotates) "interval" else "none",
+                            manualCodeRotationSeconds = manualCodeSeconds.toIntOrNull()?.coerceIn(10, 3600) ?: 60,
                         )
                     },
                     enabled = canCreate,
@@ -604,9 +671,6 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
     ) {
-        if (state.isAdmin) {
-            item { GlobalSettingsCard(state = state, vm = vm) }
-        }
         item {
             AppTextField(
                 query,
@@ -629,13 +693,7 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                     onDelete = { session.id?.let(vm::deleteSession) },
                     onStartBroadcast = { session.id?.let(::requestBroadcast) },
                     onStopBroadcast = { session.id?.let(vm::stopBroadcast) },
-                    onExpandManualCode = { session.id?.let(vm::loadManualCode) },
-                    onToggleManualCode = { on -> session.id?.let { vm.setManualCodeEnabled(it, on) } },
-                    onToggleRotation = { on ->
-                        session.id?.let { id ->
-                            if (on) vm.setManualCodeRotation(id, "interval", 60) else vm.setManualCodeRotation(id, "none", 60)
-                        }
-                    },
+                    onLoadManualCode = { session.id?.let(vm::loadManualCode) },
                     onPauseManualCode = { session.id?.let(vm::pauseManualCode) },
                     onResumeManualCode = { session.id?.let(vm::resumeManualCode) },
                     onRegenerateManualCode = { session.id?.let(vm::regenerateManualCode) },
@@ -645,104 +703,153 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
     }
 }
 
-/**
- * Admin-only global policy card: manual-code kill-switch (takes effect immediately
- * for every session), verification mode policy, seeding target, and GPS buffers.
- * Collapsed by default — this is occasional config, not something an admin needs
- * open on every visit to the Sessions tab.
- */
+// ── Settings tab (admin only) ───────────────────────────────────────────────────────
+
 @Composable
-private fun GlobalSettingsCard(state: StaffState, vm: StaffViewModel) {
-    var expanded by remember { mutableStateOf(false) }
+private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
     val settings = state.settings
-
-    AppCard(Modifier.fillMaxWidth(), shape = AppShapes.Panel) {
-        Column(Modifier.padding(14.dp)) {
-            Row(
-                Modifier.fillMaxWidth().clickable { expanded = !expanded },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Global settings", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text(
-                        "Verification policy, peer seeding, GPS buffers, manual codes.",
-                        color = Palette.Muted,
-                        fontSize = 12.sp,
-                    )
-                }
-                Text(
-                    if (expanded) "Hide" else "Show",
-                    color = Palette.AccentDark,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-
-            if (!expanded || settings == null) return@Column
-            Spacer(Modifier.height(12.dp))
-
+    LazyColumn(
+        Modifier.fillMaxSize().padding(horizontal = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp, bottom = 24.dp),
+    ) {
+        item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
+                Box(
+                    Modifier.size(44.dp).clip(RoundedCornerShape(14.dp))
+                        .background(Brush.linearGradient(listOf(Palette.GradIndigo, Palette.Accent))),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Outlined.Tune, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp)) }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text("Global settings", fontWeight = FontWeight.ExtraBold, fontSize = 19.sp, color = Palette.Ink)
+                    Text("Applies instantly across every session", color = Palette.Muted, fontSize = 13.sp)
+                }
+            }
+        }
+
+        if (settings == null) {
+            item { LoadingRow() }
+            return@LazyColumn
+        }
+
+        item {
+            SettingsSection(
+                icon = Icons.Outlined.Rule,
+                title = "Verification policies",
+                subtitle = "Turn each policy on or off for the whole system. Lecturers then " +
+                    "pick whichever enabled policy suits the session they create. Applies to " +
+                    "new sessions — never strands one that's already running.",
+            ) {
+                PolicySwitch(
+                    label = "Bluetooth proximity",
+                    detail = "Strictest — the student must physically receive the classroom beacon.",
+                    checked = settings.bluetoothAllowed == true,
+                    onCheckedChange = vm::setBluetoothAllowed,
+                )
+                Spacer(Modifier.height(10.dp))
+                PolicySwitch(
+                    label = "GPS geofence",
+                    detail = "Looser — checks the student is inside a building outline you've drawn.",
+                    checked = settings.geofenceAllowed == true,
+                    onCheckedChange = vm::setGeofenceAllowed,
+                )
+                Spacer(Modifier.height(10.dp))
+                PolicySwitch(
+                    label = "Manual attendance code",
+                    detail = "Fallback the lecturer reads out. Off rejects it everywhere, immediately.",
                     checked = settings.manualCodeAllowed == true,
                     onCheckedChange = vm::setManualCodeAllowedGlobally,
                 )
-                Spacer(Modifier.width(8.dp))
-                Column {
-                    Text("Manual attendance codes", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Off hides and rejects the fallback code everywhere, immediately.",
-                        color = Palette.Muted,
-                        fontSize = 11.sp,
-                    )
+
+                if (settings.bluetoothAllowed != true && settings.geofenceAllowed != true) {
+                    Spacer(Modifier.height(10.dp))
+                    ErrorBanner("No automatic policy is enabled — lecturers cannot create sessions.")
                 }
             }
-
-            Spacer(Modifier.height(14.dp))
-            Text("Verification policy", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                "Constrains which mode a NEW session may use. Never strands a running session.",
-                color = Palette.Muted,
-                fontSize = 11.sp,
-            )
-            Spacer(Modifier.height(6.dp))
-            LabeledDropdown(
-                label = "",
-                selectedText = VERIFICATION_LABELS[settings.allowedModes].orEmpty(),
-                placeholder = "Choose",
-                options = VERIFICATION_LABELS.map { (k, v) -> k to v },
-                onSelect = vm::setAllowedModes,
-            )
-
-            Spacer(Modifier.height(14.dp))
-            Text("Peer seeding", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                "0 disables seeding. Extends Bluetooth range by having a few validated " +
-                    "students re-broadcast the token; students never know if they were picked.",
-                color = Palette.Muted,
-                fontSize = 11.sp,
-            )
-            Spacer(Modifier.height(6.dp))
-            SeedingFields(
-                seedRate = settings.seedRate ?: 0,
-                seedWindowMs = settings.seedWindowMs ?: 60000L,
-                onSave = vm::setSeedingParams,
-            )
-
-            Spacer(Modifier.height(14.dp))
-            Text("GPS buffers (meters)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                "Geofence-only sessions get the larger buffer (GPS is the only signal); " +
-                    "\"both\" sessions' GPS fallback gets the tighter one.",
-                color = Palette.Muted,
-                fontSize = 11.sp,
-            )
-            Spacer(Modifier.height(6.dp))
-            BufferFields(
-                bufferGpsOnly = settings.bufferGpsOnly ?: 30.0,
-                bufferGpsBle = settings.bufferGpsBle ?: 15.0,
-                onSave = vm::setGpsBuffers,
-            )
         }
+
+        item {
+            SettingsSection(
+                icon = Icons.Outlined.Groups,
+                title = "Peer seeding",
+                subtitle = "0 disables seeding. Extends Bluetooth range by having a few validated " +
+                    "students re-broadcast the token; students never know if they were picked.",
+            ) {
+                SeedingFields(
+                    seedRate = settings.seedRate ?: 0,
+                    seedWindowMs = settings.seedWindowMs ?: 60000L,
+                    onSave = vm::setSeedingParams,
+                )
+            }
+        }
+
+        item {
+            SettingsSection(
+                icon = Icons.Outlined.MyLocation,
+                title = "GPS buffers (meters)",
+                subtitle = "Geofence-only sessions get the larger buffer (GPS is the only signal); " +
+                    "\"both\" sessions' GPS fallback gets the tighter one.",
+            ) {
+                BufferFields(
+                    bufferGpsOnly = settings.bufferGpsOnly ?: 30.0,
+                    bufferGpsBle = settings.bufferGpsBle ?: 15.0,
+                    onSave = vm::setGpsBuffers,
+                )
+            }
+        }
+    }
+}
+
+/** One global policy row: switch + label + one line of plain-language detail. */
+@Composable
+private fun PolicySwitch(
+    label: String,
+    detail: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(label, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp, color = Palette.Ink)
+            Text(detail, color = Palette.Muted, fontSize = 11.5.sp)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun SettingsSection(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String? = null,
+    content: @Composable () -> Unit,
+) {
+    AppCard(Modifier.fillMaxWidth(), shape = AppShapes.Panel) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(Palette.ChipBg),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(icon, contentDescription = null, tint = Palette.AccentDark, modifier = Modifier.size(16.dp)) }
+                Spacer(Modifier.width(10.dp))
+                Text(title, fontWeight = FontWeight.Bold, fontSize = 14.5.sp, color = Palette.Ink)
+            }
+            subtitle?.let {
+                Text(it, color = Palette.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp, bottom = 10.dp))
+            } ?: Spacer(Modifier.height(10.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+private fun LoadingRow() {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 24.dp),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        androidx.compose.material3.CircularProgressIndicator(color = Palette.Accent)
     }
 }
 
@@ -812,9 +919,7 @@ private fun SessionCard(
     onDelete: () -> Unit,
     onStartBroadcast: () -> Unit,
     onStopBroadcast: () -> Unit,
-    onExpandManualCode: () -> Unit,
-    onToggleManualCode: (Boolean) -> Unit,
-    onToggleRotation: (Boolean) -> Unit,
+    onLoadManualCode: () -> Unit,
     onPauseManualCode: () -> Unit,
     onResumeManualCode: () -> Unit,
     onRegenerateManualCode: () -> Unit,
@@ -856,11 +961,10 @@ private fun SessionCard(
             Spacer(Modifier.height(10.dp))
 
             // Broadcast is only offered while the session is inside its scheduled window.
+            // The advertised device name is an internal implementation detail — not
+            // shown here, matching the raw rotating token also never being shown.
             if (!onAir && running) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PillButton("📡 Start attendance broadcast", onClick = onStartBroadcast, tone = PillTone.Accent)
-                    session.bluetoothDeviceName?.let { DeviceBadge(it, Modifier.weight(1f)) }
-                }
+                PillButton("📡 Start attendance broadcast", onClick = onStartBroadcast, tone = PillTone.Accent)
             } else if (!onAir && active) {
                 Text(
                     "Broadcast is available only while this session is in its scheduled time window.",
@@ -875,10 +979,6 @@ private fun SessionCard(
                         LiveDot()
                         Spacer(Modifier.width(6.dp))
                         Text("ON AIR", color = Palette.ErrorText, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
-                    broadcast?.deviceName?.let {
-                        Spacer(Modifier.height(4.dp))
-                        Text("Device: $it", color = Palette.ChipInk, fontSize = 12.sp)
                     }
                     val count = broadcast?.attendanceCount
                     val remaining = broadcast?.minutesRemaining
@@ -903,15 +1003,17 @@ private fun SessionCard(
                 }
             }
 
-            ManualCodeSection(
-                status = manualCode,
-                onExpand = onExpandManualCode,
-                onToggleEnabled = onToggleManualCode,
-                onToggleRotation = onToggleRotation,
-                onPause = onPauseManualCode,
-                onResume = onResumeManualCode,
-                onRegenerate = onRegenerateManualCode,
-            )
+            // Enabling/rotation is configured once, at session creation — this section
+            // only shows live controls, and only when the session actually has it on.
+            if (session.manualCodeEnabled == true) {
+                ManualCodeSection(
+                    status = manualCode,
+                    onLoad = onLoadManualCode,
+                    onPause = onPauseManualCode,
+                    onResume = onResumeManualCode,
+                    onRegenerate = onRegenerateManualCode,
+                )
+            }
 
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -934,41 +1036,23 @@ private fun SessionCard(
 @Composable
 private fun ManualCodeSection(
     status: ManualCodeStatusDto?,
-    onExpand: () -> Unit,
-    onToggleEnabled: (Boolean) -> Unit,
-    onToggleRotation: (Boolean) -> Unit,
+    onLoad: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onRegenerate: () -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Column(Modifier.padding(top = 10.dp)) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable {
-                    expanded = !expanded
-                    if (expanded) onExpand()
-                }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "🔢  Manual attendance code",
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 13.sp,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                if (expanded) "Hide" else "Show",
-                color = Palette.AccentDark,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
+    // Always shown (never collapsed) for sessions that have the code enabled, so
+    // a lecturer can read it out without hunting for a toggle first. Fetched once
+    // on first composition rather than on an expand tap.
+    LaunchedEffect(Unit) { onLoad() }
 
-        if (!expanded) return@Column
-        Spacer(Modifier.height(6.dp))
+    Column(Modifier.padding(top = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Password, contentDescription = null, tint = Palette.AccentDark, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Manual attendance code", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Palette.Ink)
+        }
+        Spacer(Modifier.height(8.dp))
 
         if (status == null) {
             Text("Loading…", color = Palette.Muted, fontSize = 12.sp)
@@ -978,23 +1062,7 @@ private fun ManualCodeSection(
             Text("Disabled by the administrator.", color = Palette.Muted, fontSize = 12.sp)
             return@Column
         }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = status.enabled == true, onCheckedChange = onToggleEnabled)
-            Spacer(Modifier.width(8.dp))
-            Text("Enabled", fontSize = 13.sp)
-        }
-        if (status.enabled != true) return@Column
-
-        Spacer(Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = status.rotationMode == "interval", onCheckedChange = onToggleRotation)
-            Spacer(Modifier.width(8.dp))
-            Text("Rotate every 60 s", fontSize = 13.sp)
-        }
-
         if (status.running != true) {
-            Spacer(Modifier.height(6.dp))
             Text(
                 "The code appears once this session is inside its scheduled time window.",
                 color = Palette.Muted,
@@ -1004,28 +1072,28 @@ private fun ManualCodeSection(
         }
         val code = status.code ?: return@Column
 
-        Spacer(Modifier.height(8.dp))
         Column(
             Modifier
                 .fillMaxWidth()
                 .background(Palette.ChipBg, AppShapes.Menu)
-                .padding(12.dp),
+                .padding(14.dp),
         ) {
             Text(
                 code.chunked(4).joinToString("  "),
                 fontWeight = FontWeight.ExtraBold,
-                fontSize = 22.sp,
-                letterSpacing = 2.sp,
+                fontSize = 26.sp,
+                letterSpacing = 3.sp,
                 color = Palette.AccentDark,
             )
             if (status.paused == true) {
                 Text("Rotation paused", color = Palette.WarnText, fontSize = 12.sp)
             } else if (status.rotationMode == "interval" && status.rotatesIn != null) {
-                Text("Next rotation: ${status.rotatesIn}s", color = Palette.ChipInk, fontSize = 12.sp)
+                Text("Next rotation in ${status.rotatesIn}s", color = Palette.ChipInk, fontSize = 12.sp)
             }
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Pause/resume only mean something while the code is actually rotating.
             if (status.rotationMode == "interval") {
                 if (status.paused == true) {
                     PillButton("Resume rotation", onClick = onResume, tone = PillTone.Accent)

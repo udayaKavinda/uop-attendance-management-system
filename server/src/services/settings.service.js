@@ -33,13 +33,24 @@ async function isManualCodeAllowed() {
 }
 
 /**
- * Whether a session may be created/kept with the given `verification` value under
- * the current global `allowedModes`. `both` permits any per-session choice; a
- * single-mode policy forces sessions to that exact mode.
+ * Whether a session may use the given `verification` value under the admin's
+ * per-policy global switches. `both` needs both policies on, since it can accept
+ * a student through either one.
  */
-function isVerificationAllowed(allowedModes, verification) {
-  if (allowedModes === 'both') return true;
-  return allowedModes === verification;
+function isVerificationAllowed(settings, verification) {
+  const bluetooth = settings.bluetoothAllowed !== false;
+  const geofence = settings.geofenceAllowed === true;
+  if (verification === 'bluetooth') return bluetooth;
+  if (verification === 'geofence') return geofence;
+  if (verification === 'both') return bluetooth && geofence;
+  return false;
 }
 
-module.exports = { getSettings, updateSettings, isManualCodeAllowed, isVerificationAllowed };
+/** The verification values a lecturer may currently pick, in strictness order. */
+function allowedVerifications(settings) {
+  return ['bluetooth', 'geofence', 'both'].filter((v) => isVerificationAllowed(settings, v));
+}
+
+module.exports = {
+  getSettings, updateSettings, isManualCodeAllowed, isVerificationAllowed, allowedVerifications,
+};

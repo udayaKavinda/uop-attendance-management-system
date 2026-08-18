@@ -1,10 +1,7 @@
 const mockGetSettings = jest.fn();
 jest.mock('../services/settings.service', () => ({
   getSettings: (...args) => mockGetSettings(...args),
-  isVerificationAllowed: (allowedModes, verification) => {
-    if (allowedModes === 'both') return true;
-    return allowedModes === verification;
-  },
+  isVerificationAllowed: jest.requireActual('../services/settings.service').isVerificationAllowed,
 }));
 
 const mongoose = require('mongoose');
@@ -63,24 +60,33 @@ describe('validateSessionCreateBody — verification/buildings', () => {
   });
 });
 
-describe('checkVerificationAllowed', () => {
-  it('permits any mode when allowedModes is "both"', async () => {
-    mockGetSettings.mockResolvedValue({ allowedModes: 'both' });
-    expect((await checkVerificationAllowed('geofence')).ok).toBe(true);
+describe('checkVerificationAllowed — per-policy admin switches', () => {
+  it('permits every mode when the admin enabled both policies', async () => {
+    mockGetSettings.mockResolvedValue({ bluetoothAllowed: true, geofenceAllowed: true });
     expect((await checkVerificationAllowed('bluetooth')).ok).toBe(true);
+    expect((await checkVerificationAllowed('geofence')).ok).toBe(true);
+    expect((await checkVerificationAllowed('both')).ok).toBe(true);
   });
 
-  it('rejects geofence/both sessions when the server is locked to "bluetooth"', async () => {
-    mockGetSettings.mockResolvedValue({ allowedModes: 'bluetooth' });
+  it('rejects geofence and both when only Bluetooth is enabled', async () => {
+    mockGetSettings.mockResolvedValue({ bluetoothAllowed: true, geofenceAllowed: false });
+    expect((await checkVerificationAllowed('bluetooth')).ok).toBe(true);
     expect((await checkVerificationAllowed('geofence')).ok).toBe(false);
     expect((await checkVerificationAllowed('both')).ok).toBe(false);
-    expect((await checkVerificationAllowed('bluetooth')).ok).toBe(true);
   });
 
-  it('rejects bluetooth/both sessions when the server is locked to "geofence"', async () => {
-    mockGetSettings.mockResolvedValue({ allowedModes: 'geofence' });
+  it('rejects bluetooth and both when only geofence is enabled', async () => {
+    mockGetSettings.mockResolvedValue({ bluetoothAllowed: false, geofenceAllowed: true });
     expect((await checkVerificationAllowed('bluetooth')).ok).toBe(false);
     expect((await checkVerificationAllowed('geofence')).ok).toBe(true);
+    expect((await checkVerificationAllowed('both')).ok).toBe(false);
+  });
+
+  it('rejects everything when the admin disabled both policies', async () => {
+    mockGetSettings.mockResolvedValue({ bluetoothAllowed: false, geofenceAllowed: false });
+    expect((await checkVerificationAllowed('bluetooth')).ok).toBe(false);
+    expect((await checkVerificationAllowed('geofence')).ok).toBe(false);
+    expect((await checkVerificationAllowed('both')).ok).toBe(false);
   });
 });
 

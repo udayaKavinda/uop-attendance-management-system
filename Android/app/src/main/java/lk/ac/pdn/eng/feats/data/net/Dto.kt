@@ -127,6 +127,9 @@ data class StaffSessionDto(
     /** "bluetooth" | "geofence" | "both". */
     val verification: String? = null,
     val buildings: List<String>? = null,
+    /** Set at creation (Create Session tab); the session card only shows live
+     *  controls (reveal/pause/regenerate) when this is true — no enable switch there. */
+    val manualCodeEnabled: Boolean? = null,
 )
 
 data class SessionsRes(val items: List<SessionDto>? = null)
@@ -200,11 +203,14 @@ data class ManualCodeConfigReq(
     val regenerate: Boolean? = null,
 )
 
-/** Global settings singleton (admin-only). */
+/** Global settings singleton. Readable by any staff; only admins may write. */
 data class SettingsDto(
     val manualCodeAllowed: Boolean? = null,
-    /** "bluetooth" | "geofence" | "both" — constrains session.verification for NEW sessions. */
-    val allowedModes: String? = null,
+    /** Per-policy admin switches — a lecturer picks among whichever are enabled. */
+    val bluetoothAllowed: Boolean? = null,
+    val geofenceAllowed: Boolean? = null,
+    /** Server-derived from the two switches above: the values a session may use. */
+    val allowedVerifications: List<String>? = null,
     /** Target concurrent BLE seeder count; 0 disables peer seeding. */
     val seedRate: Int? = null,
     /** Real-seeder AND decoy window duration, ms — identical for both by design. */
@@ -218,7 +224,8 @@ data class SettingsDto(
 /** Body for PATCH /api/admin/settings — every field independently optional. */
 data class SettingsReq(
     val manualCodeAllowed: Boolean? = null,
-    val allowedModes: String? = null,
+    val bluetoothAllowed: Boolean? = null,
+    val geofenceAllowed: Boolean? = null,
     val seedRate: Int? = null,
     val seedWindowMs: Long? = null,
     val bufferGpsOnly: Double? = null,

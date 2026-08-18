@@ -35,7 +35,7 @@ jest.mock('../models/Settings', () => ({
   findOneAndUpdate: jest.fn((_filter, update) => {
     if (!mockSettingsStore) {
       mockSettingsStore = {
-        manualCodeAllowed: true, allowedModes: 'both', seedRate: 0, seedWindowMs: 60000, bufferGpsOnly: 30, bufferGpsBle: 15,
+        manualCodeAllowed: true, bluetoothAllowed: true, geofenceAllowed: true, seedRate: 0, seedWindowMs: 60000, bufferGpsOnly: 30, bufferGpsBle: 15,
       };
     }
     if (update.$set) Object.assign(mockSettingsStore, update.$set);
