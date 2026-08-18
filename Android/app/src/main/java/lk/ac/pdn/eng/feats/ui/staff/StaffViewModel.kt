@@ -450,7 +450,7 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             when (val res = repo.geofences()) {
                 is ApiResult.Success -> _state.value = _state.value.copy(geofences = res.data)
-                is ApiResult.Error -> Unit
+                is ApiResult.Error -> setError("Could not load buildings: ${res.message}")
             }
         }
     }

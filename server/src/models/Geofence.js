@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-/** Named building polygon an admin draws on the Leaflet/OSM map tool. */
+/** Named building polygon an admin draws on the Android OpenStreetMap tool. */
 const geofenceSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   /** Ordered [lng, lat] vertices — GeoJSON coordinate order, closed or open (the

@@ -23,6 +23,7 @@
     <!-- BLE scanning needs this on API 23..30; the GPS geofence verification path
          (docs/attendance-verification-design.md) needs it unconditionally on every
          API level, so it's declared without a maxSdkVersion cap. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!-- Foreground service that keeps the lecturer broadcast alive off-screen -->

@@ -228,6 +228,16 @@ and the server auto-assigns the creating lecturer as sole owner on course create
 
 - Course and day dropdowns; **Start** and **End** use Material 3 **time pickers** (24-hour
   `HH:mm`, validated server-side). Recurring checkbox unchanged.
+- The form is vertically scrollable on compact phones, so verification/manual-code
+  options and the **Create session** button remain reachable regardless of screen height.
+
+### Admin — Geofences tab
+
+- Uses a native **osmdroid MapView** with OpenStreetMap tiles (no API key or WebView).
+  Tap to add polygon vertices, undo/clear the draft, and save a named building. Existing
+  buildings are drawn on the same map and the camera fits their combined bounds. With no
+  saved buildings, the initial camera is fixed on the Faculty of Engineering, University
+  of Peradeniya (`7.25439, 80.59169`) rather than the device's last-known location.
 
 ---
 

@@ -1,18 +1,8 @@
 package lk.ac.pdn.eng.feats.ui.staff
 
-import android.annotation.SuppressLint
 import android.content.Context
-import android.location.LocationManager
-import android.os.Handler
-import android.os.Looper
-import android.util.Log
-import android.webkit.ConsoleMessage
-import android.webkit.JavascriptInterface
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.graphics.Color as AndroidColor
+import android.graphics.drawable.GradientDrawable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,38 +42,46 @@ import lk.ac.pdn.eng.feats.data.net.GeofenceDto
 import lk.ac.pdn.eng.feats.ui.components.AppCard
 import lk.ac.pdn.eng.feats.ui.components.AppTextField
 import lk.ac.pdn.eng.feats.ui.components.EmptyState
-import lk.ac.pdn.eng.feats.ui.components.ErrorBanner
 import lk.ac.pdn.eng.feats.ui.components.PillButton
 import lk.ac.pdn.eng.feats.ui.components.PillTone
 import lk.ac.pdn.eng.feats.ui.components.PrimaryButton
 import lk.ac.pdn.eng.feats.ui.theme.AppShapes
 import lk.ac.pdn.eng.feats.ui.theme.Palette
-import org.json.JSONArray
-import org.json.JSONObject
+import org.osmdroid.config.Configuration
+import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.CopyrightOverlay
+import org.osmdroid.views.overlay.MapEventsOverlay
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Overlay
+import org.osmdroid.views.overlay.Polygon
+import org.osmdroid.views.overlay.Polyline
+import java.io.File
 
-// University of Peradeniya, Faculty of Engineering — map centre when the device
-// has no last-known fix to start from.
-private const val DEFAULT_LAT = 7.2544
-private const val DEFAULT_LNG = 80.5975
+// Faculty of Engineering, University of Peradeniya. Keep the map deterministic:
+// this editor manages faculty buildings, so a device's unrelated last location
+// must never move its initial camera away from the campus.
+private const val ENGINEERING_FACULTY_LAT = 7.25439
+private const val ENGINEERING_FACULTY_LNG = 80.59169
+private const val ENGINEERING_FACULTY_ZOOM = 17.5
 
 /**
  * Admin Geofences tab. The map is **always visible** with every saved building
  * drawn on it; "Add building" switches the same map into draw mode rather than
  * opening a separate editor.
  *
- * The map is deliberately inline (not a Compose `Dialog`): a WebView hosted in a
- * dialog window rendered blank on device, and a dialog also can't show the saved
- * geofences as context while you draw a new one.
+ * The map is deliberately inline (not a Compose `Dialog`) so saved geofences stay
+ * visible as context while a new building is drawn.
  */
 @Composable
 fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
     var drawing by remember { mutableStateOf(false) }
     var pointCount by remember { mutableStateOf(0) }
     var name by remember { mutableStateOf("") }
-    var mapError by remember { mutableStateOf<String?>(null) }
-    var webView by remember { mutableStateOf<WebView?>(null) }
-
-    fun runJs(js: String) = webView?.evaluateJavascript(js, null)
+    var mapController by remember { mutableStateOf<GeofenceMapController?>(null) }
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 14.dp),
@@ -119,23 +117,16 @@ fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
         item {
             AppCard(Modifier.fillMaxWidth(), shape = AppShapes.Panel) {
                 Column {
-                    // Fixed height: a WebView has no intrinsic content height, so
-                    // inside a scrolling parent it must be told exactly how tall.
+                    // A native MapView still needs a bounded height inside LazyColumn.
                     GeofenceMapView(
                         geofences = state.geofences,
                         drawing = drawing,
-                        onReady = { webView = it },
+                        onReady = { mapController = it },
                         onPointCountChanged = { pointCount = it },
-                        onError = { mapError = it },
                         modifier = Modifier.fillMaxWidth().height(380.dp),
                     )
 
                     Column(Modifier.padding(14.dp)) {
-                        mapError?.let {
-                            ErrorBanner(it)
-                            Spacer(Modifier.height(10.dp))
-                        }
-
                         if (!drawing) {
                             Text(
                                 if (state.geofences.isEmpty()) {
@@ -150,11 +141,10 @@ fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
                             PrimaryButton(
                                 text = "＋ Add building",
                                 onClick = {
-                                    mapError = null
                                     name = ""
                                     pointCount = 0
                                     drawing = true
-                                    runJs("setDrawing(true)")
+                                    mapController?.setDrawing(true)
                                 },
                             )
                         } else {
@@ -180,9 +170,9 @@ fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
                                     fontSize = 12.5.sp,
                                     modifier = Modifier.weight(1f),
                                 )
-                                PillButton("Undo", onClick = { runJs("undoPoint()") }, tone = PillTone.Neutral)
+                                PillButton("Undo", onClick = { mapController?.undoPoint() }, tone = PillTone.Neutral)
                                 Spacer(Modifier.width(6.dp))
-                                PillButton("Clear", onClick = { runJs("clearPoints()") }, tone = PillTone.Neutral)
+                                PillButton("Clear", onClick = { mapController?.clearPoints() }, tone = PillTone.Neutral)
                             }
                             Spacer(Modifier.height(10.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -191,7 +181,7 @@ fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
                                     onClick = {
                                         drawing = false
                                         pointCount = 0
-                                        runJs("setDrawing(false)")
+                                        mapController?.setDrawing(false)
                                     },
                                     tone = PillTone.Neutral,
                                 )
@@ -200,17 +190,13 @@ fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
                                     tone = PillTone.Success,
                                     enabled = name.isNotBlank() && pointCount >= 3,
                                     onClick = {
-                                        webView?.evaluateJavascript("getPoints()") { raw ->
-                                            val polygon = parsePolygon(raw)
-                                            if (polygon == null || polygon.size < 3) {
-                                                mapError = "Could not read the drawn shape. Try again."
-                                            } else {
-                                                vm.createGeofence(name.trim(), polygon)
-                                                drawing = false
-                                                pointCount = 0
-                                                name = ""
-                                                runJs("setDrawing(false)")
-                                            }
+                                        val polygon = mapController?.polygon().orEmpty()
+                                        if (polygon.size >= 3) {
+                                            vm.createGeofence(name.trim(), polygon)
+                                            drawing = false
+                                            pointCount = 0
+                                            name = ""
+                                            mapController?.setDrawing(false)
                                         }
                                     },
                                 )
@@ -256,242 +242,204 @@ private fun GeofenceCard(geofence: GeofenceDto, onDelete: () -> Unit) {
     }
 }
 
-/** `evaluateJavascript` hands back a JSON *string literal*, so unwrap then parse. */
-private fun parsePolygon(raw: String?): List<List<Double>>? = runCatching {
-    if (raw == null || raw == "null") return null
-    // The result arrives double-encoded: "\"[[lng,lat],...]\"" — decode once via
-    // JSONObject so escaping is handled properly, then parse the real array.
-    val unwrapped = if (raw.startsWith("\"")) {
-        JSONObject("""{"v":$raw}""").getString("v")
-    } else {
-        raw
-    }
-    val arr = JSONArray(unwrapped)
-    (0 until arr.length()).map { i ->
-        val pt = arr.getJSONArray(i)
-        listOf(pt.getDouble(0), pt.getDouble(1))
-    }
-}.getOrNull()
-
-/** Bridge for events the map pushes up (point count, load failures). */
-private class MapBridge(
+/**
+ * Owns the native map overlays and the draft polygon. Keeping this state beside
+ * [MapView] avoids a JavaScript bridge and lets the Compose controls call the map
+ * directly.
+ */
+private class GeofenceMapController(
+    private val context: Context,
+    private val map: MapView,
     private val onPointCountChanged: (Int) -> Unit,
-    private val onError: (String) -> Unit,
 ) {
-    private val main = Handler(Looper.getMainLooper())
+    private val points = mutableListOf<GeoPoint>()
+    private val savedOverlays = mutableListOf<Overlay>()
+    private val draftOverlays = mutableListOf<Overlay>()
+    private var drawing = false
+    private var savedSignature: Int? = null
 
-    @JavascriptInterface
-    fun onPoints(count: Int) {
-        main.post { onPointCountChanged(count) }
+    private val eventOverlay = MapEventsOverlay(object : MapEventsReceiver {
+        override fun singleTapConfirmedHelper(point: GeoPoint?): Boolean {
+            if (!drawing || point == null) return false
+            points += GeoPoint(point.latitude, point.longitude)
+            redrawDraft()
+            onPointCountChanged(points.size)
+            return true
+        }
+
+        override fun longPressHelper(point: GeoPoint?): Boolean = false
+    })
+
+    init {
+        map.overlays += eventOverlay
     }
 
-    @JavascriptInterface
-    fun onError(message: String) {
-        main.post { onError.invoke(message) }
+    fun setDrawing(enabled: Boolean) {
+        if (drawing == enabled) return
+        drawing = enabled
+        clearPoints()
+    }
+
+    fun undoPoint() {
+        if (points.isEmpty()) return
+        points.removeAt(points.lastIndex)
+        redrawDraft()
+        onPointCountChanged(points.size)
+    }
+
+    fun clearPoints() {
+        points.clear()
+        redrawDraft()
+        onPointCountChanged(0)
+    }
+
+    /** Server polygon order is [longitude, latitude]. */
+    fun polygon(): List<List<Double>> = points.map { listOf(it.longitude, it.latitude) }
+
+    fun renderSaved(geofences: List<GeofenceDto>) {
+        val signature = geofences.hashCode()
+        if (signature == savedSignature) return
+        savedSignature = signature
+
+        map.overlays.removeAll(savedOverlays.toSet())
+        savedOverlays.clear()
+
+        val allPoints = mutableListOf<GeoPoint>()
+        geofences.forEach { geofence ->
+            val polygonPoints = geofence.polygon.orEmpty().mapNotNull { pair ->
+                if (pair.size < 2) null else GeoPoint(pair[1], pair[0])
+            }
+            if (polygonPoints.size < 3) return@forEach
+            allPoints += polygonPoints
+            val polygon = Polygon(map).apply {
+                setPoints(polygonPoints)
+                title = geofence.name.orEmpty()
+                outlinePaint.color = AndroidColor.rgb(91, 76, 219)
+                outlinePaint.strokeWidth = context.dp(2f)
+                fillPaint.color = AndroidColor.argb(48, 123, 97, 255)
+            }
+            savedOverlays += polygon
+            map.overlays += polygon
+        }
+
+        keepEventOverlayOnTop()
+        map.invalidate()
+        if (allPoints.isNotEmpty() && !drawing) fitTo(allPoints)
+    }
+
+    fun detach() {
+        map.onPause()
+        map.onDetach()
+    }
+
+    private fun redrawDraft() {
+        map.overlays.removeAll(draftOverlays.toSet())
+        draftOverlays.clear()
+
+        if (points.size >= 2) {
+            val line = Polyline(map).apply {
+                setPoints(this@GeofenceMapController.points)
+                outlinePaint.color = AndroidColor.rgb(122, 20, 20)
+                outlinePaint.strokeWidth = context.dp(2.5f)
+            }
+            draftOverlays += line
+            map.overlays += line
+        }
+        if (points.size >= 3) {
+            val area = Polygon(map).apply {
+                setPoints(this@GeofenceMapController.points)
+                outlinePaint.color = AndroidColor.rgb(122, 20, 20)
+                outlinePaint.strokeWidth = context.dp(2.5f)
+                fillPaint.color = AndroidColor.argb(38, 122, 20, 20)
+            }
+            draftOverlays += area
+            map.overlays += area
+        }
+        points.forEach { point ->
+            val marker = Marker(map).apply {
+                position = point
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                icon = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(AndroidColor.rgb(122, 20, 20))
+                    setStroke(context.dp(1f).toInt(), AndroidColor.WHITE)
+                    val diameter = context.dp(12f).toInt()
+                    setSize(diameter, diameter)
+                }
+            }
+            draftOverlays += marker
+            map.overlays += marker
+        }
+        keepEventOverlayOnTop()
+        map.invalidate()
+    }
+
+    private fun keepEventOverlayOnTop() {
+        map.overlays.remove(eventOverlay)
+        map.overlays += eventOverlay
+    }
+
+    private fun fitTo(points: List<GeoPoint>) {
+        val bounds = BoundingBox(
+            points.maxOf { it.latitude },
+            points.maxOf { it.longitude },
+            points.minOf { it.latitude },
+            points.minOf { it.longitude },
+        )
+        map.post { map.zoomToBoundingBox(bounds, true, context.dp(28f).toInt()) }
     }
 }
 
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun GeofenceMapView(
     geofences: List<GeofenceDto>,
     drawing: Boolean,
-    onReady: (WebView) -> Unit,
+    onReady: (GeofenceMapController) -> Unit,
     onPointCountChanged: (Int) -> Unit,
-    onError: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var loaded by remember { mutableStateOf(false) }
-    var view by remember { mutableStateOf<WebView?>(null) }
+    var mapState by remember { mutableStateOf<GeofenceMapController?>(null) }
 
-    // Re-draw saved buildings whenever the list or the load state changes.
-    DisposableEffect(geofences, loaded) {
-        if (loaded) {
-            view?.evaluateJavascript("renderGeofences(${geofencesToJson(geofences)})", null)
-        }
-        onDispose { }
+    // The effect must not be keyed by mapState: assigning the newly-created
+    // controller would dispose the previous effect and detach that same MapView
+    // immediately, shutting down its tile writer/executors.
+    DisposableEffect(Unit) {
+        onDispose { mapState?.detach() }
     }
 
     AndroidView(
         modifier = modifier,
-        factory = { ctx ->
-            WebView(ctx).apply {
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                // Leaflet pans/zooms itself; the WebView must not also try to.
-                settings.builtInZoomControls = false
-                settings.setSupportZoom(false)
-                isHorizontalScrollBarEnabled = false
-                isVerticalScrollBarEnabled = false
-                addJavascriptInterface(
-                    MapBridge(onPointCountChanged = onPointCountChanged, onError = onError),
-                    "AndroidBridge",
-                )
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(v: WebView?, url: String?) {
-                        loaded = true
-                    }
+        factory = { context ->
+            // Use app-private cache paths so no storage permission is needed.
+            val cacheRoot = File(context.cacheDir, "osmdroid").apply { mkdirs() }
+            Configuration.getInstance().apply {
+                userAgentValue = context.packageName
+                osmdroidBasePath = cacheRoot
+                osmdroidTileCache = File(cacheRoot, "tiles").apply { mkdirs() }
+            }
 
-                    override fun onReceivedError(
-                        v: WebView?,
-                        request: WebResourceRequest?,
-                        error: WebResourceError?,
-                    ) {
-                        Log.e("GeofenceMap", "load failed: ${request?.url} — ${error?.description}")
-                    }
-                }
-                webChromeClient = object : WebChromeClient() {
-                    override fun onConsoleMessage(m: ConsoleMessage?): Boolean {
-                        Log.d("GeofenceMap", "console: ${m?.message()} @${m?.sourceId()}:${m?.lineNumber()}")
-                        return true
-                    }
-                }
-                val (lat, lng) = lastKnownLocationOrDefault(ctx)
-                loadDataWithBaseURL(
-                    "https://unpkg.com/",
-                    mapHtml(lat, lng),
-                    "text/html",
-                    "UTF-8",
-                    null,
-                )
-                view = this
-                onReady(this)
+            MapView(context).apply {
+                setTileSource(TileSourceFactory.MAPNIK)
+                setMultiTouchControls(true)
+                minZoomLevel = 3.0
+                maxZoomLevel = 20.0
+                controller.setZoom(ENGINEERING_FACULTY_ZOOM)
+                controller.setCenter(GeoPoint(ENGINEERING_FACULTY_LAT, ENGINEERING_FACULTY_LNG))
+                overlays += CopyrightOverlay(context)
+                onResume()
+
+                val mapController = GeofenceMapController(context, this, onPointCountChanged)
+                mapState = mapController
+                mapController.renderSaved(geofences)
+                mapController.setDrawing(drawing)
+                onReady(mapController)
             }
         },
-        update = { wv ->
-            if (loaded) wv.evaluateJavascript("setDrawing($drawing)", null)
+        update = {
+            mapState?.renderSaved(geofences)
+            mapState?.setDrawing(drawing)
         },
     )
 }
 
-private fun geofencesToJson(geofences: List<GeofenceDto>): String {
-    val arr = JSONArray()
-    geofences.forEach { g ->
-        val poly = g.polygon ?: return@forEach
-        val pts = JSONArray()
-        poly.forEach { pt ->
-            if (pt.size >= 2) pts.put(JSONArray().put(pt[0]).put(pt[1]))
-        }
-        arr.put(JSONObject().put("name", g.name.orEmpty()).put("polygon", pts))
-    }
-    return arr.toString()
-}
-
-/** Best-effort last-known fix — no permission request here; falls back silently. */
-private fun lastKnownLocationOrDefault(context: Context): Pair<Double, Double> = runCatching {
-    val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-    for (provider in manager?.getProviders(true).orEmpty()) {
-        val loc = manager?.getLastKnownLocation(provider)
-        if (loc != null) return loc.latitude to loc.longitude
-    }
-    DEFAULT_LAT to DEFAULT_LNG
-}.getOrDefault(DEFAULT_LAT to DEFAULT_LNG)
-
-/**
- * Leaflet + OpenStreetMap, loaded from a CDN (free, no API key). Sized with
- * `100%`/`100vh` on a flex column rather than `position:absolute` + `height:100%`,
- * which needs the whole ancestor chain to resolve a definite height and silently
- * collapsed to zero inside the WebView.
- */
-private fun mapHtml(lat: Double, lng: Double): String = """
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<style>
-  html, body { margin:0; padding:0; height:100%; width:100%; overflow:hidden; font-family:sans-serif; background:#eee; }
-  #map { height:100%; width:100%; }
-  #fallback { display:none; padding:16px; color:#b42318; font-size:13px; line-height:1.5; }
-  #hint { position:absolute; top:8px; left:8px; right:8px; background:rgba(255,255,255,0.92);
-          padding:6px 10px; border-radius:6px; font-size:12px; z-index:1000; pointer-events:none; display:none; }
-</style>
-</head>
-<body>
-<div id="hint">Tap to add points</div>
-<div id="map"></div>
-<div id="fallback">
-  Map could not load. Check the device's internet connection, then reopen this tab.
-</div>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-  var map = null, drawing = false, points = [], markers = [], draft = null, saved = [];
-
-  function boot() {
-    if (typeof L === 'undefined') {
-      document.getElementById('map').style.display = 'none';
-      document.getElementById('fallback').style.display = 'block';
-      if (window.AndroidBridge) AndroidBridge.onError('Map library could not be downloaded. Check the internet connection.');
-      return;
-    }
-    map = L.map('map').setView([$lat, $lng], 17);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '&copy; OpenStreetMap'
-    }).addTo(map);
-    map.on('click', function(e) {
-      if (!drawing) return;
-      points.push([e.latlng.lat, e.latlng.lng]);
-      markers.push(L.circleMarker(e.latlng, {radius:5, color:'#7A1414', fillColor:'#7A1414', fillOpacity:1}).addTo(map));
-      redrawDraft();
-      if (window.AndroidBridge) AndroidBridge.onPoints(points.length);
-    });
-  }
-
-  function redrawDraft() {
-    if (draft) { map.removeLayer(draft); draft = null; }
-    if (points.length >= 2) draft = L.polygon(points, {color:'#7A1414', weight:2}).addTo(map);
-  }
-
-  function setDrawing(on) {
-    drawing = !!on;
-    document.getElementById('hint').style.display = drawing ? 'block' : 'none';
-    if (!drawing) clearPoints();
-  }
-
-  function undoPoint() {
-    if (!points.length) return;
-    points.pop();
-    var m = markers.pop();
-    if (m) map.removeLayer(m);
-    redrawDraft();
-    if (window.AndroidBridge) AndroidBridge.onPoints(points.length);
-  }
-
-  function clearPoints() {
-    points = [];
-    markers.forEach(function(m){ map.removeLayer(m); });
-    markers = [];
-    redrawDraft();
-    if (window.AndroidBridge) AndroidBridge.onPoints(0);
-  }
-
-  /** Returns the drawn shape as [lng, lat] pairs — the order the server stores. */
-  function getPoints() {
-    return JSON.stringify(points.map(function(p){ return [p[1], p[0]]; }));
-  }
-
-  /** Draws every saved building and fits the view around them. */
-  function renderGeofences(list) {
-    if (!map) return;
-    saved.forEach(function(l){ map.removeLayer(l); });
-    saved = [];
-    if (!list || !list.length) return;
-    var bounds = [];
-    list.forEach(function(g) {
-      // Stored as [lng, lat]; Leaflet wants [lat, lng].
-      var latlngs = g.polygon.map(function(p){ return [p[1], p[0]]; });
-      if (latlngs.length < 3) return;
-      var layer = L.polygon(latlngs, {color:'#5B4CDB', weight:2, fillOpacity:0.18}).addTo(map);
-      layer.bindTooltip(g.name, {permanent:true, direction:'center', className:'gf-label'});
-      saved.push(layer);
-      bounds = bounds.concat(latlngs);
-    });
-    if (bounds.length && !drawing) map.fitBounds(bounds, {padding:[24,24], maxZoom:18});
-  }
-
-  boot();
-</script>
-</body>
-</html>
-""".trimIndent()
+private fun Context.dp(value: Float): Float = value * resources.displayMetrics.density

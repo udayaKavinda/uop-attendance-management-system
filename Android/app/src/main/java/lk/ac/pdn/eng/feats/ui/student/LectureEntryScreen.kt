@@ -124,9 +124,9 @@ fun LectureEntryScreen(
     }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) vm.startScan() else vm.onLocationPermissionDenied()
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) {
+        if (LocationPermissions.hasFineLocation(context)) vm.startScan() else vm.onLocationPermissionDenied()
     }
 
     fun onScanClick() {
@@ -135,7 +135,7 @@ fun LectureEntryScreen(
                 if (LocationPermissions.hasFineLocation(context)) {
                     vm.startScan()
                 } else {
-                    locationPermissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                    locationPermissionLauncher.launch(LocationPermissions.permissions())
                 }
             }
             "both" -> {

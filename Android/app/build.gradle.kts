@@ -139,6 +139,9 @@ dependencies {
     implementation(libs.moshi)
     implementation(libs.moshi.kotlin)
 
+    // Native OpenStreetMap geofence editor (no WebView or API key).
+    implementation(libs.osmdroid)
+
     // Native Google sign-in (Credential Manager)
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services.auth)

@@ -649,12 +649,13 @@ does the token-pool generalization every later phase needs.
 5. **Admin map tool + hardening.** Building polygon-draw tool; attendance-matrix audit
    surfacing across all `method` values; README updates.
 
-   > **Status: implemented** (Android: `GeofenceMapScreen.kt`, a WebView hosting
-   > **Leaflet + OpenStreetMap tiles** — chosen over the Google Maps SDK because it needs
+   > **Status: implemented** (Android: `GeofenceMapScreen.kt`, a native **osmdroid
+   > MapView + OpenStreetMap tiles** — chosen over the Google Maps SDK because it needs
    > no API key or billing account, while still being the real polygon-draw tool the
    > design asked for, not a simplified circle/coordinate-entry substitute). Tap-to-add
-   > vertices, undo/clear, save via a JS↔Kotlin bridge to the same `Geofence` CRUD API
-   > admins and lecturers both read from.
+   > vertices, undo/clear, and save directly in Kotlin through the same `Geofence` CRUD
+   > API admins and lecturers both read from. The earlier Leaflet WebView was replaced
+   > because runtime CDN loading could leave the map blank on Android devices.
    >
    > **Not implemented, by explicit product decision, not oversight:** Play Integrity /
    > mock-location detection. The geofence path's location and accuracy values remain

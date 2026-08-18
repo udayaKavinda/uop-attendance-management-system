@@ -425,9 +425,13 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
         )
     }
 
-    Column(Modifier.fillMaxSize().padding(14.dp)) {
-        AppCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
+    LazyColumn(
+        Modifier.fillMaxSize().padding(horizontal = 14.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 6.dp, bottom = 24.dp),
+    ) {
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
                 SectionHeader(Icons.Outlined.Schedule, "Create session")
                 Spacer(Modifier.height(10.dp))
 
@@ -577,6 +581,7 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
                     },
                     enabled = canCreate,
                 )
+                }
             }
         }
     }

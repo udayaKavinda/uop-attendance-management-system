@@ -23,7 +23,12 @@ object LocationPermissions {
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
-    fun permissions(): Array<String> = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    // Android 12+ requires coarse and fine to be requested together. Geofence
+    // verification still proceeds only when fine location is granted.
+    fun permissions(): Array<String> = arrayOf(
+        Manifest.permission.ACCESS_COARSE_LOCATION,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+    )
 
     fun permissionDeniedMessage(): String =
         "Location permission is required to verify your position for this session."
