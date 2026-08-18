@@ -32,18 +32,29 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.outlined.AddCircleOutline
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.MyLocation
+import androidx.compose.material.icons.outlined.PauseCircleOutline
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Rule
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Sensors
+import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -90,6 +101,7 @@ import lk.ac.pdn.eng.feats.ble.BroadcastService
 import lk.ac.pdn.eng.feats.ble.BroadcastState
 import androidx.compose.material3.Switch
 import lk.ac.pdn.eng.feats.data.net.CourseDto
+import lk.ac.pdn.eng.feats.data.net.GeofenceDto
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
 import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
 import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
@@ -373,7 +385,7 @@ private val VERIFICATION_LABELS = mapOf(
     "both" to "Bluetooth or GPS",
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
     val activeCourses = state.courses.filter { it.active != false }
@@ -502,31 +514,27 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
                 }
 
                 if (needsBuildings) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("Buildings", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 4.dp))
+                    Spacer(Modifier.height(12.dp))
                     if (state.geofences.isEmpty()) {
+                        Text("Buildings", style = MaterialTheme.typography.labelLarge)
+                        Spacer(Modifier.height(4.dp))
                         Text(
                             "No buildings configured yet — an admin can draw one in the Geofences tool.",
                             color = Palette.Muted,
                             fontSize = 12.sp,
                         )
                     } else {
-                        state.geofences.forEach { g ->
-                            val id = g.id ?: return@forEach
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = id in selectedBuildingIds,
-                                    onCheckedChange = { checked ->
-                                        selectedBuildingIds = if (checked) {
-                                            selectedBuildingIds + id
-                                        } else {
-                                            selectedBuildingIds - id
-                                        }
-                                    },
-                                )
-                                Text(g.name.orEmpty(), fontSize = 14.sp)
-                            }
-                        }
+                        BuildingMultiSelectDropdown(
+                            buildings = state.geofences,
+                            selectedIds = selectedBuildingIds,
+                            onToggle = { id ->
+                                selectedBuildingIds = if (id in selectedBuildingIds) {
+                                    selectedBuildingIds - id
+                                } else {
+                                    selectedBuildingIds + id
+                                }
+                            },
+                        )
                     }
                 }
 
@@ -587,6 +595,153 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun BuildingMultiSelectDropdown(
+    buildings: List<GeofenceDto>,
+    selectedIds: Set<String>,
+    onToggle: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    val available = buildings.filter { it.active != false && it.id != null }
+    val filtered = available.filter {
+        it.name.orEmpty().contains(query.trim(), ignoreCase = true)
+    }
+    val selected = available.filter { it.id in selectedIds }
+
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Buildings", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+            if (selected.isNotEmpty()) {
+                Text(
+                    "${selected.size} selected",
+                    color = Palette.AccentDark,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = {
+                    query = it
+                    expanded = true
+                },
+                placeholder = { Text("Search and select buildings") },
+                leadingIcon = {
+                    Icon(Icons.Outlined.Search, contentDescription = null, tint = Palette.Muted)
+                },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                singleLine = true,
+                shape = AppShapes.Input,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Palette.Card,
+                    unfocusedContainerColor = Palette.Card,
+                    focusedIndicatorColor = Palette.Accent,
+                    unfocusedIndicatorColor = Palette.InputBorder,
+                ),
+                modifier = Modifier.fillMaxWidth().menuAnchor(),
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = {
+                    expanded = false
+                    query = ""
+                },
+            ) {
+                if (filtered.isEmpty()) {
+                    Text(
+                        if (available.isEmpty()) "No active buildings" else "No buildings match your search",
+                        color = Palette.Muted,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                    )
+                } else {
+                    filtered.forEach { building ->
+                        val id = building.id ?: return@forEach
+                        val isSelected = id in selectedIds
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        building.name?.takeIf { it.isNotBlank() } ?: "Unnamed building",
+                                        color = if (isSelected) Palette.AccentDark else Palette.Ink,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    )
+                                    if (isSelected) {
+                                        Text("Selected", color = Palette.AccentDark, fontSize = 11.sp)
+                                    }
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    if (isSelected) Icons.Outlined.CheckCircle else Icons.Outlined.AddCircleOutline,
+                                    contentDescription = null,
+                                    tint = if (isSelected) Palette.AccentDark else Palette.Muted,
+                                )
+                            },
+                            onClick = {
+                                onToggle(id)
+                                query = ""
+                            },
+                            modifier = Modifier.background(if (isSelected) Palette.AccentSoft else Color.Transparent),
+                        )
+                    }
+                }
+            }
+        }
+
+        if (selected.isEmpty()) {
+            Text(
+                "Select one or more buildings for GPS verification.",
+                color = Palette.Muted,
+                fontSize = 11.5.sp,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        } else {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                selected.forEach { building ->
+                    val id = building.id ?: return@forEach
+                    Surface(
+                        onClick = { onToggle(id) },
+                        shape = RoundedCornerShape(10.dp),
+                        color = Palette.Accent,
+                        contentColor = Color.White,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 10.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
+                        ) {
+                            Text(
+                                building.name.orEmpty(),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Icon(
+                                Icons.Outlined.Close,
+                                contentDescription = "Remove ${building.name.orEmpty()}",
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Sessions tab ───────────────────────────────────────────────────────────────────
 
 @Composable
@@ -594,6 +749,7 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
     var query by remember { mutableStateOf("") }
     var pendingBroadcastSession by remember { mutableStateOf<String?>(null) }
     var batteryPrompted by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf<StaffSessionDto?>(null) }
     val context = LocalContext.current
 
     // Final step: nudge for battery-optimization exemption once so the broadcast
@@ -694,8 +850,11 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                     running = state.isRunning(session.id),
                     broadcast = state.broadcast?.takeIf { it.sessionId == session.id },
                     manualCode = session.id?.let { state.manualCodes[it] },
+                    buildingNames = state.geofences
+                        .filter { it.id in session.buildings.orEmpty() }
+                        .mapNotNull { it.name?.takeIf(String::isNotBlank) },
                     onActivate = { session.id?.let { if (session.active == true) vm.deactivate(it) else vm.activate(it) } },
-                    onDelete = { session.id?.let(vm::deleteSession) },
+                    onDelete = { confirmDelete = session },
                     onStartBroadcast = { session.id?.let(::requestBroadcast) },
                     onStopBroadcast = { session.id?.let(vm::stopBroadcast) },
                     onLoadManualCode = { session.id?.let(vm::loadManualCode) },
@@ -705,6 +864,19 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                 )
             }
         }
+    }
+
+    confirmDelete?.let { session ->
+        ConfirmDialog(
+            title = "Delete session?",
+            message = "Delete ${session.course?.code ?: "this session"} on ${session.lectureDay ?: "its scheduled day"} at ${session.startTime ?: "the scheduled time"}?",
+            confirmLabel = "Delete",
+            onConfirm = {
+                session.id?.let(vm::deleteSession)
+                confirmDelete = null
+            },
+            onDismiss = { confirmDelete = null },
+        )
     }
 }
 
@@ -914,12 +1086,14 @@ private fun BufferFields(bufferGpsOnly: Double, bufferGpsBle: Double, onSave: (D
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SessionCard(
     session: StaffSessionDto,
     running: Boolean,
     broadcast: BroadcastState?,
     manualCode: ManualCodeStatusDto?,
+    buildingNames: List<String>,
     onActivate: () -> Unit,
     onDelete: () -> Unit,
     onStartBroadcast: () -> Unit,
@@ -930,86 +1104,139 @@ private fun SessionCard(
     onRegenerateManualCode: () -> Unit,
 ) {
     val active = session.active == true
-    // The single switch is ON only while THIS phone is actually on the air.
     val onAir = broadcast != null
+    val verification = VERIFICATION_LABELS[session.verification ?: "bluetooth"] ?: "Bluetooth"
+    val buildingLabel = when {
+        buildingNames.isNotEmpty() -> buildingNames.joinToString(", ")
+        session.buildings.orEmpty().isNotEmpty() -> "${session.buildings.orEmpty().size} buildings"
+        else -> null
+    }
+
     AppCard(
         Modifier.fillMaxWidth(),
-        shape = AppShapes.Panel,
+        shape = RoundedCornerShape(20.dp),
         border = when {
+            onAir -> Palette.SuccessBorder
             running -> Palette.RunningBorder
-            active -> Palette.SuccessBorder
             else -> Palette.Border
         },
     ) {
-        Column(Modifier.padding(14.dp)) {
+        Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(if (onAir) Palette.SuccessBg else Palette.AccentSoft, RoundedCornerShape(13.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.Schedule,
+                        contentDescription = null,
+                        tint = if (onAir) Palette.SuccessText else Palette.AccentDark,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Spacer(Modifier.width(11.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "${session.course?.code ?: "—"}  ·  ${session.lectureDay} ${session.startTime}-${session.endTime}",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
+                        session.course?.code ?: "Untitled course",
+                        color = Palette.Ink,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 18.sp,
                     )
                     Text(
-                        if (session.recurring == true) "Recurring" else "One-time",
+                        listOfNotNull(session.course?.name, session.course?.batch).joinToString(" · ")
+                            .ifBlank { "Course session" },
                         color = Palette.Muted,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                    )
+                }
+                SessionStatePill(active = active, running = running, onAir = onAir)
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Palette.InactiveBg, RoundedCornerShape(14.dp))
+                    .border(1.dp, Palette.Border, RoundedCornerShape(14.dp))
+                    .padding(12.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.CalendarMonth, contentDescription = null, tint = Palette.AccentDark, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(session.lectureDay ?: "—", color = Palette.Ink, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Spacer(Modifier.width(16.dp))
+                    Icon(Icons.Outlined.AccessTime, contentDescription = null, tint = Palette.AccentDark, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "${session.startTime ?: "—"} – ${session.endTime ?: "—"}",
+                        color = Palette.Ink,
+                        fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
                     )
                 }
-                if (running) {
-                    StatusBadge(
-                        if (onAir) "Live" else "Running",
-                        if (onAir) PillTone.Success else PillTone.Neutral,
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = 10.dp),
+                ) {
+                    SessionMetaChip(
+                        icon = if (session.recurring == true) Icons.Outlined.Repeat else Icons.Outlined.CalendarMonth,
+                        text = if (session.recurring == true) "Weekly" else "One-time",
                     )
+                    SessionMetaChip(Icons.Outlined.Sensors, verification)
+                    buildingLabel?.let { SessionMetaChip(Icons.Outlined.LocationOn, it) }
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
-
-            // Broadcast is only offered while the session is inside its scheduled window.
-            // The advertised device name is an internal implementation detail — not
-            // shown here, matching the raw rotating token also never being shown.
-            if (!onAir && running) {
-                PillButton("📡 Start attendance broadcast", onClick = onStartBroadcast, tone = PillTone.Accent)
-            } else if (!onAir && active) {
-                Text(
-                    "Broadcast is available only while this session is in its scheduled time window.",
-                    color = Palette.Muted,
-                    fontSize = 12.sp,
-                )
-            } else if (onAir) {
-                Column(
-                    Modifier.fillMaxWidth().background(Palette.ChipBg, AppShapes.Menu).padding(12.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        LiveDot()
-                        Spacer(Modifier.width(6.dp))
-                        Text("ON AIR", color = Palette.ErrorText, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
-                    val count = broadcast?.attendanceCount
-                    val remaining = broadcast?.minutesRemaining
-                    if (count != null || remaining != null) {
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            listOfNotNull(
-                                count?.let { if (it == 1) "1 student marked" else "$it students marked" },
-                                remaining?.let { "${it}m left" },
-                            ).joinToString("  ·  "),
-                            color = Palette.ChipInk,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 12.sp,
+            Spacer(Modifier.height(12.dp))
+            when {
+                onAir -> {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(Palette.SuccessBg, RoundedCornerShape(14.dp))
+                            .border(1.dp, Palette.SuccessBorder, RoundedCornerShape(14.dp))
+                            .padding(13.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            LiveDot()
+                            Spacer(Modifier.width(7.dp))
+                            Text("ATTENDANCE IS LIVE", color = Palette.SuccessText, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                        }
+                        val details = listOfNotNull(
+                            broadcast.attendanceCount?.let { if (it == 1) "1 student marked" else "$it students marked" },
+                            broadcast.minutesRemaining?.let { "${it}m remaining" },
+                        ).joinToString(" · ")
+                        if (details.isNotBlank()) {
+                            Text(details, color = Palette.SuccessText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                        }
+                        broadcast.error?.let {
+                            Text(it, color = Palette.ErrorText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        SessionActionButton(
+                            text = "Stop broadcast",
+                            icon = Icons.Outlined.StopCircle,
+                            tone = SessionActionTone.Danger,
+                            onClick = onStopBroadcast,
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
-                    broadcast?.error?.let {
-                        Spacer(Modifier.height(4.dp))
-                        Text(it, color = Palette.ErrorText, fontSize = 12.sp)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    PillButton("Stop broadcast", onClick = onStopBroadcast, tone = PillTone.Danger)
                 }
+                running -> SessionActionButton(
+                    text = "Start attendance broadcast",
+                    icon = Icons.Outlined.Sensors,
+                    tone = SessionActionTone.Primary,
+                    onClick = onStartBroadcast,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                active -> SessionNotice("Broadcast controls appear during the scheduled session window.")
+                else -> SessionNotice("This session is inactive. Activate it to make it available.")
             }
 
-            // Enabling/rotation is configured once, at session creation — this section
-            // only shows live controls, and only when the session actually has it on.
             if (session.manualCodeEnabled == true) {
                 ManualCodeSection(
                     status = manualCode,
@@ -1020,24 +1247,134 @@ private fun SessionCard(
                 )
             }
 
-            Spacer(Modifier.height(10.dp))
+            HorizontalDivider(color = Palette.Border, modifier = Modifier.padding(vertical = 14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PillButton(
-                    if (active) "Deactivate" else "Activate",
+                SessionActionButton(
+                    text = if (active) "Deactivate" else "Activate",
+                    icon = if (active) Icons.Outlined.PauseCircleOutline else Icons.Outlined.PlayCircleOutline,
+                    tone = if (active) SessionActionTone.Neutral else SessionActionTone.Success,
                     onClick = onActivate,
-                    tone = if (active) PillTone.Warning else PillTone.Success,
+                    modifier = Modifier.weight(1f),
                 )
-                PillButton("Delete", onClick = onDelete, tone = PillTone.Danger)
+                SessionActionButton(
+                    text = "Delete",
+                    icon = Icons.Outlined.DeleteOutline,
+                    tone = SessionActionTone.Danger,
+                    onClick = onDelete,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
 }
 
-/**
- * Collapsible manual-code control, mirroring the broadcast section's information
- * density. Status is fetched on first expand (see [onExpand]) rather than polled
- * continuously — this is staff-controlled config, not a live student-facing signal.
- */
+@Composable
+private fun SessionStatePill(active: Boolean, running: Boolean, onAir: Boolean) {
+    val label = when {
+        onAir -> "Live"
+        running -> "In progress"
+        active -> "Active"
+        else -> "Inactive"
+    }
+    val foreground = when {
+        onAir -> Palette.SuccessText
+        running -> Palette.AccentDark
+        active -> Palette.SuccessText
+        else -> Palette.Muted
+    }
+    val background = when {
+        onAir -> Palette.SuccessBg
+        running -> Palette.AccentSoft
+        active -> Palette.EnabledBg
+        else -> Palette.InactiveBg
+    }
+    Surface(shape = RoundedCornerShape(999.dp), color = background) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+        ) {
+            Box(Modifier.size(6.dp).background(foreground, CircleShape))
+            Spacer(Modifier.width(5.dp))
+            Text(label, color = foreground, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun SessionMetaChip(icon: ImageVector, text: String) {
+    Surface(shape = RoundedCornerShape(8.dp), color = Palette.Card, border = BorderStroke(1.dp, Palette.Border)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)) {
+            Icon(icon, contentDescription = null, tint = Palette.Muted, modifier = Modifier.size(13.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(text, color = Palette.PillInk, fontWeight = FontWeight.Medium, fontSize = 10.5.sp, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun SessionNotice(text: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Palette.InactiveBg, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Icon(Icons.Outlined.AccessTime, contentDescription = null, tint = Palette.Muted, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(7.dp))
+        Text(text, color = Palette.Muted, fontSize = 11.5.sp, modifier = Modifier.weight(1f))
+    }
+}
+
+private enum class SessionActionTone { Primary, Neutral, Success, Danger }
+
+@Composable
+private fun SessionActionButton(
+    text: String,
+    icon: ImageVector,
+    tone: SessionActionTone,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val container = when (tone) {
+        SessionActionTone.Primary -> Palette.Accent
+        SessionActionTone.Neutral -> Palette.Card
+        SessionActionTone.Success -> Palette.SuccessBg
+        SessionActionTone.Danger -> Palette.ErrorBg
+    }
+    val content = when (tone) {
+        SessionActionTone.Primary -> Color.White
+        SessionActionTone.Neutral -> Palette.PillInk
+        SessionActionTone.Success -> Palette.SuccessText
+        SessionActionTone.Danger -> Palette.DangerText
+    }
+    val border = when (tone) {
+        SessionActionTone.Primary -> Palette.Accent
+        SessionActionTone.Neutral -> Palette.InputBorder
+        SessionActionTone.Success -> Palette.SuccessBorder
+        SessionActionTone.Danger -> Palette.ErrorBorder
+    }
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = container,
+        contentColor = content,
+        border = BorderStroke(1.dp, border),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(17.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(text, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ManualCodeSection(
     status: ManualCodeStatusDto?,
@@ -1046,21 +1383,25 @@ private fun ManualCodeSection(
     onResume: () -> Unit,
     onRegenerate: () -> Unit,
 ) {
-    // Always shown (never collapsed) for sessions that have the code enabled, so
-    // a lecturer can read it out without hunting for a toggle first. Fetched once
-    // on first composition rather than on an expand tap.
     LaunchedEffect(Unit) { onLoad() }
 
-    Column(Modifier.padding(top = 12.dp)) {
+    Column(
+        Modifier
+            .padding(top = 12.dp)
+            .fillMaxWidth()
+            .background(Color(0xFFF8F7FF), RoundedCornerShape(14.dp))
+            .border(1.dp, Palette.AccentSoft, RoundedCornerShape(14.dp))
+            .padding(13.dp),
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Outlined.Password, contentDescription = null, tint = Palette.AccentDark, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("Manual attendance code", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Palette.Ink)
+            Icon(Icons.Outlined.Password, contentDescription = null, tint = Palette.AccentDark, modifier = Modifier.size(17.dp))
+            Spacer(Modifier.width(7.dp))
+            Text("Manual attendance code", fontWeight = FontWeight.Bold, fontSize = 12.5.sp, color = Palette.Ink)
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(9.dp))
 
         if (status == null) {
-            Text("Loading…", color = Palette.Muted, fontSize = 12.sp)
+            Text("Loading code…", color = Palette.Muted, fontSize = 12.sp)
             return@Column
         }
         if (status.allowed == false) {
@@ -1068,11 +1409,7 @@ private fun ManualCodeSection(
             return@Column
         }
         if (status.running != true) {
-            Text(
-                "The code appears once this session is inside its scheduled time window.",
-                color = Palette.Muted,
-                fontSize = 12.sp,
-            )
+            Text("The code appears during the scheduled session window.", color = Palette.Muted, fontSize = 12.sp)
             return@Column
         }
         val code = status.code ?: return@Column
@@ -1080,33 +1417,47 @@ private fun ManualCodeSection(
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(Palette.ChipBg, AppShapes.Menu)
-                .padding(14.dp),
+                .background(Palette.Card, RoundedCornerShape(11.dp))
+                .border(1.dp, Palette.Border, RoundedCornerShape(11.dp))
+                .padding(horizontal = 13.dp, vertical = 11.dp),
         ) {
             Text(
                 code.chunked(4).joinToString("  "),
                 fontWeight = FontWeight.ExtraBold,
-                fontSize = 26.sp,
+                fontSize = 24.sp,
                 letterSpacing = 3.sp,
                 color = Palette.AccentDark,
             )
-            if (status.paused == true) {
-                Text("Rotation paused", color = Palette.WarnText, fontSize = 12.sp)
-            } else if (status.rotationMode == "interval" && status.rotatesIn != null) {
-                Text("Next rotation in ${status.rotatesIn}s", color = Palette.ChipInk, fontSize = 12.sp)
+            val statusText = when {
+                status.paused == true -> "Rotation paused"
+                status.rotationMode == "interval" && status.rotatesIn != null -> "Next rotation in ${status.rotatesIn}s"
+                else -> "Current attendance code"
             }
+            Text(
+                statusText,
+                color = if (status.paused == true) Palette.WarnText else Palette.Muted,
+                fontSize = 11.sp,
+            )
         }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // Pause/resume only mean something while the code is actually rotating.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 9.dp),
+        ) {
             if (status.rotationMode == "interval") {
-                if (status.paused == true) {
-                    PillButton("Resume rotation", onClick = onResume, tone = PillTone.Accent)
-                } else {
-                    PillButton("Pause rotation", onClick = onPause, tone = PillTone.Neutral)
-                }
+                SessionActionButton(
+                    text = if (status.paused == true) "Resume rotation" else "Pause rotation",
+                    icon = if (status.paused == true) Icons.Outlined.PlayCircleOutline else Icons.Outlined.PauseCircleOutline,
+                    tone = if (status.paused == true) SessionActionTone.Success else SessionActionTone.Neutral,
+                    onClick = if (status.paused == true) onResume else onPause,
+                )
             }
-            PillButton("Generate new code", onClick = onRegenerate, tone = PillTone.Neutral)
+            SessionActionButton(
+                text = "New code",
+                icon = Icons.Outlined.Repeat,
+                tone = SessionActionTone.Neutral,
+                onClick = onRegenerate,
+            )
         }
     }
 }
