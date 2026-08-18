@@ -24,6 +24,14 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
         android:maxSdkVersion="30" />
 
+    <!-- Foreground service that keeps the lecturer broadcast alive off-screen -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Lets the lecturer exempt the app from Doze so the broadcast foreground
+         service survives screen-off on battery-aggressive OEMs (requested at runtime). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <uses-feature
         android:name="android.hardware.bluetooth_le"
         android:required="true" />
@@ -53,7 +61,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- OAuth deep link: lk.uop.attendance://oauth?code=... -->
+            <!-- OAuth deep link: lk.ac.pdn.eng.attendance://oauth?code=... -->
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -63,6 +71,12 @@
                     android:host="${oauthHost}" />
             </intent-filter>
         </activity>
+
+        <!-- Owns the poll-and-advertise loop so the broadcast survives backgrounding -->
+        <service
+            android:name=".ble.BroadcastService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
     </application>
 
 </manifest>

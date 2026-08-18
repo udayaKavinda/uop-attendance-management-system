@@ -29,6 +29,12 @@ moshi = "1.15.1"
 browser = "1.8.0"
 securityCrypto = "1.1.0-alpha06"
 
+# Google sign-in (Credential Manager). `credentials-play-services-auth` is the
+# backend that actually talks to Google Play services; `googleid` supplies
+# GetSignInWithGoogleOption / GoogleIdTokenCredential.
+credentials = "1.5.0"
+googleid = "1.1.1"
+
 [libraries]
 # AndroidX core
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -62,9 +68,14 @@ okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-i
 moshi = { group = "com.squareup.moshi", name = "moshi", version.ref = "moshi" }
 moshi-kotlin = { group = "com.squareup.moshi", name = "moshi-kotlin", version.ref = "moshi" }
 
-# Custom Tabs (OAuth) + secure storage
+# Custom Tabs (OAuth fallback) + secure storage
 androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+
+# Credential Manager — native "Sign in with Google"
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
+googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }

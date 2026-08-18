@@ -18,7 +18,18 @@
 }
 
 # Keep our DTOs so Moshi's reflective adapter can read field names.
--keep class lk.ac.pdn.eng.attendance.data.net.** { *; }
+-keep class lk.ac.pdn.eng.feats.data.net.** { *; }
 
 # Kotlin metadata for reflection
 -keep class kotlin.Metadata { *; }
+
+# Credential Manager / Sign in with Google.
+# The androidx.credentials and googleid artifacts ship consumer rules, but the
+# credential providers are resolved reflectively, so keep them explicitly —
+# release builds have isMinifyEnabled = true.
+-keep class androidx.credentials.** { *; }
+-keep class com.google.android.libraries.identity.googleid.** { *; }
+-if class androidx.credentials.CredentialManager
+-keep class androidx.credentials.playservices.** { *; }
+-dontwarn androidx.credentials.**
+-dontwarn com.google.android.libraries.identity.googleid.**
