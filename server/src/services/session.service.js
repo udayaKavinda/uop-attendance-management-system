@@ -2,6 +2,7 @@ const Course = require('../models/Course');
 const LectureSession = require('../models/LectureSession');
 const { DAY_INDEX, toMinutes } = require('../utils/schedule');
 const { SESSION_RESOLVE_CACHE_TTL_MS, BROADCAST_STALE_MS } = require('../utils/constants');
+const settingsService = require('./settings.service');
 
 // 5 s cache cuts repeated Course + LectureSession reads under 100-student polling load.
 const _sessionResolveCache = new Map();
@@ -97,6 +98,7 @@ async function getRunningCoursesForStudent(now = new Date()) {
     lectureDay: day,
   }).populate('course', 'code name active batch');
 
+  const manualCodeAllowed = await settingsService.isManualCodeAllowed();
   const runningCourses = new Map();
   sessions.forEach((s) => {
     if (!s.course?.active) return;
@@ -106,6 +108,10 @@ async function getRunningCoursesForStudent(now = new Date()) {
       code: s.course.code,
       batch: s.course.batch,
       name: s.course.name,
+      // Lets the app offer "Enter attendance code" alongside the automatic BLE
+      // scan — independent of whether the lecturer's broadcast is actually on,
+      // but gated by the global kill-switch regardless of the session's own setting.
+      manualCodeEnabled: manualCodeAllowed && Boolean(s.manualCodeEnabled),
     });
   });
 

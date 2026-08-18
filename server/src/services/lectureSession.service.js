@@ -1,8 +1,12 @@
 const LectureSession = require('../models/LectureSession');
 const Course = require('../models/Course');
 const Attendance = require('../models/Attendance');
+const Geofence = require('../models/Geofence');
 const bluetoothCode = require('./bluetoothCode.service');
-const { validateSessionCreateBody, checkSessionOverlap } = require('../validators/session.validator');
+const manualCode = require('./manualCode.service');
+const {
+  validateSessionCreateBody, checkSessionOverlap, checkVerificationAllowed,
+} = require('../validators/session.validator');
 const { staffSessionMatch } = require('./auth.service');
 const { localYmd } = require('../utils/date');
 const { toMinutes } = require('../utils/schedule');
@@ -28,12 +32,28 @@ async function createSession(course, body) {
     validated.endTime
   );
   if (!overlap.ok) return overlap;
+
+  const modeGate = await checkVerificationAllowed(validated.verification);
+  if (!modeGate.ok) return modeGate;
+
+  if (validated.buildings.length > 0) {
+    const found = await Geofence.countDocuments({
+      _id: { $in: validated.buildings },
+      deleted: false,
+    });
+    if (found !== validated.buildings.length) {
+      return { ok: false, status: 400, error: 'One or more buildings were not found' };
+    }
+  }
+
   const created = await LectureSession.create({
     course: course._id,
     lectureDay: validated.lectureDay,
     startTime: validated.startTime,
     endTime: validated.endTime,
     recurring: validated.recurring,
+    verification: validated.verification,
+    buildings: validated.buildings,
     active: true,
   });
   return { ok: true, session: created };
@@ -50,6 +70,7 @@ async function softDeleteSession(sessionItem) {
   sessionItem.lastBroadcastSeenAt = null;
   await sessionItem.save();
   await bluetoothCode.removeToken(String(sessionItem._id));
+  await manualCode.removeCode(sessionItem);
   invalidateActiveSessionCache(sessionItem.course);
   return { ok: true };
 }
@@ -73,6 +94,7 @@ async function deactivateSession(sessionItem) {
   sessionItem.lastBroadcastSeenAt = null;
   await sessionItem.save();
   await bluetoothCode.removeToken(String(sessionItem._id));
+  await manualCode.removeCode(sessionItem);
   invalidateActiveSessionCache(sessionItem.course);
   return { ok: true, session: sessionItem };
 }

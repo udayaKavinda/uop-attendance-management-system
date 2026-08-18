@@ -80,8 +80,10 @@ import lk.ac.pdn.eng.feats.ble.BatteryGuard
 import lk.ac.pdn.eng.feats.ble.BlePermissions
 import lk.ac.pdn.eng.feats.ble.BroadcastService
 import lk.ac.pdn.eng.feats.ble.BroadcastState
+import androidx.compose.material3.Switch
 import lk.ac.pdn.eng.feats.data.net.CourseDto
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
+import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
 import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
 import lk.ac.pdn.eng.feats.ui.components.AppCard
 import lk.ac.pdn.eng.feats.ui.components.AppTextField
@@ -109,7 +111,7 @@ fun StaffDashboardScreen(
 
     val tabs = buildList {
         add("Courses"); add("Create session"); add("Sessions")
-        if (state.isAdmin) add("Lecturers")
+        if (state.isAdmin) { add("Lecturers"); add("Geofences") }
     }
 
     LaunchedEffect(state.flash) {
@@ -157,6 +159,7 @@ fun StaffDashboardScreen(
             "Create session" -> CreateSessionTab(state, vm)
             "Sessions" -> SessionsTab(state, vm)
             "Lecturers" -> LecturersTab(state, vm)
+            "Geofences" -> GeofencesTab(state, vm)
         }
     }
 }
@@ -356,6 +359,12 @@ private fun CourseCard(
 
 // ── Create session tab ────────────────────────────────────────────────────────────
 
+private val VERIFICATION_LABELS = mapOf(
+    "bluetooth" to "Bluetooth",
+    "geofence" to "GPS geofence",
+    "both" to "Bluetooth or GPS",
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
@@ -368,7 +377,17 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
     var showTimePicker by remember { mutableStateOf(false) }
     var pickingStart by remember { mutableStateOf(true) }
 
-    val canCreate = courseId != null && start.isNotBlank() && end.isNotBlank()
+    // The global policy constrains which modes may be picked at all; while it's
+    // still loading, fall back to the safe default (Bluetooth only, unchanged UX).
+    val allowedModes = state.settings?.allowedModes ?: "bluetooth"
+    var verification by remember(allowedModes) {
+        mutableStateOf(if (allowedModes == "both") "bluetooth" else allowedModes)
+    }
+    var selectedBuildingIds by remember { mutableStateOf(setOf<String>()) }
+    val needsBuildings = verification != "bluetooth"
+
+    val canCreate = courseId != null && start.isNotBlank() && end.isNotBlank() &&
+        (!needsBuildings || selectedBuildingIds.isNotEmpty())
 
     if (showTimePicker) {
         val (initH, initM) = parseTime(if (pickingStart) start else end)
@@ -436,10 +455,59 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
                     Checkbox(checked = recurring, onCheckedChange = { recurring = it })
                     Text("Recurring (weekly) session", fontSize = 14.sp)
                 }
+
+                // Only rendered at all when the server's allowedModes policy permits a
+                // choice — a "bluetooth"-only or "geofence"-only policy forces the mode
+                // silently instead of showing a picker with nothing to pick.
+                if (allowedModes == "both") {
+                    Spacer(Modifier.height(8.dp))
+                    LabeledDropdown(
+                        label = "Verification",
+                        selectedText = VERIFICATION_LABELS[verification].orEmpty(),
+                        placeholder = "Choose verification",
+                        options = VERIFICATION_LABELS.map { (k, v) -> k to v },
+                        onSelect = { verification = it },
+                    )
+                }
+
+                if (needsBuildings) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Buildings", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 4.dp))
+                    if (state.geofences.isEmpty()) {
+                        Text(
+                            "No buildings configured yet — an admin can draw one in the Geofences tool.",
+                            color = Palette.Muted,
+                            fontSize = 12.sp,
+                        )
+                    } else {
+                        state.geofences.forEach { g ->
+                            val id = g.id ?: return@forEach
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = id in selectedBuildingIds,
+                                    onCheckedChange = { checked ->
+                                        selectedBuildingIds = if (checked) {
+                                            selectedBuildingIds + id
+                                        } else {
+                                            selectedBuildingIds - id
+                                        }
+                                    },
+                                )
+                                Text(g.name.orEmpty(), fontSize = 14.sp)
+                            }
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(12.dp))
                 PrimaryButton(
                     text = "Create session",
-                    onClick = { vm.createSession(courseId.orEmpty(), day, start, end, recurring) },
+                    onClick = {
+                        vm.createSession(
+                            courseId.orEmpty(), day, start, end, recurring,
+                            verification, selectedBuildingIds.toList(),
+                        )
+                    },
                     enabled = canCreate,
                 )
             }
@@ -536,6 +604,9 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
     ) {
+        if (state.isAdmin) {
+            item { GlobalSettingsCard(state = state, vm = vm) }
+        }
         item {
             AppTextField(
                 query,
@@ -553,14 +624,182 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                     session = session,
                     running = state.isRunning(session.id),
                     broadcast = state.broadcast?.takeIf { it.sessionId == session.id },
+                    manualCode = session.id?.let { state.manualCodes[it] },
                     onActivate = { session.id?.let { if (session.active == true) vm.deactivate(it) else vm.activate(it) } },
                     onDelete = { session.id?.let(vm::deleteSession) },
                     onStartBroadcast = { session.id?.let(::requestBroadcast) },
                     onStopBroadcast = { session.id?.let(vm::stopBroadcast) },
+                    onExpandManualCode = { session.id?.let(vm::loadManualCode) },
+                    onToggleManualCode = { on -> session.id?.let { vm.setManualCodeEnabled(it, on) } },
+                    onToggleRotation = { on ->
+                        session.id?.let { id ->
+                            if (on) vm.setManualCodeRotation(id, "interval", 60) else vm.setManualCodeRotation(id, "none", 60)
+                        }
+                    },
+                    onPauseManualCode = { session.id?.let(vm::pauseManualCode) },
+                    onResumeManualCode = { session.id?.let(vm::resumeManualCode) },
+                    onRegenerateManualCode = { session.id?.let(vm::regenerateManualCode) },
                 )
             }
         }
     }
+}
+
+/**
+ * Admin-only global policy card: manual-code kill-switch (takes effect immediately
+ * for every session), verification mode policy, seeding target, and GPS buffers.
+ * Collapsed by default — this is occasional config, not something an admin needs
+ * open on every visit to the Sessions tab.
+ */
+@Composable
+private fun GlobalSettingsCard(state: StaffState, vm: StaffViewModel) {
+    var expanded by remember { mutableStateOf(false) }
+    val settings = state.settings
+
+    AppCard(Modifier.fillMaxWidth(), shape = AppShapes.Panel) {
+        Column(Modifier.padding(14.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Global settings", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(
+                        "Verification policy, peer seeding, GPS buffers, manual codes.",
+                        color = Palette.Muted,
+                        fontSize = 12.sp,
+                    )
+                }
+                Text(
+                    if (expanded) "Hide" else "Show",
+                    color = Palette.AccentDark,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+
+            if (!expanded || settings == null) return@Column
+            Spacer(Modifier.height(12.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = settings.manualCodeAllowed == true,
+                    onCheckedChange = vm::setManualCodeAllowedGlobally,
+                )
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("Manual attendance codes", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Off hides and rejects the fallback code everywhere, immediately.",
+                        color = Palette.Muted,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Text("Verification policy", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Constrains which mode a NEW session may use. Never strands a running session.",
+                color = Palette.Muted,
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            LabeledDropdown(
+                label = "",
+                selectedText = VERIFICATION_LABELS[settings.allowedModes].orEmpty(),
+                placeholder = "Choose",
+                options = VERIFICATION_LABELS.map { (k, v) -> k to v },
+                onSelect = vm::setAllowedModes,
+            )
+
+            Spacer(Modifier.height(14.dp))
+            Text("Peer seeding", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "0 disables seeding. Extends Bluetooth range by having a few validated " +
+                    "students re-broadcast the token; students never know if they were picked.",
+                color = Palette.Muted,
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            SeedingFields(
+                seedRate = settings.seedRate ?: 0,
+                seedWindowMs = settings.seedWindowMs ?: 60000L,
+                onSave = vm::setSeedingParams,
+            )
+
+            Spacer(Modifier.height(14.dp))
+            Text("GPS buffers (meters)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Geofence-only sessions get the larger buffer (GPS is the only signal); " +
+                    "\"both\" sessions' GPS fallback gets the tighter one.",
+                color = Palette.Muted,
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            BufferFields(
+                bufferGpsOnly = settings.bufferGpsOnly ?: 30.0,
+                bufferGpsBle = settings.bufferGpsBle ?: 15.0,
+                onSave = vm::setGpsBuffers,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SeedingFields(seedRate: Int, seedWindowMs: Long, onSave: (Int, Long) -> Unit) {
+    var rateText by remember(seedRate) { mutableStateOf(seedRate.toString()) }
+    var windowSecText by remember(seedWindowMs) { mutableStateOf((seedWindowMs / 1000).toString()) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        AppTextField(
+            rateText, { rateText = it.filter(Char::isDigit) }, "Target seeders",
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+            modifier = Modifier.weight(1f),
+        )
+        AppTextField(
+            windowSecText, { windowSecText = it.filter(Char::isDigit) }, "Window (s)",
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Spacer(Modifier.height(6.dp))
+    PillButton(
+        "Save seeding settings",
+        onClick = {
+            val rate = rateText.toIntOrNull() ?: return@PillButton
+            val windowMs = (windowSecText.toLongOrNull() ?: return@PillButton) * 1000
+            onSave(rate, windowMs)
+        },
+        tone = PillTone.Accent,
+    )
+}
+
+@Composable
+private fun BufferFields(bufferGpsOnly: Double, bufferGpsBle: Double, onSave: (Double, Double) -> Unit) {
+    var onlyText by remember(bufferGpsOnly) { mutableStateOf(bufferGpsOnly.toInt().toString()) }
+    var bleText by remember(bufferGpsBle) { mutableStateOf(bufferGpsBle.toInt().toString()) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        AppTextField(
+            onlyText, { onlyText = it.filter(Char::isDigit) }, "Geofence-only",
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+            modifier = Modifier.weight(1f),
+        )
+        AppTextField(
+            bleText, { bleText = it.filter(Char::isDigit) }, "\"Both\" GPS fallback",
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Spacer(Modifier.height(6.dp))
+    PillButton(
+        "Save buffers",
+        onClick = {
+            val only = onlyText.toDoubleOrNull() ?: return@PillButton
+            val ble = bleText.toDoubleOrNull() ?: return@PillButton
+            onSave(only, ble)
+        },
+        tone = PillTone.Accent,
+    )
 }
 
 @Composable
@@ -568,10 +807,17 @@ private fun SessionCard(
     session: StaffSessionDto,
     running: Boolean,
     broadcast: BroadcastState?,
+    manualCode: ManualCodeStatusDto?,
     onActivate: () -> Unit,
     onDelete: () -> Unit,
     onStartBroadcast: () -> Unit,
     onStopBroadcast: () -> Unit,
+    onExpandManualCode: () -> Unit,
+    onToggleManualCode: (Boolean) -> Unit,
+    onToggleRotation: (Boolean) -> Unit,
+    onPauseManualCode: () -> Unit,
+    onResumeManualCode: () -> Unit,
+    onRegenerateManualCode: () -> Unit,
 ) {
     val active = session.active == true
     // The single switch is ON only while THIS phone is actually on the air.
@@ -657,6 +903,16 @@ private fun SessionCard(
                 }
             }
 
+            ManualCodeSection(
+                status = manualCode,
+                onExpand = onExpandManualCode,
+                onToggleEnabled = onToggleManualCode,
+                onToggleRotation = onToggleRotation,
+                onPause = onPauseManualCode,
+                onResume = onResumeManualCode,
+                onRegenerate = onRegenerateManualCode,
+            )
+
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PillButton(
@@ -666,6 +922,118 @@ private fun SessionCard(
                 )
                 PillButton("Delete", onClick = onDelete, tone = PillTone.Danger)
             }
+        }
+    }
+}
+
+/**
+ * Collapsible manual-code control, mirroring the broadcast section's information
+ * density. Status is fetched on first expand (see [onExpand]) rather than polled
+ * continuously — this is staff-controlled config, not a live student-facing signal.
+ */
+@Composable
+private fun ManualCodeSection(
+    status: ManualCodeStatusDto?,
+    onExpand: () -> Unit,
+    onToggleEnabled: (Boolean) -> Unit,
+    onToggleRotation: (Boolean) -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onRegenerate: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(Modifier.padding(top = 10.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable {
+                    expanded = !expanded
+                    if (expanded) onExpand()
+                }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "🔢  Manual attendance code",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                if (expanded) "Hide" else "Show",
+                color = Palette.AccentDark,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+
+        if (!expanded) return@Column
+        Spacer(Modifier.height(6.dp))
+
+        if (status == null) {
+            Text("Loading…", color = Palette.Muted, fontSize = 12.sp)
+            return@Column
+        }
+        if (status.allowed == false) {
+            Text("Disabled by the administrator.", color = Palette.Muted, fontSize = 12.sp)
+            return@Column
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = status.enabled == true, onCheckedChange = onToggleEnabled)
+            Spacer(Modifier.width(8.dp))
+            Text("Enabled", fontSize = 13.sp)
+        }
+        if (status.enabled != true) return@Column
+
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = status.rotationMode == "interval", onCheckedChange = onToggleRotation)
+            Spacer(Modifier.width(8.dp))
+            Text("Rotate every 60 s", fontSize = 13.sp)
+        }
+
+        if (status.running != true) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "The code appears once this session is inside its scheduled time window.",
+                color = Palette.Muted,
+                fontSize = 12.sp,
+            )
+            return@Column
+        }
+        val code = status.code ?: return@Column
+
+        Spacer(Modifier.height(8.dp))
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Palette.ChipBg, AppShapes.Menu)
+                .padding(12.dp),
+        ) {
+            Text(
+                code.chunked(4).joinToString("  "),
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 22.sp,
+                letterSpacing = 2.sp,
+                color = Palette.AccentDark,
+            )
+            if (status.paused == true) {
+                Text("Rotation paused", color = Palette.WarnText, fontSize = 12.sp)
+            } else if (status.rotationMode == "interval" && status.rotatesIn != null) {
+                Text("Next rotation: ${status.rotatesIn}s", color = Palette.ChipInk, fontSize = 12.sp)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (status.rotationMode == "interval") {
+                if (status.paused == true) {
+                    PillButton("Resume rotation", onClick = onResume, tone = PillTone.Accent)
+                } else {
+                    PillButton("Pause rotation", onClick = onPause, tone = PillTone.Neutral)
+                }
+            }
+            PillButton("Generate new code", onClick = onRegenerate, tone = PillTone.Neutral)
         }
     }
 }

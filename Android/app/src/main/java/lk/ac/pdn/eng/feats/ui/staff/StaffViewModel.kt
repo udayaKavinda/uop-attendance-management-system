@@ -17,8 +17,14 @@ import lk.ac.pdn.eng.feats.data.net.CourseDto
 import lk.ac.pdn.eng.feats.data.net.CreateCourseReq
 import lk.ac.pdn.eng.feats.data.net.CreateLecturerReq
 import lk.ac.pdn.eng.feats.data.net.CreateSessionReq
+import lk.ac.pdn.eng.feats.data.net.GeofenceDto
+import lk.ac.pdn.eng.feats.data.net.GeofenceUpdateReq
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
+import lk.ac.pdn.eng.feats.data.net.ManualCodeConfigReq
+import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
 import lk.ac.pdn.eng.feats.data.net.RunningSessionDto
+import lk.ac.pdn.eng.feats.data.net.SettingsDto
+import lk.ac.pdn.eng.feats.data.net.SettingsReq
 import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
 import lk.ac.pdn.eng.feats.data.net.UpdateLecturerReq
 import lk.ac.pdn.eng.feats.ui.container
@@ -38,8 +44,15 @@ data class StaffState(
     val selectedLecturerFilter: LecturerDto? = null,
     val lecturerSearchResults: List<LecturerDto> = emptyList(),
     val lecturerSearchLoading: Boolean = false,
+    /** Per-session manual-code status, fetched on demand when a card is expanded. */
+    val manualCodes: Map<String, ManualCodeStatusDto> = emptyMap(),
+    /** Admin-only global settings (manual-code switch, allowedModes, seeding, buffers); null until loaded. */
+    val settings: SettingsDto? = null,
+    /** Admin-only building list for the geofence mode + the map tool. */
+    val geofences: List<GeofenceDto> = emptyList(),
 ) {
     val isAdmin: Boolean get() = role == "admin"
+    val manualCodeAllowed: Boolean? get() = settings?.manualCodeAllowed
     fun isRunning(sessionId: String?): Boolean = sessionId != null && running.containsKey(sessionId)
 
     /** Courses visible in the admin Courses tab (filtered by selected lecturer). */
@@ -61,6 +74,10 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
         pollRunning()
         observeBroadcastService()
+        // Every staff member needs `allowedModes` for the create-session mode picker,
+        // and `buildings` to pick from for geofence sessions — not admin-only reads.
+        loadGlobalSettings()
+        loadGeofences()
     }
 
     /** Mirror the foreground service's state and surface its self-stop reasons. */
@@ -249,10 +266,22 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Sessions ───────────────────────────────────────────────────────────────────
 
-    fun createSession(courseId: String, day: String, start: String, end: String, recurring: Boolean) {
+    fun createSession(
+        courseId: String,
+        day: String,
+        start: String,
+        end: String,
+        recurring: Boolean,
+        verification: String = "bluetooth",
+        buildings: List<String> = emptyList(),
+    ) {
         if (courseId.isBlank()) { setError("Choose a course first."); return }
+        if (verification != "bluetooth" && buildings.isEmpty()) {
+            setError("Select at least one building for geofence-based verification.")
+            return
+        }
         viewModelScope.launch {
-            val req = CreateSessionReq(day.uppercase(), start, end, recurring)
+            val req = CreateSessionReq(day.uppercase(), start, end, recurring, verification, buildings)
             when (val res = repo.createSession(courseId, req)) {
                 is ApiResult.Success -> { setFlash("Session created."); refresh() }
                 is ApiResult.Error -> setError(res.message)
@@ -315,6 +344,123 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             when (val res = repo.setBroadcasting(sessionId, false)) {
                 is ApiResult.Success -> { setFlash("Broadcast stopped."); refreshSessionsOnly() }
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
+    }
+
+    // ── Manual attendance code (fallback, staff-controlled) ───────────────────────────
+
+    /** Loads current status for one session's manual code, e.g. when its card is expanded. */
+    fun loadManualCode(sessionId: String) {
+        viewModelScope.launch {
+            when (val res = repo.manualCodeStatus(sessionId)) {
+                is ApiResult.Success -> putManualCode(sessionId, res.data)
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
+    }
+
+    fun setManualCodeEnabled(sessionId: String, enabled: Boolean) =
+        patchManualCode(sessionId, ManualCodeConfigReq(enabled = enabled))
+
+    fun setManualCodeRotation(sessionId: String, rotationMode: String, rotationSeconds: Int) =
+        patchManualCode(sessionId, ManualCodeConfigReq(rotationMode = rotationMode, rotationSeconds = rotationSeconds))
+
+    fun pauseManualCode(sessionId: String) = patchManualCode(sessionId, ManualCodeConfigReq(paused = true))
+    fun resumeManualCode(sessionId: String) = patchManualCode(sessionId, ManualCodeConfigReq(paused = false))
+    fun regenerateManualCode(sessionId: String) = patchManualCode(sessionId, ManualCodeConfigReq(regenerate = true))
+
+    private fun patchManualCode(sessionId: String, body: ManualCodeConfigReq) {
+        viewModelScope.launch {
+            when (val res = repo.setManualCode(sessionId, body)) {
+                is ApiResult.Success -> putManualCode(sessionId, res.data)
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
+    }
+
+    private fun putManualCode(sessionId: String, status: ManualCodeStatusDto) {
+        _state.value = _state.value.copy(manualCodes = _state.value.manualCodes + (sessionId to status))
+    }
+
+    // ── Settings (admin: mode policy, seeding, buffers, manual-code kill-switch) ───────
+
+    private fun loadGlobalSettings() {
+        viewModelScope.launch {
+            when (val res = repo.settings()) {
+                is ApiResult.Success -> _state.value = _state.value.copy(settings = res.data)
+                is ApiResult.Error -> Unit
+            }
+        }
+    }
+
+    fun setManualCodeAllowedGlobally(allowed: Boolean) {
+        patchSettings(
+            SettingsReq(manualCodeAllowed = allowed),
+            if (allowed) "Manual attendance codes enabled." else "Manual attendance codes disabled for everyone.",
+        )
+    }
+
+    /** "bluetooth" | "geofence" | "both" — constrains verification for new sessions only. */
+    fun setAllowedModes(mode: String) = patchSettings(SettingsReq(allowedModes = mode), "Verification policy updated.")
+
+    fun setSeedingParams(seedRate: Int, seedWindowMs: Long) =
+        patchSettings(SettingsReq(seedRate = seedRate, seedWindowMs = seedWindowMs), "Seeding settings updated.")
+
+    fun setGpsBuffers(bufferGpsOnly: Double, bufferGpsBle: Double) =
+        patchSettings(
+            SettingsReq(bufferGpsOnly = bufferGpsOnly, bufferGpsBle = bufferGpsBle),
+            "GPS buffers updated.",
+        )
+
+    private fun patchSettings(req: SettingsReq, success: String) {
+        viewModelScope.launch {
+            when (val res = repo.updateSettings(req)) {
+                is ApiResult.Success -> { _state.value = _state.value.copy(settings = res.data); setFlash(success) }
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
+    }
+
+    // ── Geofences (admin building polygons) ─────────────────────────────────────────────
+
+    private fun loadGeofences() {
+        viewModelScope.launch {
+            when (val res = repo.geofences()) {
+                is ApiResult.Success -> _state.value = _state.value.copy(geofences = res.data)
+                is ApiResult.Error -> Unit
+            }
+        }
+    }
+
+    /** `polygon` is ordered [lng, lat] vertices — see [lk.ac.pdn.eng.feats.data.net.GeofenceDto]. */
+    fun createGeofence(name: String, polygon: List<List<Double>>) {
+        if (name.isBlank() || polygon.size < 3) {
+            setError("Name a building and draw at least 3 points.")
+            return
+        }
+        viewModelScope.launch {
+            when (val res = repo.createGeofence(name.trim(), polygon)) {
+                is ApiResult.Success -> { setFlash("Building saved."); loadGeofences() }
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
+    }
+
+    fun deleteGeofence(id: String) {
+        viewModelScope.launch {
+            when (val res = repo.deleteGeofence(id)) {
+                is ApiResult.Success -> { setFlash("Building removed."); loadGeofences() }
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
+    }
+
+    fun renameGeofence(id: String, name: String) {
+        viewModelScope.launch {
+            when (val res = repo.updateGeofence(id, GeofenceUpdateReq(name = name))) {
+                is ApiResult.Success -> { setFlash("Building renamed."); loadGeofences() }
                 is ApiResult.Error -> setError(res.message)
             }
         }

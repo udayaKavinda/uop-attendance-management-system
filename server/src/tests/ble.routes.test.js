@@ -12,10 +12,16 @@ jest.mock('connect-mongo', () => ({
   },
 }));
 
-// BleToken in-memory store — lets bluetoothCode work without a real MongoDB connection
+// BleToken in-memory store — lets bluetoothCode work without a real MongoDB connection.
+// These tests only ever exercise the primary row (no seeding), so one doc per
+// sessionId is enough — `find`/`deleteMany` just wrap that single doc as a pool of one.
 const _bleTokenStore = {};
 jest.mock('../models/BleToken', () => ({
   findOne: jest.fn(({ sessionId }) => Promise.resolve(_bleTokenStore[sessionId] ?? null)),
+  find: jest.fn(({ sessionId }) => {
+    const doc = _bleTokenStore[sessionId];
+    return Promise.resolve(doc ? [doc] : []);
+  }),
   findOneAndUpdate: jest.fn(({ sessionId }, update) => {
     const doc = { ...(_bleTokenStore[sessionId] || {}), sessionId, ...update };
     _bleTokenStore[sessionId] = doc;
@@ -25,6 +31,12 @@ jest.mock('../models/BleToken', () => ({
     delete _bleTokenStore[sessionId];
     return Promise.resolve({ deletedCount: 1 });
   }),
+  deleteMany: jest.fn(({ sessionId }) => {
+    const existed = sessionId in _bleTokenStore;
+    delete _bleTokenStore[sessionId];
+    return Promise.resolve({ deletedCount: existed ? 1 : 0 });
+  }),
+  countDocuments: jest.fn(() => Promise.resolve(0)),
 }));
 
 // Mock models before loading the app
@@ -36,6 +48,21 @@ jest.mock('../models/Attendance', () => ({
   create: jest.fn(),
   distinct: jest.fn(),
   countDocuments: jest.fn().mockResolvedValue(0),
+}));
+
+// Settings singleton mock — accepting attendance now also runs seeder selection,
+// which reads Settings.seedRate (default 0, so seeding stays a no-op for these tests).
+let mockSettingsStore = null;
+jest.mock('../models/Settings', () => ({
+  findOneAndUpdate: jest.fn((_filter, update) => {
+    if (!mockSettingsStore) {
+      mockSettingsStore = {
+        manualCodeAllowed: true, allowedModes: 'bluetooth', seedRate: 0, seedWindowMs: 60000, bufferGpsOnly: 30, bufferGpsBle: 15,
+      };
+    }
+    if (update.$set) Object.assign(mockSettingsStore, update.$set);
+    return Promise.resolve({ ...mockSettingsStore });
+  }),
 }));
 
 const request = require('supertest');

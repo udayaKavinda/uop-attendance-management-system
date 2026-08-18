@@ -51,6 +51,18 @@ interface ApiService {
     @POST("api/bluetooth-attendance")
     suspend fun recordBluetoothAttendance(@Body body: BluetoothAttendanceReq): BluetoothAttendanceRes
 
+    /** Fallback path: same outcome shape as the Bluetooth submission. */
+    @POST("api/manual-attendance")
+    suspend fun recordManualAttendance(@Body body: ManualAttendanceReq): BluetoothAttendanceRes
+
+    /** Unified submission (current app target): exactly one of token/fix/code per call. */
+    @POST("api/attendance")
+    suspend fun recordAttendance(@Body body: UnifiedAttendanceReq): UnifiedAttendanceRes
+
+    /** Seeder token re-fetch; each call is also the seeder's heartbeat. */
+    @GET("api/attendance/seed-token")
+    suspend fun seedToken(@Query("sessionId") sessionId: String): SeedTokenDto
+
     // ── Admin / staff: courses ───────────────────────────────────────────────────────
     @GET("api/admin/courses")
     suspend fun adminCourses(): CoursesRes
@@ -114,6 +126,37 @@ interface ApiService {
 
     @GET("api/admin/sessions/{sessionId}/attendance")
     suspend fun sessionAttendance(@Path("sessionId") sessionId: String): SessionAttendanceRes
+
+    /** Staff view of the session's manual attendance code (config + live state, if running). */
+    @GET("api/admin/sessions/{sessionId}/manual-code")
+    suspend fun manualCodeStatus(@Path("sessionId") sessionId: String): ManualCodeStatusDto
+
+    /** Enable/disable, change rotation, pause/resume, or force-regenerate — any subset. */
+    @PATCH("api/admin/sessions/{sessionId}/manual-code")
+    suspend fun setManualCode(
+        @Path("sessionId") sessionId: String,
+        @Body body: ManualCodeConfigReq,
+    ): ManualCodeStatusDto
+
+    // ── Admin: settings ───────────────────────────────────────────────────────────────
+    @GET("api/admin/settings")
+    suspend fun settings(): SettingsDto
+
+    @PATCH("api/admin/settings")
+    suspend fun updateSettings(@Body body: SettingsReq): SettingsDto
+
+    // ── Admin: geofences (building polygons) ────────────────────────────────────────────
+    @GET("api/admin/geofences")
+    suspend fun geofences(): GeofencesRes
+
+    @POST("api/admin/geofences")
+    suspend fun createGeofence(@Body body: GeofenceCreateReq): GeofenceRes
+
+    @PATCH("api/admin/geofences/{id}")
+    suspend fun updateGeofence(@Path("id") id: String, @Body body: GeofenceUpdateReq): GeofenceRes
+
+    @DELETE("api/admin/geofences/{id}")
+    suspend fun deleteGeofence(@Path("id") id: String): SimpleSuccess
 
     // ── Admin: lecturers ─────────────────────────────────────────────────────────────
     @GET("api/admin/lecturers")

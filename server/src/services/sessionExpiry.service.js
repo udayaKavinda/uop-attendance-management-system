@@ -3,6 +3,8 @@ const { isNonRecurringExpired } = require('../utils/schedule');
 const { BROADCAST_STALE_MS } = require('../utils/constants');
 const { isWithinScheduleWindow } = require('./session.service');
 const { closeBroadcast } = require('./lectureSession.service');
+const manualCode = require('./manualCode.service');
+const bluetoothCode = require('./bluetoothCode.service');
 
 async function deactivateExpiredNonRecurringSessions(filter = {}) {
   const candidates = await LectureSession.find({ ...filter, active: true, recurring: false, deleted: false });
@@ -40,6 +42,22 @@ async function closeOutOfWindowBroadcasts(now = new Date()) {
 }
 
 /**
+ * Removes manual attendance codes for sessions that have left their scheduled
+ * window — same "ending the session invalidates it" rule as the BLE token, and
+ * necessary here since manualCodeEnabled is a standing config (not a per-lecture
+ * on/off like broadcasting), so a recurring session's code would otherwise sit
+ * valid indefinitely between occurrences.
+ */
+async function closeOutOfWindowManualCodes(now = new Date()) {
+  const enabled = await LectureSession.find({ manualCodeEnabled: true, deleted: false });
+  for (const s of enabled) {
+    if (!isWithinScheduleWindow(s, now)) {
+      await manualCode.removeCode(s);
+    }
+  }
+}
+
+/**
  * Runs expiry + stale-broadcast sweep periodically, independent of API traffic.
  * @returns {NodeJS.Timeout}
  */
@@ -55,6 +73,12 @@ function startNonRecurringExpiryJob() {
     closeOutOfWindowBroadcasts().catch((err) => {
       console.error('[broadcast-window-sweep]', err);
     });
+    closeOutOfWindowManualCodes().catch((err) => {
+      console.error('[manual-code-window-sweep]', err);
+    });
+    bluetoothCode.removeExpiredSeedTokens().catch((err) => {
+      console.error('[seed-token-sweep]', err);
+    });
   };
   setImmediate(tick);
   return setInterval(tick, intervalMs);
@@ -64,6 +88,7 @@ module.exports = {
   deactivateExpiredNonRecurringSessions,
   closeStaleBroadcasts,
   closeOutOfWindowBroadcasts,
+  closeOutOfWindowManualCodes,
   startNonRecurringExpiryJob,
   isNonRecurringExpired,
 };

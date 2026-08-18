@@ -43,12 +43,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import lk.ac.pdn.eng.feats.ble.BlePermissions
+import lk.ac.pdn.eng.feats.location.LocationPermissions
 import lk.ac.pdn.eng.feats.ui.components.AppCard
 import lk.ac.pdn.eng.feats.ui.components.AppFooter
+import lk.ac.pdn.eng.feats.ui.components.AppTextField
 import lk.ac.pdn.eng.feats.ui.components.EmptyState
 import lk.ac.pdn.eng.feats.ui.components.ErrorBanner
 import lk.ac.pdn.eng.feats.ui.components.PrimaryButton
@@ -75,7 +78,9 @@ fun LectureEntryScreen(
         onDispose { view.keepScreenOn = false }
     }
 
-    fun proceedAfterPermissions(enableBt: () -> Unit) {
+    // Bluetooth-side preflight — unchanged from the original Bluetooth-only flow;
+    // used as-is for "bluetooth" mode and as the first half of "both".
+    fun proceedAfterBlePermissions(enableBt: () -> Unit) {
         val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
         when {
             adapter == null ->
@@ -101,25 +106,57 @@ fun LectureEntryScreen(
         if (blocker == null) vm.startScan() else vm.reportScanBlocked(blocker)
     }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
+    // Permission request covers Bluetooth alone ("bluetooth" mode) or Bluetooth +
+    // location together ("both" mode, so the GPS fallback never needs a second
+    // mid-flow prompt). "geofence" mode uses its own launcher below instead.
+    val blePermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
         if (result.values.all { it }) {
-            proceedAfterPermissions {
+            proceedAfterBlePermissions {
                 enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             }
+        } else if (result[android.Manifest.permission.ACCESS_FINE_LOCATION] == false && BlePermissions.hasScan(context)) {
+            vm.onLocationPermissionDenied()
         } else {
             vm.onPermissionDenied()
         }
     }
 
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) vm.startScan() else vm.onLocationPermissionDenied()
+    }
+
     fun onScanClick() {
-        if (BlePermissions.hasScan(context)) {
-            proceedAfterPermissions {
-                enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+        when (state.verification) {
+            "geofence" -> {
+                if (LocationPermissions.hasFineLocation(context)) {
+                    vm.startScan()
+                } else {
+                    locationPermissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                }
             }
-        } else {
-            permissionLauncher.launch(BlePermissions.scanPermissions())
+            "both" -> {
+                val needed = BlePermissions.scanPermissions() + LocationPermissions.permissions()
+                if (BlePermissions.hasAll(context, needed)) {
+                    proceedAfterBlePermissions {
+                        enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                    }
+                } else {
+                    blePermissionLauncher.launch(needed)
+                }
+            }
+            else -> {
+                if (BlePermissions.hasScan(context)) {
+                    proceedAfterBlePermissions {
+                        enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                    }
+                } else {
+                    blePermissionLauncher.launch(BlePermissions.scanPermissions())
+                }
+            }
         }
     }
 
@@ -141,7 +178,7 @@ fun LectureEntryScreen(
                     if (state.recorded) {
                         SuccessState(
                             title = "Attendance recorded",
-                            subtitle = "Your Bluetooth attendance was saved for this session.",
+                            subtitle = "Your attendance was saved for this session.",
                         )
                         Spacer(Modifier.height(16.dp))
                         PrimaryButton(
@@ -151,7 +188,11 @@ fun LectureEntryScreen(
                     } else {
                         Text("Lecture attendance", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Select your running course, then scan for the classroom Bluetooth signal to mark attendance.",
+                            when (state.verification) {
+                                "geofence" -> "Select your running course, then verify your location to mark attendance."
+                                "both" -> "Select your running course, then verify via Bluetooth or your location."
+                                else -> "Select your running course, then scan for the classroom Bluetooth signal to mark attendance."
+                            },
                             color = Palette.Muted,
                             fontSize = 14.sp,
                             modifier = Modifier.padding(top = 4.dp),
@@ -223,19 +264,66 @@ fun LectureEntryScreen(
                             Spacer(Modifier.height(10.dp))
                         }
 
+                        val idleLabel = when (state.verification) {
+                            "geofence" -> "📍  Verify My Location"
+                            "both" -> "📡  Verify Attendance"
+                            else -> ScanPhase.Idle.label
+                        }
                         PrimaryButton(
-                            text = if (state.scanning) state.phase.label else ScanPhase.Idle.label,
+                            text = if (state.scanning) state.phase.label else idleLabel,
                             onClick = ::onScanClick,
                             variant = ButtonVariant.Bluetooth,
                             loading = state.scanning,
                             enabled = !state.busy && state.selectedCourseId != null,
                         )
+
+                        // Lecturer-controlled fallback — only offered when the running
+                        // session has it enabled; automatic Bluetooth scanning above is
+                        // unaffected either way.
+                        if (selected?.manualCodeEnabled == true) {
+                            Spacer(Modifier.height(18.dp))
+                            ManualCodeEntry(busy = state.busy, onSubmit = vm::submitManualCode)
+                        }
                     }
                 }
             }
             Spacer(Modifier.weight(1f))
         }
         AppFooter()
+    }
+}
+
+/** Fallback for a student whose device can't complete the automatic BLE scan. */
+@Composable
+private fun ManualCodeEntry(busy: Boolean, onSubmit: (String) -> Unit) {
+    var code by remember { mutableStateOf("") }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f).height(1.dp).background(Palette.Border))
+            Text(
+                "  OR  ",
+                color = Palette.Muted,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Box(Modifier.weight(1f).height(1.dp).background(Palette.Border))
+        }
+        Spacer(Modifier.height(14.dp))
+        AppTextField(
+            value = code,
+            onValueChange = { new -> if (new.length <= 8 && new.all(Char::isDigit)) code = new },
+            label = "Attendance code",
+            placeholder = "8-digit code from your lecturer",
+            enabled = !busy,
+            keyboardType = KeyboardType.Number,
+        )
+        Spacer(Modifier.height(10.dp))
+        PrimaryButton(
+            text = "Submit code",
+            onClick = { onSubmit(code) },
+            enabled = !busy && code.length == 8,
+            loading = busy && code.length == 8,
+        )
     }
 }
 

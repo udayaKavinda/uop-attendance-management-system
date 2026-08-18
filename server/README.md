@@ -136,7 +136,9 @@ server/src/
 ```bash
 # from the server/ folder
 npm install
-cp ../.env.example .env    # .env.example lives at the repo root; fill in values
+
+# Create .env in this folder (there is no .env.example to copy — see
+# "Environment Variables" below for the full list). Do not commit it.
 
 # run the server
 npm start

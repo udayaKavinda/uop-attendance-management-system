@@ -12,14 +12,26 @@ import lk.ac.pdn.eng.feats.data.net.CourseDto
 import lk.ac.pdn.eng.feats.data.net.CreateCourseReq
 import lk.ac.pdn.eng.feats.data.net.CreateLecturerReq
 import lk.ac.pdn.eng.feats.data.net.CreateSessionReq
+import lk.ac.pdn.eng.feats.data.net.GeofenceCreateReq
+import lk.ac.pdn.eng.feats.data.net.GeofenceDto
+import lk.ac.pdn.eng.feats.data.net.GeofenceUpdateReq
 import lk.ac.pdn.eng.feats.data.net.GoogleIdTokenReq
+import lk.ac.pdn.eng.feats.data.net.GpsFixDto
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
+import lk.ac.pdn.eng.feats.data.net.ManualAttendanceReq
+import lk.ac.pdn.eng.feats.data.net.ManualCodeConfigReq
+import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
 import lk.ac.pdn.eng.feats.data.net.MeDto
 import lk.ac.pdn.eng.feats.data.net.RosterRecordDto
 import lk.ac.pdn.eng.feats.data.net.RunningSessionDto
+import lk.ac.pdn.eng.feats.data.net.SeedTokenDto
 import lk.ac.pdn.eng.feats.data.net.SessionDto
 import lk.ac.pdn.eng.feats.data.net.SetBroadcastReq
+import lk.ac.pdn.eng.feats.data.net.SettingsDto
+import lk.ac.pdn.eng.feats.data.net.SettingsReq
 import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
+import lk.ac.pdn.eng.feats.data.net.UnifiedAttendanceReq
+import lk.ac.pdn.eng.feats.data.net.UnifiedAttendanceRes
 import lk.ac.pdn.eng.feats.data.net.UpdateLecturerReq
 import lk.ac.pdn.eng.feats.data.net.apiCall
 
@@ -102,6 +114,33 @@ class AppRepository(private val api: ApiService) {
     suspend fun sessionAttendance(sessionId: String): ApiResult<List<RosterRecordDto>> =
         apiCall { api.sessionAttendance(sessionId).records ?: emptyList() }
 
+    // ── Manual attendance code (staff control) ───────────────────────────────────────
+    suspend fun manualCodeStatus(sessionId: String): ApiResult<ManualCodeStatusDto> =
+        apiCall { api.manualCodeStatus(sessionId) }
+
+    suspend fun setManualCode(sessionId: String, body: ManualCodeConfigReq): ApiResult<ManualCodeStatusDto> =
+        apiCall { api.setManualCode(sessionId, body) }
+
+    // ── Settings (admin) ──────────────────────────────────────────────────────────────
+    suspend fun settings(): ApiResult<SettingsDto> = apiCall { api.settings() }
+
+    /** Any subset of fields; only non-null ones are sent/applied. */
+    suspend fun updateSettings(req: SettingsReq): ApiResult<SettingsDto> =
+        apiCall { api.updateSettings(req) }
+
+    // ── Geofences (admin building polygons) ─────────────────────────────────────────────
+    suspend fun geofences(): ApiResult<List<GeofenceDto>> =
+        apiCall { api.geofences().items ?: emptyList() }
+
+    suspend fun createGeofence(name: String, polygon: List<List<Double>>): ApiResult<GeofenceDto?> =
+        apiCall { api.createGeofence(GeofenceCreateReq(name, polygon)).geofence }
+
+    suspend fun updateGeofence(id: String, req: GeofenceUpdateReq): ApiResult<GeofenceDto?> =
+        apiCall { api.updateGeofence(id, req).geofence }
+
+    suspend fun deleteGeofence(id: String): ApiResult<Unit> =
+        apiCall { api.deleteGeofence(id); Unit }
+
     // ── Attendance (student) ──────────────────────────────────────────────────────────
     suspend fun attendanceStatus(courseId: String): ApiResult<AttendanceStatusDto> =
         apiCall { api.attendanceStatus(courseId) }
@@ -111,6 +150,24 @@ class AppRepository(private val api: ApiService) {
 
     suspend fun recordBluetoothAttendance(courseId: String, token: String): ApiResult<BluetoothAttendanceRes> =
         apiCall { api.recordBluetoothAttendance(BluetoothAttendanceReq(courseId, token)) }
+
+    /** Fallback path: same response shape as [recordBluetoothAttendance]. */
+    suspend fun recordManualAttendance(courseId: String, code: String): ApiResult<BluetoothAttendanceRes> =
+        apiCall { api.recordManualAttendance(ManualAttendanceReq(courseId, code)) }
+
+    /** Unified submission — exactly one of token/fix/code. Reports canAdvertise for seeding eligibility. */
+    suspend fun recordAttendance(
+        courseId: String,
+        token: String? = null,
+        fix: GpsFixDto? = null,
+        code: String? = null,
+        canAdvertise: Boolean = false,
+    ): ApiResult<UnifiedAttendanceRes> =
+        apiCall { api.recordAttendance(UnifiedAttendanceReq(courseId, token, fix, code, canAdvertise)) }
+
+    /** Seeder re-fetch; each call is also this device's heartbeat. */
+    suspend fun seedToken(sessionId: String): ApiResult<SeedTokenDto> =
+        apiCall { api.seedToken(sessionId) }
 
     // ── Lecturers (admin) ───────────────────────────────────────────────────────────────
     suspend fun lecturers(query: String? = null): ApiResult<List<LecturerDto>> =

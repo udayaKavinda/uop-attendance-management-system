@@ -18,5 +18,7 @@ router.patch('/:sessionId/deactivate', requireStaff, sessionGuard, asyncHandler(
 router.patch('/:sessionId/broadcast', requireStaff, sessionGuard, asyncHandler(sessionsController.setBroadcast));
 router.get('/:sessionId/broadcast', requireStaff, sessionGuard, asyncHandler(sessionsController.getBroadcast));
 router.get('/:sessionId/attendance', requireStaff, sessionGuard, asyncHandler(sessionsController.sessionAttendance));
+router.get('/:sessionId/manual-code', requireStaff, sessionGuard, asyncHandler(sessionsController.getManualCode));
+router.patch('/:sessionId/manual-code', requireStaff, sessionGuard, asyncHandler(sessionsController.patchManualCode));
 
 module.exports = router;

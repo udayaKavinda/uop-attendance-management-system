@@ -8,7 +8,13 @@ const attendanceSchema = new mongoose.Schema({
   lectureCode: { type: String, required: true },
   attendanceDate: { type: String, required: true, index: true },
   timestamp: { type: Date, default: Date.now },
-  method: { type: String, enum: ['bluetooth'], required: true },
+  method: { type: String, enum: ['bluetooth', 'gps', 'manual_code'], required: true },
+  /** GPS path only: the accepted centroid + how many surviving fixes produced it, for audit. */
+  centroid: {
+    lat: { type: Number },
+    lng: { type: Number },
+    fixCount: { type: Number },
+  },
 });
 
 attendanceSchema.index({ student: 1, session: 1, attendanceDate: 1 }, { unique: true });

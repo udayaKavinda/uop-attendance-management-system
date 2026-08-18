@@ -63,6 +63,11 @@ data class CourseDto(
     val batch: String? = null,
     val active: Boolean? = null,
     val lecturers: List<LecturerDto>? = null,
+    /** Only present on GET /api/courses/running: whether the currently-running
+     *  session accepts the manual attendance-code fallback alongside Bluetooth. */
+    val manualCodeEnabled: Boolean? = null,
+    /** Only present on GET /api/courses/running: "bluetooth" | "geofence" | "both". */
+    val verification: String? = null,
 )
 
 /** Compact course reference embedded in other payloads. */
@@ -119,6 +124,9 @@ data class StaffSessionDto(
     val bluetoothDeviceName: String? = null,
     val active: Boolean? = null,
     val deleted: Boolean? = null,
+    /** "bluetooth" | "geofence" | "both". */
+    val verification: String? = null,
+    val buildings: List<String>? = null,
 )
 
 data class SessionsRes(val items: List<SessionDto>? = null)
@@ -132,6 +140,10 @@ data class CreateSessionReq(
     val startTime: String,
     val endTime: String,
     val recurring: Boolean = true,
+    /** "bluetooth" | "geofence" | "both" — omit for the default "bluetooth". */
+    val verification: String? = null,
+    /** Geofence ids; required by the server when verification includes geofence. */
+    val buildings: List<String>? = null,
 )
 
 /** Body of PATCH /api/admin/sessions/:id/broadcast. */
@@ -160,6 +172,78 @@ data class BroadcastDto(
     val minutesRemaining: Int? = null,
 )
 
+// ── Manual attendance code (lecturer-controlled fallback) ──────────────────────────
+
+/** Response of GET/PATCH .../sessions/:id/manual-code. */
+data class ManualCodeStatusDto(
+    val success: Boolean? = null,
+    val enabled: Boolean? = null,
+    /** Whether the global admin kill-switch currently allows the feature at all. */
+    val allowed: Boolean? = null,
+    /** Whether the session is inside its scheduled window right now — the code is
+     *  only actually live (non-null) while this is true. */
+    val running: Boolean? = null,
+    val paused: Boolean? = null,
+    val rotationMode: String? = null,
+    val rotationSeconds: Int? = null,
+    /** The live 8-digit code. Staff-only; never present on any student-facing payload. */
+    val code: String? = null,
+    val rotatesIn: Int? = null,
+)
+
+/** Body for PATCH .../sessions/:id/manual-code. Every field is independently optional. */
+data class ManualCodeConfigReq(
+    val enabled: Boolean? = null,
+    val rotationMode: String? = null,
+    val rotationSeconds: Int? = null,
+    val paused: Boolean? = null,
+    val regenerate: Boolean? = null,
+)
+
+/** Global settings singleton (admin-only). */
+data class SettingsDto(
+    val manualCodeAllowed: Boolean? = null,
+    /** "bluetooth" | "geofence" | "both" — constrains session.verification for NEW sessions. */
+    val allowedModes: String? = null,
+    /** Target concurrent BLE seeder count; 0 disables peer seeding. */
+    val seedRate: Int? = null,
+    /** Real-seeder AND decoy window duration, ms — identical for both by design. */
+    val seedWindowMs: Long? = null,
+    /** GPS buffer (meters) for geofence-only sessions. */
+    val bufferGpsOnly: Double? = null,
+    /** GPS buffer (meters) for the GPS fallback path within "both" sessions. */
+    val bufferGpsBle: Double? = null,
+)
+
+/** Body for PATCH /api/admin/settings — every field independently optional. */
+data class SettingsReq(
+    val manualCodeAllowed: Boolean? = null,
+    val allowedModes: String? = null,
+    val seedRate: Int? = null,
+    val seedWindowMs: Long? = null,
+    val bufferGpsOnly: Double? = null,
+    val bufferGpsBle: Double? = null,
+)
+
+// ── Geofences (admin building polygons) ─────────────────────────────────────────
+
+data class GeofenceDto(
+    @Json(name = "_id") val id: String? = null,
+    val name: String? = null,
+    /** Ordered [lng, lat] vertices. */
+    val polygon: List<List<Double>>? = null,
+    val active: Boolean? = null,
+)
+
+data class GeofencesRes(val items: List<GeofenceDto>? = null)
+data class GeofenceRes(val success: Boolean? = null, val geofence: GeofenceDto? = null)
+data class GeofenceCreateReq(val name: String, val polygon: List<List<Double>>)
+data class GeofenceUpdateReq(
+    val name: String? = null,
+    val polygon: List<List<Double>>? = null,
+    val active: Boolean? = null,
+)
+
 // ── Attendance (student) ────────────────────────────────────────────────────────
 
 data class AttendanceStatusDto(
@@ -174,6 +258,48 @@ data class AttendanceStatusDto(
 data class BluetoothTargetDto(val deviceName: String? = null)
 
 data class BluetoothAttendanceReq(val courseId: String, val token: String)
+
+/** Fallback path: submit the lecturer-announced 8-digit code instead of a BLE token. */
+data class ManualAttendanceReq(val courseId: String, val code: String)
+
+// ── Unified attendance (BLE token / GPS fix / manual code, one at a time) ──────────
+
+data class GpsFixDto(val lat: Double, val lng: Double, val accuracy: Float)
+
+/** Body for POST /api/attendance — exactly one of token/fix/code is set. */
+data class UnifiedAttendanceReq(
+    val courseId: String,
+    val token: String? = null,
+    val fix: GpsFixDto? = null,
+    val code: String? = null,
+    /** Whether this device can BLE-advertise — reported so the server only ever
+     *  picks capable devices as real seeders (decision 1). */
+    val canAdvertise: Boolean = false,
+)
+
+/** Present only when `role == "seed"`; absent (decoy/none) otherwise. */
+data class SeedingDto(
+    val role: String? = null, // "seed" | "decoy" | "none"
+    val durationMs: Long? = null,
+    val token: String? = null,
+    val deviceName: String? = null,
+    /** "seed" role only — needed to re-fetch the rotating seeder token. */
+    val sessionId: String? = null,
+)
+
+data class UnifiedAttendanceRes(
+    val status: String? = null, // "pending" | "accepted"
+    val duplicate: Boolean? = null,
+    val attendance: RecordedAttendanceDto? = null,
+    val seeding: SeedingDto? = null,
+)
+
+/** Response of GET /api/attendance/seed-token — seeder re-fetch + heartbeat. */
+data class SeedTokenDto(
+    val sessionId: String? = null,
+    val token: String? = null,
+    val rotatesIn: Long? = null,
+)
 
 data class BluetoothAttendanceRes(
     val success: Boolean? = null,
