@@ -25,7 +25,6 @@ only the generic present marker `P`.
   security decisions.
 - `deploy/` — Nginx reverse-proxy example.
 - `.github/workflows/deploy.yml` — tested, main-only production deployment with rollback.
-- `assets/` — shared artwork.
 
 There is no React/web application. Express serves the API plus public `/privacy` and
 `/delete` pages.
@@ -54,7 +53,7 @@ Android details are in [server/README.md](server/README.md) and
 
 ## Access model
 
-Students discover all active courses and all currently running sessions. The repository
+Students discover the courses that have sessions running right now. The repository
 does not contain an enrolment/registration data source, so it does not claim or attempt
 student-to-course membership filtering. Recording attendance still requires a valid
 server-enforced session method and physical/manual proof. Lecturer actions are restricted

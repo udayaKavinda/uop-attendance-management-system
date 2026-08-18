@@ -1,5 +1,4 @@
 const express = require('express');
-const asyncHandler = require('../middlewares/asyncHandler');
 const { oauthLimiter } = require('../config/rateLimit');
 const { isGoogleOAuthConfigured } = require('../config/passport');
 const { requireAnyAuth } = require('../middlewares/requireAuth');
@@ -21,11 +20,11 @@ const apiAuthRouter = express.Router();
 
 // Credential Manager (native Google sign-in) — the primary path for the Android app.
 apiAuthRouter.get('/auth/google-nonce', oauthLimiter, authController.googleNonce);
-apiAuthRouter.post('/auth/google-id-token', oauthLimiter, asyncHandler(authController.googleIdToken));
+apiAuthRouter.post('/auth/google-id-token', oauthLimiter, authController.googleIdToken);
 
-// Custom Tab OAuth fallback — kept so already-installed app versions keep working.
-apiAuthRouter.post('/auth/exchange-code', oauthLimiter, asyncHandler(authController.exchangeCode));
-apiAuthRouter.get('/me', requireAnyAuth, asyncHandler(authController.me));
+// Supported alternative when native Credential Manager is unavailable.
+apiAuthRouter.post('/auth/exchange-code', oauthLimiter, authController.exchangeCode);
+apiAuthRouter.get('/me', requireAnyAuth, authController.me);
 apiAuthRouter.post('/logout', authController.logout);
 
 module.exports = { oauthRouter, apiAuthRouter };

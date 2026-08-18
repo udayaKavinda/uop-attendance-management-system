@@ -1,4 +1,3 @@
-const mongoose = require('mongoose');
 const { MIN_ROTATION_SECONDS, MAX_ROTATION_SECONDS } = require('../services/manualCode.service');
 
 const ROTATION_MODES = ['none', 'interval'];
@@ -62,18 +61,4 @@ function validateManualCodeConfigBody(body) {
   return { ok: true, ...result };
 }
 
-/** Body for POST /api/manual-attendance — { courseId, code }. */
-function validateManualCodeAttendanceBody(body) {
-  const { courseId, code } = body || {};
-  const id = String(courseId || '').trim();
-  if (!mongoose.isValidObjectId(id)) {
-    return { ok: false, status: 400, error: 'Invalid courseId' };
-  }
-  const normalized = String(code || '').trim();
-  if (!/^[0-9]{8}$/.test(normalized)) {
-    return { ok: false, status: 400, error: 'Invalid attendance code' };
-  }
-  return { ok: true, courseId: id, code: normalized };
-}
-
-module.exports = { validateManualCodeConfigBody, validateManualCodeAttendanceBody };
+module.exports = { validateManualCodeConfigBody };

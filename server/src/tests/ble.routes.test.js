@@ -103,11 +103,11 @@ function makeSession(overrides = {}) {
     startTime: '00:00',
     endTime: '23:59',
     recurring: true,
+    verification: 'bluetooth',
     active: true,
     deleted: false,
     broadcasting: true,
     lastBroadcastSeenAt: new Date(),
-    bluetoothDeviceName: 'UOP-TESTDEV1',
     save: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -223,14 +223,13 @@ describe('PATCH /api/admin/sessions/:id/broadcast', () => {
     expect(session.save).not.toHaveBeenCalled();
   });
 
-  test('200 — {on:true} turns broadcast on, seeds device name + token, stamps heartbeat', async () => {
+  test('200 — {on:true} seeds the token and stamps the heartbeat', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const course = makeCourse({ lecturers: [String(lecturer._id)] });
     const session = makeSession({
       course: course._id,
       broadcasting: false,
       lastBroadcastSeenAt: null,
-      bluetoothDeviceName: '',
     });
 
     Person.findById.mockResolvedValue(lecturer);
@@ -247,9 +246,7 @@ describe('PATCH /api/admin/sessions/:id/broadcast', () => {
     expect(session.save).toHaveBeenCalled();
     expect(session.broadcasting).toBe(true);
     expect(session.lastBroadcastSeenAt).toBeInstanceOf(Date);
-    expect(session.bluetoothDeviceName).toMatch(/^UOP-[0-9A-F]{8}$/);
-
-    // Token must be seeded in the in-memory store
+    // Token must be seeded in the database-backed pool.
     const { token } = await bluetoothCode.getToken(String(session._id));
     expect(token).toMatch(/^[0-9a-f]{16}$/);
 
@@ -410,7 +407,7 @@ describe('GET /api/admin/sessions/:id/broadcast', () => {
     expect(res.body.error).toMatch(/not on/i);
   });
 
-  test('200 — returns deviceName, token, rotatesIn, rotationMs, attendanceCount, minutesRemaining and stamps heartbeat', async () => {
+  test('200 — returns token, timing and attendance count, and stamps the heartbeat', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const course = makeCourse({ lecturers: [String(lecturer._id)] });
     const staleStamp = new Date(Date.now() - 60_000);
@@ -429,7 +426,6 @@ describe('GET /api/admin/sessions/:id/broadcast', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.broadcasting).toBe(true);
-    expect(res.body.deviceName).toBe('UOP-TESTDEV1');
     expect(res.body.token).toMatch(/^[0-9a-f]{16}$/);
     expect(typeof res.body.rotatesIn).toBe('number');
     expect(res.body.rotationMs).toBe(15000);
@@ -574,7 +570,7 @@ describe('GET /api/bluetooth-target', () => {
     expect(res.body.error).toMatch(/not open/i);
   });
 
-  test('200 — returns only deviceName when broadcast is live', async () => {
+  test('200 — confirms that a Bluetooth attendance channel is available', async () => {
     const student = makePerson({ role: 'student' });
     const course = makeCourse();
     const session = makeSession({ course: course._id });
@@ -588,16 +584,16 @@ describe('GET /api/bluetooth-target', () => {
       .set(headers(student));
 
     expect(res.status).toBe(200);
-    expect(res.body.deviceName).toBe('UOP-TESTDEV1');
+    expect(res.body.available).toBe(true);
     expect(res.body.sessionId).toBeUndefined(); // not exposed
   });
 });
 
-// ─── bluetooth-attendance (student) ──────────────────────────────────────────
+// ─── unified attendance, Bluetooth method (student) ──────────────────────────────────────────
 
-describe('POST /api/bluetooth-attendance', () => {
+describe('POST /api/attendance', () => {
   test('401 when not authenticated', async () => {
-    const res = await request(app).post('/api/bluetooth-attendance').set(csrfHeader).send({});
+    const res = await request(app).post('/api/attendance').set(csrfHeader).send({});
     expect(res.status).toBe(401);
   });
 
@@ -606,7 +602,7 @@ describe('POST /api/bluetooth-attendance', () => {
     Person.findById.mockResolvedValue(admin);
 
     const res = await request(app)
-      .post('/api/bluetooth-attendance')
+      .post('/api/attendance')
       .set(headers(admin))
       .send({ courseId: makeId(), token: 'aabbccddeeff0011' });
     expect(res.status).toBe(403);
@@ -617,7 +613,7 @@ describe('POST /api/bluetooth-attendance', () => {
     Person.findById.mockResolvedValue(student);
 
     const res = await request(app)
-      .post('/api/bluetooth-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: 'bad', token: 'aabbccddeeff0011' });
     expect(res.status).toBe(400);
@@ -629,7 +625,7 @@ describe('POST /api/bluetooth-attendance', () => {
     Person.findById.mockResolvedValue(student);
 
     const res = await request(app)
-      .post('/api/bluetooth-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: makeId(), token: 'short' });
     expect(res.status).toBe(400);
@@ -645,7 +641,7 @@ describe('POST /api/bluetooth-attendance', () => {
     LectureSession.find.mockResolvedValue([]);
 
     const res = await request(app)
-      .post('/api/bluetooth-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: String(course._id), token: 'aabbccddeeff0011' });
     expect(res.status).toBe(400);
@@ -661,7 +657,7 @@ describe('POST /api/bluetooth-attendance', () => {
     LectureSession.find.mockResolvedValue([session]);
 
     const res = await request(app)
-      .post('/api/bluetooth-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: String(course._id), token: 'aabbccddeeff0011' });
     expect(res.status).toBe(400);
@@ -684,7 +680,7 @@ describe('POST /api/bluetooth-attendance', () => {
     await bluetoothCode.getToken(String(session._id));
 
     const res = await request(app)
-      .post('/api/bluetooth-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: String(course._id), token: 'aabbccddeeff0011' });
     expect(res.status).toBe(400);
@@ -707,7 +703,7 @@ describe('POST /api/bluetooth-attendance', () => {
     await bluetoothCode.getToken(String(session._id));
 
     const res = await request(app)
-      .post('/api/bluetooth-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: String(course._id), token: 'deadbeefdeadbeef' });
     expect(res.status).toBe(400);
@@ -737,13 +733,13 @@ describe('POST /api/bluetooth-attendance', () => {
     Attendance.create.mockResolvedValue(mockAttendance);
 
     const res = await request(app)
-      .post('/api/bluetooth-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: String(course._id), token });
 
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.attendance.method).toBe('bluetooth');
+    expect(res.body.status).toBe('accepted');
+    expect(res.body.attendance).toBeUndefined();
     expect(Attendance.create).toHaveBeenCalledWith(expect.objectContaining({
       method: 'bluetooth',
       lectureCode: `${session.lectureDay} ${session.startTime}-${session.endTime}`,
@@ -766,7 +762,7 @@ describe('POST /api/bluetooth-attendance', () => {
     const { token } = await bluetoothCode.getToken(String(session._id));
 
     const res = await request(app)
-      .post('/api/bluetooth-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: String(course._id), token });
 

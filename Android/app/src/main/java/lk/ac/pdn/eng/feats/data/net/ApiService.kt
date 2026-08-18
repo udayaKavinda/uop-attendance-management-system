@@ -35,25 +35,15 @@ interface ApiService {
     suspend fun logout(): SimpleSuccess
 
     // ── Courses (any authenticated user) ──────────────────────────────────────────
-    @GET("api/courses")
-    suspend fun courses(): CoursesRes
-
     @GET("api/courses/running")
-    suspend fun runningCourses(): CoursesRes
+    suspend fun runningCourses(): RunningCoursesRes
 
     // ── Student attendance ──────────────────────────────────────────────────────────
     @GET("api/attendance-status")
     suspend fun attendanceStatus(@Query("courseId") courseId: String): AttendanceStatusDto
 
     @GET("api/bluetooth-target")
-    suspend fun bluetoothTarget(@Query("courseId") courseId: String): BluetoothTargetDto
-
-    @POST("api/bluetooth-attendance")
-    suspend fun recordBluetoothAttendance(@Body body: BluetoothAttendanceReq): BluetoothAttendanceRes
-
-    /** Fallback path: same outcome shape as the Bluetooth submission. */
-    @POST("api/manual-attendance")
-    suspend fun recordManualAttendance(@Body body: ManualAttendanceReq): BluetoothAttendanceRes
+    suspend fun bluetoothTarget(@Query("courseId") courseId: String): AvailabilityDto
 
     /** Unified submission (current app target): exactly one of token/fix/code per call. */
     @POST("api/attendance")
@@ -88,9 +78,6 @@ interface ApiService {
 
     @PATCH("api/admin/courses/{courseId}/enable")
     suspend fun enableCourse(@Path("courseId") courseId: String): SimpleSuccess
-
-    @GET("api/admin/courses/{courseId}/sessions")
-    suspend fun courseSessions(@Path("courseId") courseId: String): SessionsRes
 
     @POST("api/admin/courses/{courseId}/sessions")
     suspend fun createSession(
@@ -127,9 +114,6 @@ interface ApiService {
     /** Current rotating token; each poll doubles as the broadcaster heartbeat. */
     @GET("api/admin/sessions/{sessionId}/broadcast")
     suspend fun broadcast(@Path("sessionId") sessionId: String): BroadcastDto
-
-    @GET("api/admin/sessions/{sessionId}/attendance")
-    suspend fun sessionAttendance(@Path("sessionId") sessionId: String): SessionAttendanceRes
 
     /** Staff view of the session's manual attendance code (config + live state, if running). */
     @GET("api/admin/sessions/{sessionId}/manual-code")
@@ -168,12 +152,6 @@ interface ApiService {
 
     @POST("api/admin/lecturers")
     suspend fun createLecturer(@Body body: CreateLecturerReq): LecturerRes
-
-    @PATCH("api/admin/lecturers/{id}")
-    suspend fun updateLecturer(
-        @Path("id") id: String,
-        @Body body: UpdateLecturerReq,
-    ): LecturerRes
 
     @DELETE("api/admin/lecturers/{id}")
     suspend fun deleteLecturer(@Path("id") id: String): SimpleSuccess

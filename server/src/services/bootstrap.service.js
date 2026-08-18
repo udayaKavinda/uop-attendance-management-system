@@ -1,5 +1,4 @@
 const Person = require('../models/Person');
-const LectureSession = require('../models/LectureSession');
 const { BOOTSTRAP_ADMIN_EMAIL } = require('../utils/constants');
 
 async function ensureBootstrapAdmin() {
@@ -36,27 +35,4 @@ async function ensureBootstrapAdmin() {
   }
 }
 
-/**
- * One-time, idempotent migration: collapse the legacy bluetoothEnabled +
- * attendancePaused pair into the single `broadcasting` flag
- * (ON ⇔ bluetoothEnabled && !attendancePaused; every other combination is OFF).
- */
-async function migrateLegacyBroadcastFields() {
-  const result = await LectureSession.collection.updateMany(
-    { bluetoothEnabled: { $exists: true } },
-    [
-      {
-        $set: {
-          broadcasting: { $and: [{ $eq: ['$bluetoothEnabled', true] }, { $ne: ['$attendancePaused', true] }] },
-          lastBroadcastSeenAt: null,
-        },
-      },
-      { $unset: ['bluetoothEnabled', 'attendancePaused'] },
-    ],
-  );
-  if (result.modifiedCount > 0) {
-    console.log(`Migrated ${result.modifiedCount} session(s) to the broadcasting flag`);
-  }
-}
-
-module.exports = { ensureBootstrapAdmin, migrateLegacyBroadcastFields };
+module.exports = { ensureBootstrapAdmin };

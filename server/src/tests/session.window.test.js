@@ -18,6 +18,7 @@ function session(overrides = {}) {
     lectureDay: TODAY,
     startTime: '09:00',
     endTime: '11:00',
+    recurring: true,
     ...overrides,
   };
 }
@@ -43,12 +44,16 @@ describe('isWithinScheduleWindow', () => {
   it('returns false for invalid time config', () => {
     expect(isWithinScheduleWindow(session({ startTime: 'bad' }), NOW)).toBe(false);
   });
+  it('rejects sessions that do not match the current recurring contract', () => {
+    expect(isWithinScheduleWindow(session({ recurring: undefined }), NOW)).toBe(false);
+  });
   it('returns false for null input', () => {
     expect(isWithinScheduleWindow(null, NOW)).toBe(false);
   });
   it('requires a one-time session occurrence date to match today', () => {
     expect(isWithinScheduleWindow(session({ recurring: false, occurrenceDate: '2026-06-08' }), NOW)).toBe(true);
     expect(isWithinScheduleWindow(session({ recurring: false, occurrenceDate: '2026-06-01' }), NOW)).toBe(false);
+    expect(isWithinScheduleWindow(session({ recurring: false, occurrenceDate: null }), NOW)).toBe(false);
   });
 });
 

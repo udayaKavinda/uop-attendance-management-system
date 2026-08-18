@@ -13,9 +13,9 @@ authoritative server reference for the implemented multi-mode system.
 - Bluetooth, GPS-geofence, combined OR, and manual-code attendance.
 - Peer BLE seeding with rotating tokens, bounded leases, and decoy windows.
 - Active-building geofence administration and system policy settings.
-- Attendance rosters preserve verification provenance; matrices remain compact present/absent reports.
+- Attendance records preserve verification provenance internally; matrices remain compact present/absent reports.
 
-Students see campus-wide active courses/running sessions. There is no enrolment data model
+Students see campus-wide sessions that are running now. There is no enrolment data model
 in this repository; do not describe these as membership-filtered “their courses.”
 
 ## Requirements and startup
@@ -32,6 +32,9 @@ npm start
 
 Default listen address: `PORT=5000`. Schedule dates use `TZ`, defaulting safely to
 `Asia/Colombo`.
+
+The server supports only the schema documented here. It does not migrate or repair older
+database shapes; recreate or explicitly transform an existing database before upgrading.
 
 ## Verification contract
 
@@ -90,9 +93,10 @@ Times are strictly validated as zero-padded 24-hour `HH:mm` values.
 
 ### LectureSession
 
-Course reference, weekday, start/end, `recurring`, optional `occurrenceDate`,
-`verification`, building references, active/deleted state, BLE broadcast/heartbeat/device
-name, and manual-code configuration.
+Course reference, weekday, start/end, `recurring`, `occurrenceDate`, `verification`,
+building references, active/deleted state, BLE broadcast/heartbeat, and manual-code
+configuration. `occurrenceDate` is required for one-time sessions and null for recurring
+sessions; every session has an explicit verification policy.
 
 ### Geofence
 
@@ -143,19 +147,17 @@ All JSON mutation requests require `X-Requested-With: fetch`. `student`, `staff`
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
-| GET | `/api/courses` | authenticated | campus-wide active courses |
 | GET | `/api/courses/running` | authenticated | running courses with `verification` and `manualCodeEnabled` |
-| GET | `/api/attendance-status?courseId=` | student | current/today status including `method` |
+| GET | `/api/attendance-status?courseId=` | student | current/today `{ attended }` status |
 | POST | `/api/attendance` | student | unified `{ courseId, token? | fix? | code?, canAdvertise }` |
 | GET | `/api/attendance/seed-token?sessionId=` | student | rotate/re-fetch owned live seed token |
 | DELETE | `/api/attendance/seed-token?sessionId=` | student | relinquish owned lease after radio failure |
-| GET | `/api/bluetooth-target?courseId=` | student | device target for BLE-compatible sessions |
-| POST | `/api/bluetooth-attendance` | student | backward-compatible BLE alias |
-| POST | `/api/manual-attendance` | student | backward-compatible manual-code alias |
+| GET | `/api/bluetooth-target?courseId=` | student | confirm a live BLE-compatible channel before scanning |
 
 Exactly one of `token`, `fix`, or `code` is accepted by `POST /api/attendance`. GPS may
-return `{ status: "pending" }`; accepted records return `status`, `attendance`, optional
-`duplicate`, and optional peer-seeding instructions.
+return `{ status: "pending" }`; accepted responses contain `status`, optional `duplicate`,
+and optional peer-seeding instructions. Attendance record details are not echoed to the
+student.
 
 ### Courses and reports
 
@@ -168,7 +170,6 @@ Base path: `/api/admin/courses`.
 | `PATCH /:courseId/assign-lecturer` | admin | set one-to-five owners |
 | `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course |
 | `DELETE /:courseId` | owner/admin | delete course and associated data |
-| `GET /:courseId/sessions` | owner/admin | course sessions |
 | `POST /:courseId/sessions` | owner/admin | atomically create schedule, verification, buildings, and manual config |
 | `GET /:courseId/attendance-matrix` | owner/admin | compact present/absent matrix per student |
 
@@ -184,7 +185,6 @@ Base path: `/api/admin/sessions` (owner/admin session guard applies).
 | `DELETE /:id` | soft-delete and revoke secrets |
 | `PATCH /:id/broadcast` | set `{ on }`; rejects GPS-only sessions |
 | `GET /:id/broadcast` | staff token poll/heartbeat and live counts |
-| `GET /:id/attendance` | roster with per-record `method` |
 | `GET /:id/manual-code` | current staff-only manual code/status |
 | `PATCH /:id/manual-code` | enable, pause, resume, rotate, or regenerate |
 
@@ -196,7 +196,7 @@ Base path: `/api/admin/sessions` (owner/admin session guard applies).
 | `PATCH /api/admin/settings` | admin | policy/buffer/seeding/manual kill-switch changes |
 | `GET /api/admin/geofences` | staff | active selectable buildings |
 | `POST/PATCH/DELETE /api/admin/geofences/:id?` | admin | building polygon management |
-| `GET/POST/PATCH/DELETE /api/admin/lecturers/:id?` | admin | lecturer directory |
+| `GET/POST/DELETE /api/admin/lecturers/:id?` | admin | lecturer directory |
 
 ## Background jobs and caches
 

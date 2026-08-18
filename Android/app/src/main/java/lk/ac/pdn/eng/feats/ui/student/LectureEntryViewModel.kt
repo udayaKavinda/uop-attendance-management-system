@@ -19,7 +19,7 @@ import lk.ac.pdn.eng.feats.ble.BlePermissions
 import lk.ac.pdn.eng.feats.ble.BleScanner
 import lk.ac.pdn.eng.feats.ble.BleUnavailableException
 import lk.ac.pdn.eng.feats.data.net.ApiResult
-import lk.ac.pdn.eng.feats.data.net.CourseDto
+import lk.ac.pdn.eng.feats.data.net.RunningCourseDto
 import lk.ac.pdn.eng.feats.data.net.GpsFixDto
 import lk.ac.pdn.eng.feats.data.net.SeedingDto
 import lk.ac.pdn.eng.feats.location.GpsLocationSource
@@ -39,7 +39,7 @@ enum class ScanPhase(val label: String) {
 }
 
 data class LectureEntryState(
-    val courses: List<CourseDto> = emptyList(),
+    val courses: List<RunningCourseDto> = emptyList(),
     val selectedCourseId: String? = null,
     val phase: ScanPhase = ScanPhase.Idle,
     val recorded: Boolean = false,
@@ -50,9 +50,8 @@ data class LectureEntryState(
     val scanning: Boolean get() = phase != ScanPhase.Idle
     val busy: Boolean get() = scanning || checkingStatus
 
-    val selectedCourse: CourseDto? get() = courses.firstOrNull { it.id == selectedCourseId }
-    /** "bluetooth" | "geofence" | "both" — defaults to today's only mode when absent/unknown. */
-    val verification: String get() = selectedCourse?.verification ?: "bluetooth"
+    val selectedCourse: RunningCourseDto? get() = courses.firstOrNull { it.id == selectedCourseId }
+    val verification: String? get() = selectedCourse?.verification
 }
 
 class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
@@ -137,13 +136,17 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (_state.value.scanning) return
         val verification = _state.value.verification
+        if (verification !in setOf("bluetooth", "geofence", "both")) {
+            _state.value = _state.value.copy(error = "The session has an invalid verification policy.")
+            return
+        }
         scanJob?.cancel()
         scanJob = viewModelScope.launch {
             _state.value = _state.value.copy(phase = ScanPhase.Fetching, error = null)
             when (verification) {
                 "geofence" -> runGpsFlow(courseId)
                 "both" -> runBothFlow(courseId)
-                else -> runBleFlow(courseId)
+                "bluetooth" -> runBleFlow(courseId)
             }
         }
     }
@@ -366,9 +369,9 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
         scanJob?.cancel()
         scanJob = viewModelScope.launch {
             _state.value = _state.value.copy(phase = ScanPhase.Submitting, error = null)
-            when (val res = repo.recordManualAttendance(courseId, trimmed)) {
+            when (val res = repo.recordAttendance(courseId, code = trimmed)) {
                 is ApiResult.Success -> {
-                    val ok = res.data.success == true || res.data.duplicate == true
+                    val ok = res.data.status == "accepted"
                     _state.value = _state.value.copy(
                         phase = ScanPhase.Idle,
                         recorded = ok,

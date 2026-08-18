@@ -10,13 +10,6 @@ function getModel() {
 const ROTATION_MS = 15000;
 const GRACE_MS = 2000; // accept previous token for 2 s after rotation
 
-// In-memory fallback for operations that happen before first DB call
-const localCache = new Map();
-
-function generateDeviceName() {
-  return 'UOP-' + crypto.randomBytes(4).toString('hex').toUpperCase();
-}
-
 // ── Primary token (lecturer broadcast) ──────────────────────────────────────────
 
 /**
@@ -47,7 +40,6 @@ async function getToken(sessionId) {
     { token, prevToken, generatedAt: now, updatedAt: new Date() },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
-  localCache.set(key, { token, prevToken, generatedAt: now });
   return { token, prevToken, rotatesIn: ROTATION_MS / 1000 };
 }
 
@@ -81,7 +73,6 @@ async function removeToken(sessionId) {
   if (!key) return;
   const Model = getModel();
   await Model.deleteMany({ sessionId: key });
-  localCache.delete(key);
 }
 
 // ── Seed tokens (peer seeding) ──────────────────────────────────────────────────
@@ -162,7 +153,6 @@ async function removeExpiredSeedTokens(now = Date.now()) {
 module.exports = {
   ROTATION_MS,
   GRACE_MS,
-  generateDeviceName,
   getToken,
   verifyToken,
   removeToken,

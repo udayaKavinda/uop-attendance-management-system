@@ -11,27 +11,28 @@ import com.squareup.moshi.Json
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 data class MeDto(
-    @Json(name = "studentId") val studentId: String? = null, // Person _id
-    val email: String? = null,
-    val role: String? = null,
+    @param:Json(name = "studentId") val studentId: String, // Person _id
+    val email: String,
+    val role: String,
     val lecturerId: String? = null,
 )
 
-/** Legacy Custom Tab OAuth fallback. */
+/** Browser OAuth exchange. */
 data class ExchangeCodeReq(val code: String)
 
 /** Single-use nonce for Credential Manager sign-in (replay protection). */
-data class NonceDto(val nonce: String? = null)
+data class NonceDto(val nonce: String)
 
 /** Google ID token from Credential Manager, verified server-side. */
 data class GoogleIdTokenReq(val idToken: String)
 
 data class SimpleSuccess(val success: Boolean? = null)
+data class AvailabilityDto(val available: Boolean)
 
 // ── People / lecturers ──────────────────────────────────────────────────────────
 
 data class LecturerDto(
-    @Json(name = "_id") val id: String? = null,
+    @param:Json(name = "_id") val id: String? = null,
     val name: String? = null,
     val email: String? = null,
     val phone: String? = null,
@@ -47,32 +48,31 @@ data class LecturerRes(val success: Boolean? = null, val lecturer: LecturerDto? 
 
 data class CreateLecturerReq(val name: String, val email: String, val phone: String? = null)
 
-data class UpdateLecturerReq(
-    val name: String? = null,
-    val email: String? = null,
-    val phone: String? = null,
-    val active: Boolean? = null,
-)
-
 // ── Courses ───────────────────────────────────────────────────────────────────
 
 data class CourseDto(
-    @Json(name = "_id") val id: String? = null,
+    @param:Json(name = "_id") val id: String? = null,
     val code: String? = null,
     val name: String? = null,
     val batch: String? = null,
     val active: Boolean? = null,
     val lecturers: List<LecturerDto>? = null,
-    /** Only present on GET /api/courses/running: whether the currently-running
-     *  session accepts the manual attendance-code fallback alongside Bluetooth. */
-    val manualCodeEnabled: Boolean? = null,
-    /** Only present on GET /api/courses/running: "bluetooth" | "geofence" | "both". */
-    val verification: String? = null,
+)
+
+/** Strict current contract returned only by GET /api/courses/running. */
+data class RunningCourseDto(
+    @param:Json(name = "_id") val id: String,
+    val code: String,
+    val name: String,
+    val batch: String,
+    /** "bluetooth" | "geofence" | "both". */
+    val verification: String,
+    val manualCodeEnabled: Boolean,
 )
 
 /** Compact course reference embedded in other payloads. */
 data class CourseRefDto(
-    @Json(name = "_id") val id: String? = null,
+    @param:Json(name = "_id") val id: String? = null,
     val code: String? = null,
     val name: String? = null,
     val batch: String? = null,
@@ -80,6 +80,7 @@ data class CourseRefDto(
 )
 
 data class CoursesRes(val items: List<CourseDto>? = null)
+data class RunningCoursesRes(val items: List<RunningCourseDto>)
 
 data class CourseRes(val success: Boolean? = null, val course: CourseDto? = null)
 
@@ -101,21 +102,20 @@ data class AssignLecturerReq(val lecturerIds: List<String>)
  * and the caller already knows the course in these contexts.
  */
 data class SessionDto(
-    @Json(name = "_id") val id: String? = null,
+    @param:Json(name = "_id") val id: String? = null,
     val lectureDay: String? = null,
     val startTime: String? = null,
     val endTime: String? = null,
     val recurring: Boolean? = null,
     val occurrenceDate: String? = null,
     val broadcasting: Boolean? = null,
-    val bluetoothDeviceName: String? = null,
     val active: Boolean? = null,
     val deleted: Boolean? = null,
 )
 
 /** Session as returned by GET /api/admin/sessions, where `course` is populated. */
 data class StaffSessionDto(
-    @Json(name = "_id") val id: String? = null,
+    @param:Json(name = "_id") val id: String? = null,
     val course: CourseRefDto? = null,
     val lectureDay: String? = null,
     val startTime: String? = null,
@@ -123,11 +123,10 @@ data class StaffSessionDto(
     val recurring: Boolean? = null,
     val occurrenceDate: String? = null,
     val broadcasting: Boolean? = null,
-    val bluetoothDeviceName: String? = null,
     val active: Boolean? = null,
     val deleted: Boolean? = null,
     /** "bluetooth" | "geofence" | "both". */
-    val verification: String? = null,
+    val verification: String,
     val buildings: List<String>? = null,
     val manualCodeRotationMode: String? = null,
     val manualCodeRotationSeconds: Int? = null,
@@ -135,8 +134,6 @@ data class StaffSessionDto(
      *  controls (reveal/pause/regenerate) when this is true — no enable switch there. */
     val manualCodeEnabled: Boolean? = null,
 )
-
-data class SessionsRes(val items: List<SessionDto>? = null)
 
 data class StaffSessionsRes(val items: List<StaffSessionDto>? = null)
 
@@ -146,9 +143,9 @@ data class CreateSessionReq(
     val lectureDay: String,
     val startTime: String,
     val endTime: String,
-    val recurring: Boolean = true,
-    /** "bluetooth" | "geofence" | "both" — omit for the default "bluetooth". */
-    val verification: String? = null,
+    val recurring: Boolean,
+    /** "bluetooth" | "geofence" | "both". */
+    val verification: String,
     /** Geofence ids; required by the server when verification includes geofence. */
     val buildings: List<String>? = null,
     val manualCodeEnabled: Boolean? = null,
@@ -163,7 +160,6 @@ data class SetBroadcastReq(val on: Boolean)
 data class RunningSessionDto(
     val sessionId: String? = null,
     val broadcasting: Boolean? = null,
-    val deviceName: String? = null,
 )
 
 data class RunningSessionsRes(val items: List<RunningSessionDto>? = null)
@@ -172,7 +168,6 @@ data class RunningSessionsRes(val items: List<RunningSessionDto>? = null)
 data class BroadcastDto(
     val sessionId: String? = null,
     val broadcasting: Boolean? = null,
-    val deviceName: String? = null,
     val token: String? = null,
     val rotatesIn: Long? = null,
     val rotationMs: Long? = null,
@@ -242,7 +237,7 @@ data class SettingsReq(
 // ── Geofences (admin building polygons) ─────────────────────────────────────────
 
 data class GeofenceDto(
-    @Json(name = "_id") val id: String? = null,
+    @param:Json(name = "_id") val id: String? = null,
     val name: String? = null,
     /** Ordered [lng, lat] vertices. */
     val polygon: List<List<Double>>? = null,
@@ -261,21 +256,8 @@ data class GeofenceUpdateReq(
 // ── Attendance (student) ────────────────────────────────────────────────────────
 
 data class AttendanceStatusDto(
-    val studentId: String? = null,
-    val courseId: String? = null,
-    val sessionId: String? = null,
     val attended: Boolean? = null,
-    val attendanceId: String? = null,
-    val attendedAt: String? = null,
-    val method: String? = null,
 )
-
-data class BluetoothTargetDto(val deviceName: String? = null)
-
-data class BluetoothAttendanceReq(val courseId: String, val token: String)
-
-/** Fallback path: submit the lecturer-announced 8-digit code instead of a BLE token. */
-data class ManualAttendanceReq(val courseId: String, val code: String)
 
 // ── Unified attendance (BLE token / GPS fix / manual code, one at a time) ──────────
 
@@ -297,7 +279,6 @@ data class SeedingDto(
     val role: String? = null, // "seed" | "decoy" | "none"
     val durationMs: Long? = null,
     val token: String? = null,
-    val deviceName: String? = null,
     /** "seed" role only — needed to re-fetch the rotating seeder token. */
     val sessionId: String? = null,
 )
@@ -305,7 +286,6 @@ data class SeedingDto(
 data class UnifiedAttendanceRes(
     val status: String? = null, // "pending" | "accepted"
     val duplicate: Boolean? = null,
-    val attendance: RecordedAttendanceDto? = null,
     val seeding: SeedingDto? = null,
 )
 
@@ -316,46 +296,10 @@ data class SeedTokenDto(
     val rotatesIn: Long? = null,
 )
 
-data class BluetoothAttendanceRes(
-    val success: Boolean? = null,
-    val duplicate: Boolean? = null,
-    val attendance: RecordedAttendanceDto? = null,
-)
-
-data class RecordedAttendanceDto(
-    @Json(name = "_id") val id: String? = null,
-    val courseCode: String? = null,
-    val lectureCode: String? = null,
-    val attendanceDate: String? = null,
-    val timestamp: String? = null,
-    val method: String? = null,
-)
-
-// ── Attendance roster (staff) ────────────────────────────────────────────────────
-
-data class StudentRefDto(
-    @Json(name = "_id") val id: String? = null,
-    val studentId: String? = null,
-    val email: String? = null,
-    val name: String? = null,
-)
-
-data class RosterRecordDto(
-    @Json(name = "_id") val id: String? = null,
-    val student: StudentRefDto? = null,
-    val courseCode: String? = null,
-    val lectureCode: String? = null,
-    val attendanceDate: String? = null,
-    val timestamp: String? = null,
-    val method: String? = null,
-)
-
-data class SessionAttendanceRes(val records: List<RosterRecordDto>? = null)
-
 // ── Attendance matrix (staff) ────────────────────────────────────────────────────
 
 data class MatrixSessionDto(
-    @Json(name = "_id") val id: String? = null,
+    @param:Json(name = "_id") val id: String? = null,
     val label: String? = null,
 )
 

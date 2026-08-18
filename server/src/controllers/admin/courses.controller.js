@@ -44,11 +44,6 @@ async function assignLecturer(req, res) {
   return res.json({ success: true, course: result.course });
 }
 
-async function listSessions(req, res) {
-  const items = await lectureSessionService.listForCourse(req.params.courseId);
-  return res.json({ items });
-}
-
 async function createSession(req, res) {
   const result = await lectureSessionService.createSession(req.course, req.body);
   if (!result.ok) return res.status(result.status).json({ error: result.error });
@@ -67,7 +62,6 @@ module.exports = {
   disable,
   enable,
   assignLecturer,
-  listSessions,
   createSession,
   attendanceMatrix,
 };

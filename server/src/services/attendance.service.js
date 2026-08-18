@@ -25,20 +25,11 @@ async function getAttendanceStatus(studentPk, courseId) {
   const query = { student: studentPk, course: courseId, attendanceDate };
   if (activeSessionId) query.session = activeSessionId;
   const attendance = await Attendance.findOne(query);
-
-  return {
-    studentId: studentPk,
-    courseId,
-    sessionId: activeSessionId || attendance?.session || null,
-    attended: Boolean(attendance),
-    attendanceId: attendance?._id || null,
-    attendedAt: attendance?.timestamp || null,
-    method: attendance?.method || null,
-  };
+  return { attended: Boolean(attendance) };
 }
 
 async function assertAutomaticMethodAllowed(session, method) {
-  const verification = session.verification || 'bluetooth';
+  const verification = session.verification;
   const supportsMethod = method === 'bluetooth'
     ? verification === 'bluetooth' || verification === 'both'
     : verification === 'geofence' || verification === 'both';
@@ -66,7 +57,7 @@ async function getBluetoothTarget(courseId) {
   if (!isBroadcastLive(resolved.session)) {
     return { ok: false, status: 400, error: 'Attendance is not open for this session right now.' };
   }
-  return { ok: true, deviceName: resolved.session.bluetoothDeviceName };
+  return { ok: true };
 }
 
 /**
@@ -101,11 +92,7 @@ async function createAttendanceRecord({ studentPk, course, session, method }) {
   }
 }
 
-/**
- * BLE path. `canAdvertise` is optional (defaults to no seeding participation) —
- * the legacy `/api/bluetooth-attendance` alias doesn't send it, only the unified
- * endpoint does.
- */
+/** BLE path. `canAdvertise` controls peer-seeding eligibility. */
 async function recordBluetoothAttendance(studentPk, courseId, token, canAdvertise = false) {
   const resolved = await resolveActiveSessionForCourse(courseId);
   if (resolved.error) return { ok: false, status: 400, error: resolved.error };
@@ -208,26 +195,17 @@ async function recordManualCodeAttendance(studentPk, courseId, code) {
   });
 }
 
-/**
- * Single dispatcher behind `POST /api/attendance`, per the design doc's unified
- * endpoint: exactly one of `token` (BLE), `fix` (GPS), or `code` (manual) is
- * expected per call — the validator enforces that. The two legacy endpoints
- * (`/api/bluetooth-attendance`, `/api/manual-attendance`) stay as thin aliases
- * calling straight through to the same underlying functions, so neither the app
- * nor these functions' own behavior needs to change to support both.
- */
+/** Single dispatcher behind `POST /api/attendance`; the validator requires one method. */
 async function recordAttendance(studentPk, courseId, {
   token, fix, code, canAdvertise,
 }) {
+  // Deliberately campus-wide: authentication proves the caller is a student,
+  // while the live session and its BLE/GPS/code evidence authorize attendance.
+  // This project has no course-enrolment source, so do not add a membership gate
+  // here or in the method-specific paths.
   if (token) return recordBluetoothAttendance(studentPk, courseId, token, canAdvertise);
   if (fix) return recordGpsFixAttendance(studentPk, courseId, fix, canAdvertise);
   return recordManualCodeAttendance(studentPk, courseId, code);
-}
-
-async function getSessionAttendance(sessionId) {
-  return Attendance.find({ session: sessionId })
-    .populate('student', 'studentId email name')
-    .sort({ timestamp: -1 });
 }
 
 async function getAttendanceMatrix(course) {
@@ -310,12 +288,8 @@ async function releaseSeedToken(studentPk, sessionId) {
 module.exports = {
   getAttendanceStatus,
   getBluetoothTarget,
-  recordBluetoothAttendance,
-  recordGpsFixAttendance,
-  recordManualCodeAttendance,
   recordAttendance,
   getSeedToken,
   releaseSeedToken,
-  getSessionAttendance,
   getAttendanceMatrix,
 };

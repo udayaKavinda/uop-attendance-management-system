@@ -85,7 +85,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         return@launch
                     }
                 }
-                if (nonce.isNullOrBlank()) {
+                if (nonce.isBlank()) {
                     _authError.value = "Could not start sign-in. Please try again."
                     return@launch
                 }
@@ -157,16 +157,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun applyMe(studentId: String?, role: String?, email: String?, lecturerId: String?) {
-        if (studentId.isNullOrBlank()) {
+    private fun applyMe(studentId: String, role: String, email: String, lecturerId: String?) {
+        if (studentId.isBlank()) {
             prefs.clearUser()
             _session.value = SessionState.LoggedOut
             return
         }
-        val resolvedRole = role ?: "student"
-        prefs.saveUser(studentId, resolvedRole, email ?: "", lecturerId)
+        prefs.saveUser(studentId, role, email, lecturerId)
         _session.value = SessionState.LoggedIn(
-            CachedUser(studentId, resolvedRole, email ?: "", lecturerId),
+            CachedUser(studentId, role, email, lecturerId),
         )
     }
 

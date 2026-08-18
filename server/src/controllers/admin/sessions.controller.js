@@ -1,6 +1,5 @@
 const authService = require('../../services/auth.service');
 const lectureSessionService = require('../../services/lectureSession.service');
-const attendanceService = require('../../services/attendance.service');
 const sessionService = require('../../services/session.service');
 const manualCodeService = require('../../services/manualCode.service');
 const settingsService = require('../../services/settings.service');
@@ -46,11 +45,6 @@ async function getBroadcast(req, res) {
   const result = await lectureSessionService.getBroadcast(req.sessionItem);
   if (!result.ok) return res.status(result.status).json({ error: result.error });
   return res.json(result.data);
-}
-
-async function sessionAttendance(req, res) {
-  const records = await attendanceService.getSessionAttendance(req.sessionItem._id);
-  return res.json({ records });
 }
 
 /**
@@ -108,7 +102,6 @@ module.exports = {
   listRunning,
   setBroadcast,
   getBroadcast,
-  sessionAttendance,
   getManualCode,
   patchManualCode,
 };

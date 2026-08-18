@@ -72,7 +72,6 @@ class BleAdvertiser(private val context: Context) {
             .build()
 
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(false)
             .addServiceUuid(ParcelUuid(uuid))
             .build()
 

@@ -14,17 +14,6 @@ function validateBluetoothToken(token) {
   return { ok: true, token: token.trim().toLowerCase() };
 }
 
-function validateBluetoothAttendanceBody(body) {
-  const { courseId, token } = body || {};
-  const id = String(courseId || '').trim();
-  if (!mongoose.isValidObjectId(id)) {
-    return { ok: false, status: 400, error: 'Invalid courseId' };
-  }
-  const tokenResult = validateBluetoothToken(token);
-  if (!tokenResult.ok) return tokenResult;
-  return { ok: true, courseId: id, token: tokenResult.token };
-}
-
 function validateGpsFix(fix) {
   const lat = Number(fix?.lat);
   const lng = Number(fix?.lng);
@@ -89,7 +78,6 @@ module.exports = {
   validateCourseId,
   validateSessionIdQuery,
   validateBluetoothToken,
-  validateBluetoothAttendanceBody,
   validateGpsFix,
   validateUnifiedAttendanceBody,
 };

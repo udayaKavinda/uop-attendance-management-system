@@ -305,12 +305,12 @@ describe('GET/PATCH /api/admin/sessions/:id/manual-code', () => {
   });
 });
 
-// ─── POST /api/manual-attendance (student submission) ─────────────────────────
+// ─── POST /api/attendance (student submission) ─────────────────────────
 
-describe('POST /api/manual-attendance', () => {
+describe('POST /api/attendance', () => {
   test('401 when not authenticated', async () => {
     const res = await request(app)
-      .post('/api/manual-attendance')
+      .post('/api/attendance')
       .set(csrfHeader)
       .send({ courseId: makeId(), code: '12345678' });
     expect(res.status).toBe(401);
@@ -319,7 +319,7 @@ describe('POST /api/manual-attendance', () => {
   test('400 for a malformed code', async () => {
     const student = makePerson({ role: 'student' });
     const res = await request(app)
-      .post('/api/manual-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: makeId(), code: '123' });
     expect(res.status).toBe(400);
@@ -329,7 +329,7 @@ describe('POST /api/manual-attendance', () => {
     const student = makePerson({ role: 'student' });
     Course.findById.mockResolvedValue(null);
     const res = await request(app)
-      .post('/api/manual-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: makeId(), code: '12345678' });
     expect(res.status).toBe(400);
@@ -343,7 +343,7 @@ describe('POST /api/manual-attendance', () => {
     LectureSession.find.mockResolvedValue([session]);
 
     const res = await request(app)
-      .post('/api/manual-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: course._id, code: '12345678' });
     expect(res.status).toBe(400);
@@ -372,17 +372,17 @@ describe('POST /api/manual-attendance', () => {
     Attendance.create.mockResolvedValue({ _id: makeId(), method: 'manual_code' });
 
     const res = await request(app)
-      .post('/api/manual-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: course._id, code });
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
+    expect(res.body.status).toBe('accepted');
     expect(Attendance.create).toHaveBeenCalledWith(expect.objectContaining({ method: 'manual_code' }));
 
     // Repeat submission resolves to the existing record instead of erroring.
     Attendance.findOne.mockResolvedValue({ _id: 'existing-att' });
     const repeat = await request(app)
-      .post('/api/manual-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: course._id, code });
     expect(repeat.status).toBe(200);
@@ -407,14 +407,14 @@ describe('POST /api/manual-attendance', () => {
     for (let i = 0; i < 5; i += 1) {
       // eslint-disable-next-line no-await-in-loop
       const res = await request(app)
-        .post('/api/manual-attendance')
+        .post('/api/attendance')
         .set(headers(student))
         .send({ courseId: course._id, code: '00000000' });
       expect(res.status).toBe(400);
     }
 
     const lockedRes = await request(app)
-      .post('/api/manual-attendance')
+      .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: course._id, code: '00000000' });
     expect(lockedRes.status).toBe(429);

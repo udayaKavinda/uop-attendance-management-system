@@ -37,17 +37,6 @@ async function createOrUpdateLecturer({ name, email, phone }) {
   return { ok: true, lecturer: p };
 }
 
-async function updateLecturer(lecturerId, fields) {
-  const lec = await Person.findOne({ _id: lecturerId, role: 'lecturer', deleted: false });
-  if (!lec) return { ok: false, status: 404, error: 'Lecturer not found' };
-  if (fields.name !== undefined) lec.name = fields.name;
-  if (fields.phone !== undefined) lec.phone = fields.phone;
-  if (fields.active !== undefined) lec.active = fields.active;
-  if (fields.email !== undefined) lec.email = fields.email;
-  await lec.save();
-  return { ok: true, lecturer: lec };
-}
-
 async function deleteLecturer(lecturerId) {
   const lec = await Person.findOne({ _id: lecturerId, role: 'lecturer', deleted: false });
   if (!lec) return { ok: false, status: 404, error: 'Lecturer not found' };
@@ -92,6 +81,5 @@ async function deleteLecturer(lecturerId) {
 module.exports = {
   listLecturers,
   createOrUpdateLecturer,
-  updateLecturer,
   deleteLecturer,
 };

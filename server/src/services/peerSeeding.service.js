@@ -39,11 +39,10 @@ async function selectSeedingRole(sessionItem, studentId, canAdvertise) {
 
   const leaseUntil = Date.now() + durationMs;
   const { token } = await bluetoothCode.mintSeedToken(String(sessionItem._id), String(studentId), leaseUntil);
-  const deviceName = bluetoothCode.generateDeviceName();
   return {
     // sessionId lets the client re-fetch its rotating seeder token via
     // GET /api/attendance/seed-token?sessionId= without needing it from elsewhere.
-    role: 'seed', sessionId: String(sessionItem._id), token, deviceName, durationMs,
+    role: 'seed', sessionId: String(sessionItem._id), token, durationMs,
   };
 }
 

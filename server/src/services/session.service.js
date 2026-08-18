@@ -36,8 +36,8 @@ function evaluateScheduleWindow(sessionConfig, now = new Date()) {
 /** Single source of truth for whether a session is inside its weekly time window. */
 function isWithinScheduleWindow(sessionItem, now = new Date()) {
   if (!sessionItem || !sessionItem.active || sessionItem.deleted) return false;
-  if (!sessionItem.recurring && sessionItem.occurrenceDate
-    && sessionItem.occurrenceDate !== localYmd(now)) return false;
+  if (typeof sessionItem.recurring !== 'boolean') return false;
+  if (sessionItem.recurring === false && sessionItem.occurrenceDate !== localYmd(now)) return false;
   return evaluateScheduleWindow(sessionItem, now).ok;
 }
 
@@ -107,13 +107,13 @@ async function getRunningCoursesForStudent(now = new Date()) {
   sessions.forEach((s) => {
     if (!s.course?.active) return;
     if (!isWithinScheduleWindow(s, now)) return;
-    if (!settingsService.isVerificationAllowed(settings, s.verification || 'bluetooth')) return;
+    if (!settingsService.isVerificationAllowed(settings, s.verification)) return;
     runningCourses.set(String(s.course._id), {
       _id: s.course._id,
       code: s.course.code,
       batch: s.course.batch,
       name: s.course.name,
-      verification: s.verification || 'bluetooth',
+      verification: s.verification,
       // Lets the app offer "Enter attendance code" alongside the automatic BLE
       // scan — independent of whether the lecturer's broadcast is actually on,
       // but gated by the global kill-switch regardless of the session's own setting.
@@ -144,7 +144,6 @@ async function getRunningSessionsForStaff(scope, now = new Date()) {
       // Raw flag (not staleness-checked): the dashboard uses it to reconcile —
       // auto-resume the broadcast or turn it off on the server.
       broadcasting: Boolean(s.broadcasting),
-      deviceName: s.bluetoothDeviceName || null,
     }));
 }
 

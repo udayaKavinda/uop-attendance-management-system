@@ -3,7 +3,6 @@
  * Attaches req.auth ({ person, isAdmin? }) after role checks using Passport session user.
  * Composite guards attach req.course or req.sessionItem for downstream controllers.
  */
-const asyncHandler = require('./asyncHandler');
 const authService = require('../services/auth.service');
 const lectureSessionService = require('../services/lectureSession.service');
 const LectureSession = require('../models/LectureSession');
@@ -48,13 +47,13 @@ function requireAnyAuth(req, res, next) {
 
 /** Loads course and verifies staff lecturer assignment (or admin). Sets req.course. */
 function requireCourseAccess(paramKey = 'courseId') {
-  return asyncHandler(async (req, res, next) => {
+  return async (req, res, next) => {
     const courseId = req.params[paramKey];
     const access = await authService.assertCourseAccess(req.auth.person, req.auth.isAdmin, courseId);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.message });
     req.course = access.course;
     next();
-  });
+  };
 }
 
 /**
@@ -63,7 +62,7 @@ function requireCourseAccess(paramKey = 'courseId') {
  */
 function requireSessionAccess(options = {}) {
   const { paramKey = 'sessionId', populateCourse = false } = options;
-  return asyncHandler(async (req, res, next) => {
+  return async (req, res, next) => {
     const sessionId = req.params[paramKey];
     let sessionItem;
     if (populateCourse) {
@@ -79,7 +78,7 @@ function requireSessionAccess(options = {}) {
     req.sessionItem = sessionItem;
     if (!populateCourse) req.course = access.course;
     next();
-  });
+  };
 }
 
 module.exports = {

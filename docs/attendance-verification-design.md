@@ -32,9 +32,8 @@ not override runtime configuration or instruct deployment; those belong in the R
 | `geofence` | stream GPS, 90 s | stable centroid in active building | hidden and rejected |
 | `both` | BLE and GPS concurrently | either valid method | available |
 
-The server returns `verification` in `/api/courses/running`. Android must never guess a
-missing value for newly returned sessions; the server retains `bluetooth` as a legacy data
-default only.
+The server returns `verification` in `/api/courses/running`. Session creation requires an
+explicit policy, the database field is required, and Android does not infer a missing mode.
 
 Global Bluetooth/geofence allow switches apply immediately. A disabled policy:
 
@@ -148,7 +147,7 @@ explicit selected color/state and removable chips. At least one building is requ
 
 ## Data contracts
 
-### LectureSession additions
+### LectureSession verification fields
 
 ```text
 verification: bluetooth | geofence | both
@@ -161,16 +160,15 @@ occurrenceDate: YYYY-MM-DD | null
 
 ### Attendance provenance
 
-The existing single field is retained and extended; there is no redundant
-`acceptedVia` field:
+There is one provenance field; no redundant `acceptedVia` field is used:
 
 ```text
 method: bluetooth | gps | manual_code
 centroid?: { lat, lng, fixCount }
 ```
 
-Roster responses expose `method`. Matrix cells intentionally map `sessionId -> Boolean`;
-Android and CSV use the compact generic present marker `P`.
+Matrix cells intentionally map `sessionId -> Boolean`; Android and CSV use the compact
+generic present marker `P`. Verification provenance remains internal to attendance records.
 
 ### Secrets
 
@@ -206,14 +204,14 @@ or
 ```json
 {
   "status": "accepted",
-  "attendance": { "method": "gps" },
-  "duplicate": false,
-  "seeding": { "role": "seed", "durationMs": 60000, "sessionId": "..." }
+  "seeding": {
+    "role": "seed",
+    "durationMs": 60000,
+    "sessionId": "...",
+    "token": "0123456789abcdef"
+  }
 }
 ```
-
-Legacy Bluetooth/manual submission endpoints remain thin aliases for installed clients,
-but receive the same server-side method and schedule enforcement.
 
 ## Security and privacy invariants
 

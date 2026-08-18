@@ -38,7 +38,6 @@ import lk.ac.pdn.eng.feats.data.net.ApiResult
 data class BroadcastState(
     val sessionId: String,
     val label: String? = null,
-    val deviceName: String? = null,
     val token: String? = null,
     val rotatesIn: Long? = null,
     val attendanceCount: Int? = null,
@@ -186,7 +185,6 @@ class BroadcastService : Service() {
                             _state.value = BroadcastState(
                                 sessionId = sessionId,
                                 label = label,
-                                deviceName = res.data.deviceName,
                                 token = token,
                                 rotatesIn = res.data.rotatesIn,
                                 attendanceCount = res.data.attendanceCount,

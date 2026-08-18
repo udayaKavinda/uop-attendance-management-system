@@ -17,10 +17,6 @@ const {
   isWithinScheduleWindow,
 } = require('./session.service');
 
-async function listForCourse(courseId) {
-  return LectureSession.find({ course: courseId, deleted: false }).sort({ lectureDay: 1, startTime: 1 });
-}
-
 async function createSession(course, body) {
   const validated = validateSessionCreateBody(body);
   if (!validated.ok) return validated;
@@ -93,15 +89,12 @@ async function activateSession(sessionItem) {
     ? sessionItem.course
     : await Course.findById(sessionItem.course);
   if (!course?.active) return { ok: false, status: 400, error: 'Course is disabled' };
-  if (!sessionItem.recurring && sessionItem.occurrenceDate && sessionItem.occurrenceDate < localYmd()) {
-    return { ok: false, status: 400, error: 'This one-time session has expired; create a new session.' };
+  if (typeof sessionItem.recurring !== 'boolean'
+    || (sessionItem.recurring === false && !sessionItem.occurrenceDate)) {
+    return { ok: false, status: 409, error: 'Session data does not match the current schema.' };
   }
-  if (!sessionItem.recurring && !sessionItem.occurrenceDate) {
-    sessionItem.occurrenceDate = nextOccurrenceDate(
-      sessionItem.lectureDay,
-      new Date(),
-      sessionItem.endTime,
-    );
+  if (sessionItem.recurring === false && sessionItem.occurrenceDate < localYmd()) {
+    return { ok: false, status: 400, error: 'This one-time session has expired; create a new session.' };
   }
   sessionItem.active = true;
   await sessionItem.save();
@@ -140,7 +133,7 @@ async function assertCanBroadcastNow(sessionItem, now = new Date()) {
   if (!sessionItem.active) {
     return { ok: false, status: 400, error: 'Session is not active' };
   }
-  const verification = sessionItem.verification || 'bluetooth';
+  const verification = sessionItem.verification;
   if (verification !== 'bluetooth' && verification !== 'both') {
     return { ok: false, status: 400, error: 'Bluetooth broadcast is not allowed for this session.' };
   }
@@ -175,9 +168,6 @@ async function setBroadcasting(sessionItem, on) {
   if (on) {
     const gate = await assertCanBroadcastNow(sessionItem);
     if (!gate.ok) return gate;
-    if (!sessionItem.bluetoothDeviceName) {
-      sessionItem.bluetoothDeviceName = bluetoothCode.generateDeviceName();
-    }
     sessionItem.broadcasting = true;
     // Stamp immediately so the channel counts as live before the first token poll.
     sessionItem.lastBroadcastSeenAt = new Date();
@@ -224,7 +214,6 @@ async function getBroadcast(sessionItem) {
     data: {
       sessionId: sessionItem._id,
       broadcasting: true,
-      deviceName: sessionItem.bluetoothDeviceName,
       token,
       rotatesIn,
       rotationMs: bluetoothCode.ROTATION_MS,
@@ -235,7 +224,6 @@ async function getBroadcast(sessionItem) {
 }
 
 module.exports = {
-  listForCourse,
   createSession,
   findSessionById,
   softDeleteSession,

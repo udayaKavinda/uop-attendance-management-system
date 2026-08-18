@@ -85,6 +85,7 @@ function makeSession(overrides = {}) {
     lectureDay: todayDay(),
     startTime: '00:00',
     endTime: '23:59',
+    recurring: true,
     active: true,
     deleted: false,
     verification: 'bluetooth',
@@ -92,7 +93,6 @@ function makeSession(overrides = {}) {
     manualCodeEnabled: false,
     broadcasting: false,
     lastBroadcastSeenAt: null,
-    bluetoothDeviceName: null,
     save: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -135,7 +135,7 @@ describe('POST /api/attendance — validation', () => {
 });
 
 describe('POST /api/attendance — GPS fix path', () => {
-  test('stays "pending" before 4 fixes, then "accepted" once inside the geofence', async () => {
+  test('accepts an authenticated student without a course-enrolment check once GPS is valid', async () => {
     const student = makePerson();
     const geofenceId = makeId();
     mockGeofenceStore.push({

@@ -43,19 +43,13 @@ function hasScheduleOverlap(existingSessions, day, startTime, endTime) {
 }
 
 function isNonRecurringExpired(sessionItem, now = new Date()) {
-  if (!sessionItem || sessionItem.recurring) return false;
-  if (sessionItem.occurrenceDate) {
-    const today = ymd(now);
-    if (today > sessionItem.occurrenceDate) return true;
-    if (today < sessionItem.occurrenceDate) return false;
-    const end = toMinutes(sessionItem.endTime);
-    return end !== null && now.getHours() * 60 + now.getMinutes() > end;
-  }
-  const day = DAY_INDEX[now.getDay()];
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  if (!sessionItem || sessionItem.recurring === true) return false;
+  if (sessionItem.recurring !== false || !sessionItem.occurrenceDate) return true;
+  const today = ymd(now);
+  if (today > sessionItem.occurrenceDate) return true;
+  if (today < sessionItem.occurrenceDate) return false;
   const end = toMinutes(sessionItem.endTime);
-  if (end === null) return false;
-  return day === sessionItem.lectureDay && currentMinutes > end;
+  return end !== null && now.getHours() * 60 + now.getMinutes() > end;
 }
 
 module.exports = {

@@ -2,7 +2,6 @@ const attendanceService = require('../services/attendance.service');
 const {
   validateCourseId, validateSessionIdQuery, validateUnifiedAttendanceBody,
 } = require('../validators/attendance.validator');
-const { validateManualCodeAttendanceBody } = require('../validators/manualCode.validator');
 
 async function status(req, res) {
   const validated = validateCourseId(req.query.courseId);
@@ -11,21 +10,12 @@ async function status(req, res) {
   return res.json(data);
 }
 
-/** Legacy alias, kept for already-installed app versions — see recordUnified. */
-async function recordManualCode(req, res) {
-  const validated = validateManualCodeAttendanceBody(req.body);
+async function bluetoothTarget(req, res) {
+  const validated = validateCourseId(req.query.courseId);
   if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
-  const result = await attendanceService.recordManualCodeAttendance(
-    req.auth.person._id,
-    validated.courseId,
-    validated.code,
-  );
+  const result = await attendanceService.getBluetoothTarget(validated.courseId);
   if (!result.ok) return res.status(result.status).json({ error: result.error });
-  return res.json({
-    success: true,
-    attendance: result.attendance,
-    ...(result.duplicate ? { duplicate: true } : {}),
-  });
+  return res.json({ available: true });
 }
 
 /**
@@ -46,7 +36,6 @@ async function recordUnified(req, res) {
   if (result.pending) return res.json({ status: 'pending' });
   return res.json({
     status: 'accepted',
-    attendance: result.attendance,
     ...(result.duplicate ? { duplicate: true } : {}),
     ...(result.seeding ? { seeding: result.seeding } : {}),
   });
@@ -69,5 +58,5 @@ async function releaseSeedToken(req, res) {
 }
 
 module.exports = {
-  status, recordManualCode, recordUnified, seedToken, releaseSeedToken,
+  status, bluetoothTarget, recordUnified, seedToken, releaseSeedToken,
 };

@@ -51,7 +51,7 @@ describe('authorizeStaff', () => {
     expect(r.ok).toBe(false);
     expect(r.status).toBe(403);
   });
-  it('treats missing role as student', () => {
+  it('rejects a record with no role', () => {
     expect(authService.authorizeStaff({}).ok).toBe(false);
   });
 });
@@ -79,5 +79,6 @@ describe('authorizeStudent', () => {
   it('rejects non-student roles', () => {
     expect(authService.authorizeStudent({ role: 'lecturer' }).ok).toBe(false);
     expect(authService.authorizeStudent({ role: 'admin' }).ok).toBe(false);
+    expect(authService.authorizeStudent({}).ok).toBe(false);
   });
 });

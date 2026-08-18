@@ -2,10 +2,10 @@ const mongoose = require('mongoose');
 
 /** All users (students, admins, lecturers) live in the `people` collection. */
 const personSchema = new mongoose.Schema({
-  email: { type: String, required: true, unique: true },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
   /** Google subject or other stable external id; synthetic ids allowed for directory-only lecturers. */
   studentId: { type: String, required: true, unique: true },
-  role: { type: String, enum: ['student', 'admin', 'lecturer'], default: 'student' },
+  role: { type: String, enum: ['student', 'admin', 'lecturer'], required: true },
   /** Display name (used for lecturers in course UI). */
   name: { type: String, default: '', trim: true },
   phone: { type: String, default: '', trim: true },

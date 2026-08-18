@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const courseSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   code: { type: String, required: true, trim: true, uppercase: true },
-  batch: { type: String, required: true, trim: true, default: '' },
+  batch: { type: String, required: true, trim: true },
   lecturers: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Person',

@@ -1,7 +1,6 @@
 const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const Person = require('../models/Person');
-const { escapeRegex } = require('../utils/regex');
 
 /**
  * Shared Google identity logic for BOTH sign-in paths:
@@ -85,11 +84,6 @@ async function upsertGooglePerson({ email, googleSub }) {
 
   let person = await Person.findOne({ email: emailNorm });
   if (!person) {
-    person = await Person.findOne({
-      email: { $regex: new RegExp(`^${escapeRegex(emailNorm)}$`, 'i') },
-    });
-  }
-  if (!person) {
     person = await Person.create({
       email: emailNorm,
       studentId: googleSub,
@@ -97,23 +91,9 @@ async function upsertGooglePerson({ email, googleSub }) {
     });
   } else {
     let changed = false;
-    if (person.email !== emailNorm) {
-      const taken = await Person.findOne({ email: emailNorm, _id: { $ne: person._id } });
-      if (!taken) {
-        person.email = emailNorm;
-        changed = true;
-      }
-    }
     const synthStudentId = String(person.studentId || '');
-    if (synthStudentId.startsWith('dir:') || synthStudentId.startsWith('dir-') || synthStudentId.startsWith('pending:')) {
+    if (synthStudentId.startsWith('dir:')) {
       person.studentId = googleSub;
-      changed = true;
-    } else if (!person.studentId) {
-      person.studentId = googleSub;
-      changed = true;
-    }
-    if (!person.role) {
-      person.role = 'student';
       changed = true;
     }
     if (changed) await person.save();

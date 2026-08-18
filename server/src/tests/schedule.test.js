@@ -42,9 +42,6 @@ describe('isNonRecurringExpired', () => {
   it('returns false for recurring sessions', () => {
     expect(isNonRecurringExpired({ recurring: true })).toBe(false);
   });
-  it('returns false when no nonRecurringDate set', () => {
-    expect(isNonRecurringExpired({ recurring: false })).toBe(false);
-  });
   it('expires a dated one-time session after its occurrence date', () => {
     const now = new Date(2026, 7, 20, 9, 0);
     expect(isNonRecurringExpired({ recurring: false, occurrenceDate: '2026-08-19', endTime: '23:59' }, now)).toBe(true);
@@ -52,6 +49,10 @@ describe('isNonRecurringExpired', () => {
   it('does not expire a dated one-time session before its occurrence', () => {
     const now = new Date(2026, 7, 18, 9, 0);
     expect(isNonRecurringExpired({ recurring: false, occurrenceDate: '2026-08-19', endTime: '10:00' }, now)).toBe(false);
+  });
+  it('treats incomplete non-recurring data as invalid and expired', () => {
+    expect(isNonRecurringExpired({ recurring: undefined })).toBe(true);
+    expect(isNonRecurringExpired({ recurring: false, occurrenceDate: null })).toBe(true);
   });
 });
 

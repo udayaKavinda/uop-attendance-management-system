@@ -6,16 +6,6 @@ const bluetoothCode = require('./bluetoothCode.service');
 const { invalidateActiveSessionCache } = require('./session.service');
 const { validateLecturerIds } = require('../validators/course.validator');
 
-async function listActiveForStudent() {
-  const items = await Course.find({ active: true }).sort({ code: 1, batch: 1 });
-  return items.map((c) => ({
-    _id: c._id,
-    code: c.code,
-    batch: c.batch,
-    name: c.name,
-  }));
-}
-
 async function listForStaff(auth) {
   const filter = auth.isAdmin ? {} : { lecturers: auth.person._id };
   return Course.find(filter).populate('lecturers', 'name email phone').sort({ code: 1, batch: 1 });
@@ -89,7 +79,6 @@ async function assignLecturers(courseId, lecturerIds) {
 }
 
 module.exports = {
-  listActiveForStudent,
   listForStaff,
   createCourse,
   deleteCourse,

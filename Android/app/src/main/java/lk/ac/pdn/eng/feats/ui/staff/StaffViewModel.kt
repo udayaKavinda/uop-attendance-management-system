@@ -26,7 +26,6 @@ import lk.ac.pdn.eng.feats.data.net.RunningSessionDto
 import lk.ac.pdn.eng.feats.data.net.SettingsDto
 import lk.ac.pdn.eng.feats.data.net.SettingsReq
 import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
-import lk.ac.pdn.eng.feats.data.net.UpdateLecturerReq
 import lk.ac.pdn.eng.feats.ui.container
 
 data class StaffState(

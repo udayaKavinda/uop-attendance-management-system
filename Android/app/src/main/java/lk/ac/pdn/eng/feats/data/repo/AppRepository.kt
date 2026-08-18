@@ -5,8 +5,6 @@ import lk.ac.pdn.eng.feats.data.net.ApiService
 import lk.ac.pdn.eng.feats.data.net.AssignLecturerReq
 import lk.ac.pdn.eng.feats.data.net.AttendanceMatrixRes
 import lk.ac.pdn.eng.feats.data.net.AttendanceStatusDto
-import lk.ac.pdn.eng.feats.data.net.BluetoothAttendanceReq
-import lk.ac.pdn.eng.feats.data.net.BluetoothAttendanceRes
 import lk.ac.pdn.eng.feats.data.net.BroadcastDto
 import lk.ac.pdn.eng.feats.data.net.CourseDto
 import lk.ac.pdn.eng.feats.data.net.CreateCourseReq
@@ -18,12 +16,11 @@ import lk.ac.pdn.eng.feats.data.net.GeofenceUpdateReq
 import lk.ac.pdn.eng.feats.data.net.GoogleIdTokenReq
 import lk.ac.pdn.eng.feats.data.net.GpsFixDto
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
-import lk.ac.pdn.eng.feats.data.net.ManualAttendanceReq
 import lk.ac.pdn.eng.feats.data.net.ManualCodeConfigReq
 import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
 import lk.ac.pdn.eng.feats.data.net.MeDto
-import lk.ac.pdn.eng.feats.data.net.RosterRecordDto
 import lk.ac.pdn.eng.feats.data.net.RunningSessionDto
+import lk.ac.pdn.eng.feats.data.net.RunningCourseDto
 import lk.ac.pdn.eng.feats.data.net.SeedTokenDto
 import lk.ac.pdn.eng.feats.data.net.SessionDto
 import lk.ac.pdn.eng.feats.data.net.SetBroadcastReq
@@ -32,7 +29,6 @@ import lk.ac.pdn.eng.feats.data.net.SettingsReq
 import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
 import lk.ac.pdn.eng.feats.data.net.UnifiedAttendanceReq
 import lk.ac.pdn.eng.feats.data.net.UnifiedAttendanceRes
-import lk.ac.pdn.eng.feats.data.net.UpdateLecturerReq
 import lk.ac.pdn.eng.feats.data.net.apiCall
 
 /**
@@ -43,7 +39,7 @@ class AppRepository(private val api: ApiService) {
 
     // ── Auth ─────────────────────────────────────────────────────────────────────
     /** Single-use nonce for the Credential Manager sign-in handshake. */
-    suspend fun googleNonce(): ApiResult<String?> = apiCall { api.googleNonce().nonce }
+    suspend fun googleNonce(): ApiResult<String> = apiCall { api.googleNonce().nonce }
 
     /** Exchanges a verified Google ID token for a server session cookie. */
     suspend fun googleIdToken(idToken: String): ApiResult<Unit> =
@@ -57,11 +53,8 @@ class AppRepository(private val api: ApiService) {
     suspend fun logout(): ApiResult<Unit> = apiCall { api.logout(); Unit }
 
     // ── Courses ────────────────────────────────────────────────────────────────────
-    suspend fun runningCourses(): ApiResult<List<CourseDto>> =
-        apiCall { api.runningCourses().items ?: emptyList() }
-
-    suspend fun courses(): ApiResult<List<CourseDto>> =
-        apiCall { api.courses().items ?: emptyList() }
+    suspend fun runningCourses(): ApiResult<List<RunningCourseDto>> =
+        apiCall { api.runningCourses().items }
 
     suspend fun adminCourses(): ApiResult<List<CourseDto>> =
         apiCall { api.adminCourses().items ?: emptyList() }
@@ -85,9 +78,6 @@ class AppRepository(private val api: ApiService) {
     suspend fun allSessions(): ApiResult<List<StaffSessionDto>> =
         apiCall { api.allSessions().items ?: emptyList() }
 
-    suspend fun courseSessions(courseId: String): ApiResult<List<SessionDto>> =
-        apiCall { api.courseSessions(courseId).items ?: emptyList() }
-
     suspend fun createSession(courseId: String, req: CreateSessionReq): ApiResult<SessionDto?> =
         apiCall { api.createSession(courseId, req).session }
 
@@ -110,9 +100,6 @@ class AppRepository(private val api: ApiService) {
 
     suspend fun deleteSession(sessionId: String): ApiResult<Unit> =
         apiCall { api.deleteSession(sessionId); Unit }
-
-    suspend fun sessionAttendance(sessionId: String): ApiResult<List<RosterRecordDto>> =
-        apiCall { api.sessionAttendance(sessionId).records ?: emptyList() }
 
     // ── Manual attendance code (staff control) ───────────────────────────────────────
     suspend fun manualCodeStatus(sessionId: String): ApiResult<ManualCodeStatusDto> =
@@ -145,15 +132,8 @@ class AppRepository(private val api: ApiService) {
     suspend fun attendanceStatus(courseId: String): ApiResult<AttendanceStatusDto> =
         apiCall { api.attendanceStatus(courseId) }
 
-    suspend fun bluetoothTarget(courseId: String): ApiResult<String?> =
-        apiCall { api.bluetoothTarget(courseId).deviceName }
-
-    suspend fun recordBluetoothAttendance(courseId: String, token: String): ApiResult<BluetoothAttendanceRes> =
-        apiCall { api.recordBluetoothAttendance(BluetoothAttendanceReq(courseId, token)) }
-
-    /** Fallback path: same response shape as [recordBluetoothAttendance]. */
-    suspend fun recordManualAttendance(courseId: String, code: String): ApiResult<BluetoothAttendanceRes> =
-        apiCall { api.recordManualAttendance(ManualAttendanceReq(courseId, code)) }
+    suspend fun bluetoothTarget(courseId: String): ApiResult<Unit> =
+        apiCall { api.bluetoothTarget(courseId); Unit }
 
     /** Unified submission — exactly one of token/fix/code. Reports canAdvertise for seeding eligibility. */
     suspend fun recordAttendance(
@@ -178,9 +158,6 @@ class AppRepository(private val api: ApiService) {
 
     suspend fun createLecturer(req: CreateLecturerReq): ApiResult<LecturerDto?> =
         apiCall { api.createLecturer(req).lecturer }
-
-    suspend fun updateLecturer(id: String, req: UpdateLecturerReq): ApiResult<LecturerDto?> =
-        apiCall { api.updateLecturer(id, req).lecturer }
 
     suspend fun matrix(courseId: String): ApiResult<AttendanceMatrixRes> =
         apiCall { api.attendanceMatrix(courseId) }

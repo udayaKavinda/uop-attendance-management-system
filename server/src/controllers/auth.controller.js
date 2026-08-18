@@ -109,7 +109,7 @@ async function me(req, res) {
   return res.json({
     studentId: person._id,
     email: person.email,
-    role: person.role || 'student',
+    role: person.role,
     lecturerId: person.role === 'lecturer' ? person._id : null,
   });
 }

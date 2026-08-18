@@ -51,8 +51,6 @@ android {
         versionCode = 4
         versionName = "1.3.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
         // Fixed production server. Must match the server's APP_BASE_URL so the
         // native OAuth return is allowed.
         buildConfigField("String", "DEFAULT_API_BASE", "\"https://attendance.eng.pdn.ac.lk\"")
@@ -113,13 +111,10 @@ android {
 dependencies {
     // AndroidX core
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
     implementation(libs.material)
 
     // Lifecycle / Activity / Compose
-    implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
@@ -157,8 +152,4 @@ dependencies {
 
     // Testing
     testImplementation(libs.junit)
-    testImplementation(libs.kotlinx.coroutines.test)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
 }

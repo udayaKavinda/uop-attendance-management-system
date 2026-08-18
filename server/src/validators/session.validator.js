@@ -20,8 +20,11 @@ function validateSessionCreateBody(body) {
   if (s === null || e === null || s >= e) {
     return { ok: false, status: 400, error: 'Invalid startTime/endTime (HH:mm)' };
   }
+  if (typeof recurring !== 'boolean') {
+    return { ok: false, status: 400, error: 'recurring must be a boolean' };
+  }
 
-  const mode = verification === undefined ? 'bluetooth' : String(verification);
+  const mode = String(verification || '');
   if (!VERIFICATION_MODES.includes(mode)) {
     return { ok: false, status: 400, error: 'verification must be "bluetooth", "geofence", or "both"' };
   }
@@ -61,7 +64,7 @@ function validateSessionCreateBody(body) {
     lectureDay: dayUpper,
     startTime,
     endTime,
-    recurring: Boolean(recurring),
+    recurring,
     verification: mode,
     buildings: mode === 'bluetooth' ? [] : buildingIds,
     manualCodeEnabled: manualEnabled,
@@ -100,7 +103,7 @@ async function checkSessionOverlap(LectureSession, courseId, day, startTime, end
   });
   const today = ymd();
   const relevant = sameDaySessions.filter(
-    (session) => session.recurring || !session.occurrenceDate || session.occurrenceDate >= today,
+    (session) => session.recurring || session.occurrenceDate >= today,
   );
   const overlap = hasScheduleOverlap(relevant, day, startTime, endTime);
   if (overlap) {

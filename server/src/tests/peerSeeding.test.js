@@ -1,10 +1,8 @@
 const mockCountLiveSeeders = jest.fn();
 const mockMintSeedToken = jest.fn();
-const mockGenerateDeviceName = jest.fn(() => 'UOP-TESTDEV');
 jest.mock('../services/bluetoothCode.service', () => ({
   countLiveSeeders: (...args) => mockCountLiveSeeders(...args),
   mintSeedToken: (...args) => mockMintSeedToken(...args),
-  generateDeviceName: (...args) => mockGenerateDeviceName(...args),
 }));
 
 const mockGetSettings = jest.fn();
@@ -58,7 +56,6 @@ describe('peerSeeding.selectSeedingRole', () => {
     const result = await peerSeeding.selectSeedingRole(session(), 'student1', true);
     expect(result.role).toBe('seed');
     expect(result.token).toBe('abc123');
-    expect(result.deviceName).toBe('UOP-TESTDEV');
     expect(result.durationMs).toBe(60000);
     expect(mockMintSeedToken).toHaveBeenCalledWith('session1', 'student1', expect.any(Number));
   });

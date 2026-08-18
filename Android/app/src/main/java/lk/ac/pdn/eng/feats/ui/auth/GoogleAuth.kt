@@ -34,7 +34,7 @@ sealed interface GoogleSignInResult {
 
 /**
  * Native "Sign in with Google" via Credential Manager — the current Google-recommended
- * API, replacing both the legacy GoogleSignInClient and the One Tap APIs.
+ * API used by the native sign-in flow.
  *
  * The account picker is drawn by the system as a bottom sheet; no browser is involved.
  * Google returns a short-lived **ID token** (a JWT) which the server verifies against

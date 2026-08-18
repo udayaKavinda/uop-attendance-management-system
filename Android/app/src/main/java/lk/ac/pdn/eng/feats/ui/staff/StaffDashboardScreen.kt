@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Rule
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -49,7 +50,6 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Repeat
-import androidx.compose.material.icons.outlined.Rule
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Search
@@ -67,6 +67,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
@@ -646,7 +647,7 @@ private fun BuildingMultiSelectDropdown(
                     focusedIndicatorColor = Palette.Accent,
                     unfocusedIndicatorColor = Palette.InputBorder,
                 ),
-                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryEditable),
             )
             ExposedDropdownMenu(
                 expanded = expanded,
@@ -912,7 +913,7 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
 
         item {
             SettingsSection(
-                icon = Icons.Outlined.Rule,
+                icon = Icons.AutoMirrored.Outlined.Rule,
                 title = "Verification policies",
                 subtitle = "Turn each policy on or off for the whole system. Lecturers then " +
                     "pick whichever enabled policy suits the session they create. Applies to " +
@@ -1105,7 +1106,7 @@ private fun SessionCard(
 ) {
     val active = session.active == true
     val onAir = broadcast != null
-    val verification = VERIFICATION_LABELS[session.verification ?: "bluetooth"] ?: "Bluetooth"
+    val verification = VERIFICATION_LABELS[session.verification] ?: session.verification
     val buildingLabel = when {
         buildingNames.isNotEmpty() -> buildingNames.joinToString(", ")
         session.buildings.orEmpty().isNotEmpty() -> "${session.buildings.orEmpty().size} buildings"
@@ -1568,7 +1569,7 @@ private fun LabeledDropdown(
             placeholder = { Text(placeholder, color = Palette.Muted) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             shape = AppShapes.Input,
-            modifier = Modifier.fillMaxWidth().menuAnchor(),
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
             colors = TextFieldDefaults.colors(
                 focusedContainerColor = Palette.Card,
                 unfocusedContainerColor = Palette.Card,

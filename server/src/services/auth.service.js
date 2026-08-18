@@ -12,7 +12,7 @@ function getPersonFromRequest(req) {
 
 /** Staff API authorization: derived from Passport session (Google OAuth), not client headers. */
 function authorizeStaff(person) {
-  const role = person.role || 'student';
+  const role = person.role;
   if (role !== 'admin' && role !== 'lecturer') {
     return { ok: false, status: 403, message: 'Staff access required' };
   }
@@ -31,17 +31,13 @@ function authorizeAdmin(person) {
 
 /** Student lecture attendance: session only, role must be student. */
 function authorizeStudent(person) {
-  const role = person.role || 'student';
+  const role = person.role;
   if (role !== 'student') {
     return { ok: false, status: 403, message: 'Only student accounts can use lecture attendance' };
   }
   if (person.deleted) {
     return { ok: false, status: 403, message: 'Account inactive' };
   }
-  return { ok: true, person };
-}
-
-function authorizeAny(person) {
   return { ok: true, person };
 }
 
@@ -69,7 +65,6 @@ module.exports = {
   authorizeStaff,
   authorizeAdmin,
   authorizeStudent,
-  authorizeAny,
   assertCourseAccess,
   staffSessionMatch,
 };

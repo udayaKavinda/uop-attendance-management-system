@@ -23,3 +23,14 @@ dist/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Android / Gradle local and generated state
+Android/.gradle/
+Android/.idea/
+Android/.kotlin/
+Android/**/build/
+Android/app/release/
+Android/local.properties
+Android/keystore.properties
+Android/*.jks
+Android/*.keystore

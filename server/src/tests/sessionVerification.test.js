@@ -16,13 +16,12 @@ function validId() {
 describe('validateSessionCreateBody — verification/buildings', () => {
   const base = {
     lectureDay: 'MON', startTime: '08:00', endTime: '10:00', recurring: true,
+    verification: 'bluetooth',
   };
 
-  it('defaults verification to "bluetooth" and buildings to [] when omitted', () => {
-    const result = validateSessionCreateBody(base);
-    expect(result.ok).toBe(true);
-    expect(result.verification).toBe('bluetooth');
-    expect(result.buildings).toEqual([]);
+  it('requires an explicit verification policy', () => {
+    const result = validateSessionCreateBody({ ...base, verification: undefined });
+    expect(result.ok).toBe(false);
   });
 
   it('rejects an unrecognized verification value', () => {
@@ -63,6 +62,10 @@ describe('validateSessionCreateBody — verification/buildings', () => {
     expect(validateSessionCreateBody({ ...base, startTime: '8:00' }).ok).toBe(false);
     expect(validateSessionCreateBody({ ...base, startTime: '25:00' }).ok).toBe(false);
     expect(validateSessionCreateBody({ ...base, endTime: '10:99' }).ok).toBe(false);
+  });
+
+  it('requires an explicit recurring flag', () => {
+    expect(validateSessionCreateBody({ ...base, recurring: undefined }).ok).toBe(false);
   });
 
   it('validates and returns atomic manual-code creation settings', () => {

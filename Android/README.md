@@ -37,7 +37,7 @@ manual-code global kill switch.
 
 1. Request BLE scan permission (`BLUETOOTH_SCAN`/`CONNECT` on Android 12+; precise
    location on older Android versions).
-2. Verify Bluetooth and legacy Location-services prerequisites.
+2. Verify Bluetooth and the Android 11-and-earlier Location-services prerequisite.
 3. Resolve the live server target and scan for the rotating token for up to 30 seconds.
 4. Submit through the unified attendance endpoint.
 
@@ -153,10 +153,10 @@ Authentication: `/api/auth/google-nonce`, `/api/auth/google-id-token`,
 `/api/auth/exchange-code`, `/api/me`, `/api/logout`, plus `/auth/google` fallback.
 
 Student: `/api/courses/running`, `/api/attendance-status`, `/api/attendance`,
-`/api/attendance/seed-token`, and backward-compatible Bluetooth/manual aliases.
+`/api/bluetooth-target`, and `/api/attendance/seed-token`.
 
 Staff/admin: `/api/admin/courses`, course sessions and attendance matrix,
-`/api/admin/sessions` with broadcast/manual-code/roster actions,
+`/api/admin/sessions` with broadcast and manual-code actions,
 `/api/admin/lecturers`, `/api/admin/geofences`, and `/api/admin/settings`.
 
 The server README is the authoritative request/response and access-control reference.

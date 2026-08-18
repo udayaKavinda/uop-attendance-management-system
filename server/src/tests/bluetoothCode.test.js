@@ -21,18 +21,6 @@ describe('bluetoothCode', () => {
     jest.clearAllMocks();
   });
 
-  describe('generateDeviceName', () => {
-    it('returns a string matching UOP-XXXXXXXX', () => {
-      const name = bluetoothCode.generateDeviceName();
-      expect(name).toMatch(/^UOP-[0-9A-F]{8}$/);
-    });
-
-    it('generates unique names', () => {
-      const names = new Set(Array.from({ length: 20 }, () => bluetoothCode.generateDeviceName()));
-      expect(names.size).toBe(20);
-    });
-  });
-
   describe('getToken (primary)', () => {
     it('creates a new token when none exists', async () => {
       mockModel.findOne.mockResolvedValue(null);

@@ -28,6 +28,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
@@ -240,7 +241,10 @@ fun LectureEntryScreen(
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                                 shape = AppShapes.Input,
                                 enabled = !state.busy,
-                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                modifier = Modifier.fillMaxWidth().menuAnchor(
+                                    MenuAnchorType.PrimaryNotEditable,
+                                    enabled = !state.busy,
+                                ),
                                 colors = TextFieldDefaults.colors(
                                     focusedContainerColor = Palette.Card,
                                     unfocusedContainerColor = Palette.Card,
@@ -256,8 +260,8 @@ fun LectureEntryScreen(
                                     DropdownMenuItem(
                                         text = {
                                             Column {
-                                                Text(course.code ?: "", fontWeight = FontWeight.Bold)
-                                                Text(course.name ?: "", color = Palette.Muted, fontSize = 13.sp)
+                                                Text(course.code, fontWeight = FontWeight.Bold)
+                                                Text(course.name, color = Palette.Muted, fontSize = 13.sp)
                                             }
                                         },
                                         onClick = {
