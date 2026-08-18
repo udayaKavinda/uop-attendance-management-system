@@ -58,6 +58,27 @@ describe('validateSessionCreateBody — verification/buildings', () => {
     expect(result.ok).toBe(true);
     expect(result.buildings).toEqual([]);
   });
+
+  it('strictly rejects malformed or out-of-range HH:mm values', () => {
+    expect(validateSessionCreateBody({ ...base, startTime: '8:00' }).ok).toBe(false);
+    expect(validateSessionCreateBody({ ...base, startTime: '25:00' }).ok).toBe(false);
+    expect(validateSessionCreateBody({ ...base, endTime: '10:99' }).ok).toBe(false);
+  });
+
+  it('validates and returns atomic manual-code creation settings', () => {
+    const result = validateSessionCreateBody({
+      ...base,
+      manualCodeEnabled: true,
+      manualCodeRotationMode: 'interval',
+      manualCodeRotationSeconds: 30,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      manualCodeEnabled: true,
+      manualCodeRotationMode: 'interval',
+      manualCodeRotationSeconds: 30,
+    });
+  });
 });
 
 describe('checkVerificationAllowed — per-policy admin switches', () => {

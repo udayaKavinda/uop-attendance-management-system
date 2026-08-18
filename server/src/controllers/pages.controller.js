@@ -1,6 +1,7 @@
 const CONTACT_EMAIL = 'udayakavindadev@gmail.com';
 const APP_NAME = 'UOP Attendance';
 const ORG_NAME = 'University of Peradeniya, Faculty of Engineering';
+const PRIVACY_LAST_UPDATED = '2026-08-19';
 
 function layout(title, bodyHtml) {
   return `<!doctype html>
@@ -29,7 +30,7 @@ ${bodyHtml}
 function privacy(req, res) {
   const html = layout('Privacy policy', `
 <h1>Privacy policy</h1>
-<p class="meta">${APP_NAME} · ${ORG_NAME} · Last updated: ${new Date().toISOString().slice(0, 10)}</p>
+<p class="meta">${APP_NAME} · ${ORG_NAME} · Last updated: ${PRIVACY_LAST_UPDATED}</p>
 
 <p>${APP_NAME} is a lecture-attendance app for ${ORG_NAME}. This page explains what
 information the app collects, how it is used, and how you can request that your data be
@@ -43,7 +44,13 @@ deleted.</p>
   <li><strong>Phone number</strong> — optionally, for lecturer/staff directory records
   (entered by an administrator, not required for students).</li>
   <li><strong>Attendance records</strong> — the course, lecture session, date, and time
-  you recorded attendance, and the method used (Bluetooth proximity).</li>
+  you recorded attendance, and the method used (Bluetooth proximity, GPS geofence,
+  or a lecturer-provided manual code).</li>
+  <li><strong>Location information</strong> — for GPS-geofence sessions, precise
+  location fixes are processed during the short verification window. Rejected and
+  intermediate fixes are held only in server memory for that attempt. When attendance
+  is accepted, the resulting centroid and contributing-fix count are stored with the
+  attendance record for academic-integrity auditing.</li>
   <li><strong>Bluetooth tokens</strong> — short-lived rotating codes used only to verify
   physical presence in a classroom during attendance. These are not personal data and
   automatically expire.</li>
@@ -60,8 +67,10 @@ used only as the sign-in provider (Google OAuth); no attendance or profile data 
 to Google or any other third party.</p>
 
 <h2>Data retention</h2>
-<p>Account and attendance records are retained for academic record-keeping while your
-account is active. Bluetooth tokens expire automatically within one hour of creation.</p>
+<p>Account and attendance records, including an accepted GPS centroid when GPS was used,
+are retained for academic record-keeping while your account is active. Bluetooth tokens,
+manual codes, and temporary location fixes are short-lived and are removed or invalidated
+when their session/window ends.</p>
 
 <h2>Your rights</h2>
 <p>You can request a copy of your data or request that your account and associated

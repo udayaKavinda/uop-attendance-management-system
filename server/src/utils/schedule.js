@@ -1,9 +1,32 @@
 const DAY_INDEX = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
 function toMinutes(hhmm) {
-  const [h, m] = String(hhmm || '').split(':').map((v) => parseInt(v, 10));
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  const match = /^(\d{2}):(\d{2})$/.exec(String(hhmm || ''));
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
   return h * 60 + m;
+}
+
+function ymd(now = new Date()) {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/** Next local calendar date matching `lectureDay`, including today. */
+function nextOccurrenceDate(lectureDay, now = new Date(), endTime = null) {
+  const target = DAY_INDEX.indexOf(String(lectureDay || '').toUpperCase());
+  if (target < 0) return null;
+  const result = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let daysAhead = (target - result.getDay() + 7) % 7;
+  const end = toMinutes(endTime);
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  if (daysAhead === 0 && end !== null && currentMinutes > end) daysAhead = 7;
+  result.setDate(result.getDate() + daysAhead);
+  return ymd(result);
 }
 
 function hasScheduleOverlap(existingSessions, day, startTime, endTime) {
@@ -21,6 +44,13 @@ function hasScheduleOverlap(existingSessions, day, startTime, endTime) {
 
 function isNonRecurringExpired(sessionItem, now = new Date()) {
   if (!sessionItem || sessionItem.recurring) return false;
+  if (sessionItem.occurrenceDate) {
+    const today = ymd(now);
+    if (today > sessionItem.occurrenceDate) return true;
+    if (today < sessionItem.occurrenceDate) return false;
+    const end = toMinutes(sessionItem.endTime);
+    return end !== null && now.getHours() * 60 + now.getMinutes() > end;
+  }
   const day = DAY_INDEX[now.getDay()];
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   const end = toMinutes(sessionItem.endTime);
@@ -31,6 +61,8 @@ function isNonRecurringExpired(sessionItem, now = new Date()) {
 module.exports = {
   DAY_INDEX,
   toMinutes,
+  ymd,
+  nextOccurrenceDate,
   hasScheduleOverlap,
   isNonRecurringExpired,
 };

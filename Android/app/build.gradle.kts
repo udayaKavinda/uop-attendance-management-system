@@ -17,7 +17,8 @@ val keystoreProperties = Properties().apply {
         keystorePropertiesFile.inputStream().use { load(it) }
     }
 }
-val hasReleaseSigning = keystoreProperties.getProperty("UOP_KEYSTORE_PATH") != null
+val releaseKeystorePath = keystoreProperties.getProperty("UOP_KEYSTORE_PATH")
+val hasReleaseSigning = !releaseKeystorePath.isNullOrBlank() && file(releaseKeystorePath).exists()
 
 /**
  * Google **Web** OAuth client id — Credential Manager passes it as `serverClientId`,
@@ -68,7 +69,7 @@ android {
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
-                storeFile = file(keystoreProperties.getProperty("UOP_KEYSTORE_PATH"))
+                storeFile = file(releaseKeystorePath!!)
                 storePassword = keystoreProperties.getProperty("UOP_KEYSTORE_PASSWORD")
                 keyAlias = keystoreProperties.getProperty("UOP_KEY_ALIAS")
                 keyPassword = keystoreProperties.getProperty("UOP_KEY_PASSWORD")

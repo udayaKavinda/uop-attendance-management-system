@@ -33,12 +33,36 @@ async function getAttendanceStatus(studentPk, courseId) {
     attended: Boolean(attendance),
     attendanceId: attendance?._id || null,
     attendedAt: attendance?.timestamp || null,
+    method: attendance?.method || null,
   };
+}
+
+async function assertAutomaticMethodAllowed(session, method) {
+  const verification = session.verification || 'bluetooth';
+  const supportsMethod = method === 'bluetooth'
+    ? verification === 'bluetooth' || verification === 'both'
+    : verification === 'geofence' || verification === 'both';
+  if (!supportsMethod) {
+    return {
+      ok: false,
+      status: 400,
+      error: method === 'bluetooth'
+        ? 'This session does not use Bluetooth verification.'
+        : 'This session does not use GPS verification.',
+    };
+  }
+  const settings = await settingsService.getSettings();
+  if (!settingsService.isVerificationAllowed(settings, verification)) {
+    return { ok: false, status: 403, error: 'This session verification policy is currently disabled.' };
+  }
+  return { ok: true };
 }
 
 async function getBluetoothTarget(courseId) {
   const resolved = await resolveActiveSessionForCourse(courseId);
   if (resolved.error) return { ok: false, status: 400, error: resolved.error };
+  const methodGate = await assertAutomaticMethodAllowed(resolved.session, 'bluetooth');
+  if (!methodGate.ok) return methodGate;
   if (!isBroadcastLive(resolved.session)) {
     return { ok: false, status: 400, error: 'Attendance is not open for this session right now.' };
   }
@@ -85,6 +109,8 @@ async function createAttendanceRecord({ studentPk, course, session, method }) {
 async function recordBluetoothAttendance(studentPk, courseId, token, canAdvertise = false) {
   const resolved = await resolveActiveSessionForCourse(courseId);
   if (resolved.error) return { ok: false, status: 400, error: resolved.error };
+  const methodGate = await assertAutomaticMethodAllowed(resolved.session, 'bluetooth');
+  if (!methodGate.ok) return methodGate;
   if (!isBroadcastLive(resolved.session)) {
     return { ok: false, status: 400, error: 'Attendance is not open for this session right now.' };
   }
@@ -113,9 +139,8 @@ async function recordGpsFixAttendance(studentPk, courseId, fix, canAdvertise = f
   if (resolved.error) return { ok: false, status: 400, error: resolved.error };
   const { session, course } = resolved;
 
-  if (session.verification !== 'geofence' && session.verification !== 'both') {
-    return { ok: false, status: 400, error: 'This session does not use GPS verification.' };
-  }
+  const methodGate = await assertAutomaticMethodAllowed(session, 'gps');
+  if (!methodGate.ok) return methodGate;
   const schedule = checkScheduleWindow(session);
   if (!schedule.ok) return { ok: false, status: 400, error: schedule.reason };
 
@@ -276,6 +301,12 @@ async function getSeedToken(studentPk, sessionId) {
   };
 }
 
+/** Relinquishes this student's own seeder lease after an on-device advertiser failure. */
+async function releaseSeedToken(studentPk, sessionId) {
+  await bluetoothCode.removeSeedToken(String(sessionId), String(studentPk));
+  return { ok: true };
+}
+
 module.exports = {
   getAttendanceStatus,
   getBluetoothTarget,
@@ -284,6 +315,7 @@ module.exports = {
   recordManualCodeAttendance,
   recordAttendance,
   getSeedToken,
+  releaseSeedToken,
   getSessionAttendance,
   getAttendanceMatrix,
 };

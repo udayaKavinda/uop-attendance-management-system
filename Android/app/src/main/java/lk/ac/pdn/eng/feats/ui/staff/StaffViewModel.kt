@@ -284,23 +284,19 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         viewModelScope.launch {
-            val req = CreateSessionReq(day.uppercase(), start, end, recurring, verification, buildings)
+            val req = CreateSessionReq(
+                lectureDay = day.uppercase(),
+                startTime = start,
+                endTime = end,
+                recurring = recurring,
+                verification = verification,
+                buildings = buildings,
+                manualCodeEnabled = manualCodeEnabled,
+                manualCodeRotationMode = manualCodeRotationMode,
+                manualCodeRotationSeconds = manualCodeRotationSeconds,
+            )
             when (val res = repo.createSession(courseId, req)) {
                 is ApiResult.Success -> {
-                    val sessionId = res.data?.id
-                    // Manual code isn't part of session creation server-side (it's a
-                    // separate config surface, same as broadcast) — apply it as an
-                    // immediate follow-up so the whole form submits as one action.
-                    if (manualCodeEnabled && sessionId != null) {
-                        repo.setManualCode(
-                            sessionId,
-                            ManualCodeConfigReq(
-                                enabled = true,
-                                rotationMode = manualCodeRotationMode,
-                                rotationSeconds = manualCodeRotationSeconds,
-                            ),
-                        )
-                    }
                     setFlash("Session created.")
                     refresh()
                 }
@@ -338,6 +334,11 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
      * service. If the radio later fails, the service rolls the server back.
      */
     fun startBroadcast(sessionId: String) {
+        val session = _state.value.sessions.firstOrNull { it.id == sessionId }
+        if (session?.verification == "geofence") {
+            setError("This is a GPS-only session; Bluetooth broadcast is not available.")
+            return
+        }
         if (!_state.value.isRunning(sessionId)) {
             setError("Broadcast can only run while this session is in its scheduled time window.")
             return

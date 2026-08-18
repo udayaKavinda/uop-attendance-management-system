@@ -93,6 +93,17 @@ describe('bluetoothCode', () => {
       expect(await bluetoothCode.verifyToken('session1', 'seedertoken1234')).toBe(true);
     });
 
+    it('rejects an expired seeder token even before the cleanup sweep removes it', async () => {
+      mockModel.find.mockResolvedValue([{
+        role: 'seed',
+        token: 'expiredseed1234',
+        prevToken: null,
+        generatedAt: Date.now() - 1000,
+        leaseUntil: Date.now() - 1,
+      }]);
+      expect(await bluetoothCode.verifyToken('session1', 'expiredseed1234')).toBe(false);
+    });
+
     it('returns false for wrong token', async () => {
       mockModel.find.mockResolvedValue([
         { token: 'validtoken12345', prevToken: null, generatedAt: Date.now() },

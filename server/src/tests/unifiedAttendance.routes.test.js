@@ -27,6 +27,7 @@ jest.mock('../models/BleToken', () => ({
     delete mockBleTokenStore[sessionId];
     return Promise.resolve({ deletedCount: 1 });
   }),
+  deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
   countDocuments: jest.fn(() => Promise.resolve(0)),
 }));
 
@@ -45,9 +46,11 @@ jest.mock('../models/Settings', () => ({
 
 let mockGeofenceStore = [];
 jest.mock('../models/Geofence', () => ({
-  find: jest.fn(({ _id }) => {
+  find: jest.fn(({ _id, active }) => {
     const ids = _id?.$in?.map(String) || [];
-    return Promise.resolve(mockGeofenceStore.filter((g) => ids.includes(String(g._id)) && !g.deleted));
+    return Promise.resolve(mockGeofenceStore.filter(
+      (g) => ids.includes(String(g._id)) && !g.deleted && (active !== true || g.active === true),
+    ));
   }),
 }));
 
@@ -138,6 +141,7 @@ describe('POST /api/attendance — GPS fix path', () => {
     mockGeofenceStore.push({
       _id: geofenceId,
       polygon: [[79.8000, 6.9000], [79.8010, 6.9000], [79.8010, 6.9010], [79.8000, 6.9010]],
+      active: true,
       deleted: false,
     });
     const session = makeSession({ verification: 'geofence', buildings: [geofenceId] });
@@ -191,6 +195,46 @@ describe('POST /api/attendance — GPS fix path', () => {
       .send({ courseId: course._id, fix: { lat: 6.9, lng: 79.8, accuracy: 5 } });
     expect(res.status).toBe(400);
   });
+
+  test('400 when a referenced building is inactive', async () => {
+    const student = makePerson();
+    const geofenceId = makeId();
+    mockGeofenceStore.push({
+      _id: geofenceId,
+      polygon: [[79.8, 6.9], [79.801, 6.9], [79.801, 6.901]],
+      active: false,
+      deleted: false,
+    });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([makeSession({ verification: 'geofence', buildings: [geofenceId] })]);
+    const res = await request(app)
+      .post('/api/attendance')
+      .set(headers(student))
+      .send({ courseId: course._id, fix: { lat: 6.9, lng: 79.8, accuracy: 5 } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/active building/i);
+  });
+});
+
+describe('POST /api/attendance — verification policy enforcement', () => {
+  test('rejects a Bluetooth token for a geofence-only session', async () => {
+    const student = makePerson();
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([makeSession({
+      verification: 'geofence',
+      buildings: [makeId()],
+      broadcasting: true,
+      lastBroadcastSeenAt: new Date(),
+    })]);
+    const res = await request(app)
+      .post('/api/attendance')
+      .set(headers(student))
+      .send({ courseId: course._id, token: 'a'.repeat(16) });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/does not use Bluetooth/i);
+  });
 });
 
 describe('GET /api/attendance/seed-token', () => {
@@ -213,5 +257,23 @@ describe('GET /api/attendance/seed-token', () => {
     LectureSession.findOne.mockResolvedValue(session);
     const res = await request(app).get(`/api/attendance/seed-token?sessionId=${session._id}`).set(authHeader(student));
     expect(res.status).toBe(400);
+  });
+});
+
+describe('DELETE /api/attendance/seed-token', () => {
+  test('lets a student relinquish only their own seeder lease', async () => {
+    const student = makePerson();
+    const sessionId = makeId();
+    const res = await request(app)
+      .delete(`/api/attendance/seed-token?sessionId=${sessionId}`)
+      .set(headers(student));
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const BleToken = require('../models/BleToken');
+    expect(BleToken.deleteOne).toHaveBeenCalledWith({
+      sessionId,
+      owner: String(student._id),
+      role: 'seed',
+    });
   });
 });

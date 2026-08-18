@@ -106,6 +106,7 @@ data class SessionDto(
     val startTime: String? = null,
     val endTime: String? = null,
     val recurring: Boolean? = null,
+    val occurrenceDate: String? = null,
     val broadcasting: Boolean? = null,
     val bluetoothDeviceName: String? = null,
     val active: Boolean? = null,
@@ -120,6 +121,7 @@ data class StaffSessionDto(
     val startTime: String? = null,
     val endTime: String? = null,
     val recurring: Boolean? = null,
+    val occurrenceDate: String? = null,
     val broadcasting: Boolean? = null,
     val bluetoothDeviceName: String? = null,
     val active: Boolean? = null,
@@ -127,6 +129,8 @@ data class StaffSessionDto(
     /** "bluetooth" | "geofence" | "both". */
     val verification: String? = null,
     val buildings: List<String>? = null,
+    val manualCodeRotationMode: String? = null,
+    val manualCodeRotationSeconds: Int? = null,
     /** Set at creation (Create Session tab); the session card only shows live
      *  controls (reveal/pause/regenerate) when this is true — no enable switch there. */
     val manualCodeEnabled: Boolean? = null,
@@ -147,6 +151,9 @@ data class CreateSessionReq(
     val verification: String? = null,
     /** Geofence ids; required by the server when verification includes geofence. */
     val buildings: List<String>? = null,
+    val manualCodeEnabled: Boolean? = null,
+    val manualCodeRotationMode: String? = null,
+    val manualCodeRotationSeconds: Int? = null,
 )
 
 /** Body of PATCH /api/admin/sessions/:id/broadcast. */
@@ -260,6 +267,7 @@ data class AttendanceStatusDto(
     val attended: Boolean? = null,
     val attendanceId: String? = null,
     val attendedAt: String? = null,
+    val method: String? = null,
 )
 
 data class BluetoothTargetDto(val deviceName: String? = null)
@@ -354,6 +362,7 @@ data class MatrixSessionDto(
 data class MatrixRowDto(
     val displayId: String? = null,
     val email: String? = null,
+    /** Session id -> present. Missing/false means absent. */
     val attendance: Map<String, Boolean>? = null,
 )
 

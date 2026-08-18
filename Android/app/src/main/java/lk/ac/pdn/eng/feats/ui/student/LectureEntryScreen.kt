@@ -106,55 +106,67 @@ fun LectureEntryScreen(
         if (blocker == null) vm.startScan() else vm.reportScanBlocked(blocker)
     }
 
-    // Permission request covers Bluetooth alone ("bluetooth" mode) or Bluetooth +
-    // location together ("both" mode, so the GPS fallback never needs a second
-    // mid-flow prompt). "geofence" mode uses its own launcher below instead.
-    val blePermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
-    ) { result ->
-        if (result.values.all { it }) {
+    fun proceedForBoth() {
+        // "both" is an OR policy: location must still work when Bluetooth is
+        // unavailable/off/denied, and Bluetooth must work when location is denied.
+        if (LocationPermissions.hasFineLocation(context)) {
+            vm.startScan()
+        } else if (BlePermissions.hasScan(context)) {
             proceedAfterBlePermissions {
                 enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             }
-        } else if (result[android.Manifest.permission.ACCESS_FINE_LOCATION] == false && BlePermissions.hasScan(context)) {
-            vm.onLocationPermissionDenied()
         } else {
-            vm.onPermissionDenied()
+            vm.reportScanBlocked("Allow Bluetooth or precise location to verify this session.")
         }
     }
 
-    val locationPermissionLauncher = rememberLauncherForActivityResult(
+    // Advertising permission is requested with the primary method permissions so
+    // a validated student can participate in peer seeding. Its denial never blocks
+    // attendance; canAdvertise is reported false to the server instead.
+    val blePermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) {
-        if (LocationPermissions.hasFineLocation(context)) vm.startScan() else vm.onLocationPermissionDenied()
+    ) { _ ->
+        when (state.verification) {
+            "geofence" -> if (LocationPermissions.hasFineLocation(context)) vm.startScan() else vm.onLocationPermissionDenied()
+            "both" -> proceedForBoth()
+            else -> if (BlePermissions.hasScan(context)) {
+                proceedAfterBlePermissions {
+                    enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                }
+            } else vm.onPermissionDenied()
+        }
     }
 
     fun onScanClick() {
         when (state.verification) {
             "geofence" -> {
-                if (LocationPermissions.hasFineLocation(context)) {
+                val needed = (LocationPermissions.permissions() + BlePermissions.advertisePermissions()).distinct().toTypedArray()
+                if (BlePermissions.hasAll(context, needed)) {
                     vm.startScan()
                 } else {
-                    locationPermissionLauncher.launch(LocationPermissions.permissions())
+                    blePermissionLauncher.launch(needed)
                 }
             }
             "both" -> {
-                val needed = BlePermissions.scanPermissions() + LocationPermissions.permissions()
+                val needed = (
+                    BlePermissions.scanPermissions()
+                        + LocationPermissions.permissions()
+                        + BlePermissions.advertisePermissions()
+                    ).distinct().toTypedArray()
+                if (BlePermissions.hasAll(context, needed)) {
+                    proceedForBoth()
+                } else {
+                    blePermissionLauncher.launch(needed)
+                }
+            }
+            else -> {
+                val needed = (BlePermissions.scanPermissions() + BlePermissions.advertisePermissions()).distinct().toTypedArray()
                 if (BlePermissions.hasAll(context, needed)) {
                     proceedAfterBlePermissions {
                         enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
                     }
                 } else {
                     blePermissionLauncher.launch(needed)
-                }
-            }
-            else -> {
-                if (BlePermissions.hasScan(context)) {
-                    proceedAfterBlePermissions {
-                        enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-                    }
-                } else {
-                    blePermissionLauncher.launch(BlePermissions.scanPermissions())
                 }
             }
         }
@@ -282,7 +294,7 @@ fun LectureEntryScreen(
                         // unaffected either way.
                         if (selected?.manualCodeEnabled == true) {
                             Spacer(Modifier.height(18.dp))
-                            ManualCodeEntry(busy = state.busy, onSubmit = vm::submitManualCode)
+                            ManualCodeEntry(onSubmit = vm::submitManualCode)
                         }
                     }
                 }
@@ -295,7 +307,7 @@ fun LectureEntryScreen(
 
 /** Fallback for a student whose device can't complete the automatic BLE scan. */
 @Composable
-private fun ManualCodeEntry(busy: Boolean, onSubmit: (String) -> Unit) {
+private fun ManualCodeEntry(onSubmit: (String) -> Unit) {
     var code by remember { mutableStateOf("") }
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -314,15 +326,13 @@ private fun ManualCodeEntry(busy: Boolean, onSubmit: (String) -> Unit) {
             onValueChange = { new -> if (new.length <= 8 && new.all(Char::isDigit)) code = new },
             label = "Attendance code",
             placeholder = "8-digit code from your lecturer",
-            enabled = !busy,
             keyboardType = KeyboardType.Number,
         )
         Spacer(Modifier.height(10.dp))
         PrimaryButton(
             text = "Submit code",
             onClick = { onSubmit(code) },
-            enabled = !busy && code.length == 8,
-            loading = busy && code.length == 8,
+            enabled = code.length == 8,
         )
     }
 }

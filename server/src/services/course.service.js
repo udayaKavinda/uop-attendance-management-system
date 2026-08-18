@@ -1,6 +1,7 @@
 const Course = require('../models/Course');
 const LectureSession = require('../models/LectureSession');
 const Attendance = require('../models/Attendance');
+const ManualCode = require('../models/ManualCode');
 const bluetoothCode = require('./bluetoothCode.service');
 const { invalidateActiveSessionCache } = require('./session.service');
 const { validateLecturerIds } = require('../validators/course.validator');
@@ -45,6 +46,7 @@ async function createCourse(auth, { name, code, batch, lecturerIdsBody }) {
 async function deleteCourse(course) {
   const sessionIds = await LectureSession.find({ course: course._id }).distinct('_id');
   await Attendance.deleteMany({ course: course._id });
+  await ManualCode.deleteMany({ session: { $in: sessionIds } });
   await LectureSession.deleteMany({ course: course._id });
   await Course.deleteOne({ _id: course._id });
   await Promise.all(sessionIds.map((id) => bluetoothCode.removeToken(String(id))));
@@ -53,9 +55,15 @@ async function deleteCourse(course) {
 }
 
 async function disableCourse(course) {
+  const sessionIds = await LectureSession.find({ course: course._id }).distinct('_id');
   course.active = false;
   await course.save();
-  await LectureSession.updateMany({ course: course._id }, { $set: { active: false } });
+  await LectureSession.updateMany(
+    { course: course._id },
+    { $set: { active: false, broadcasting: false, lastBroadcastSeenAt: null } },
+  );
+  await ManualCode.deleteMany({ session: { $in: sessionIds } });
+  await Promise.all(sessionIds.map((id) => bluetoothCode.removeToken(String(id))));
   invalidateActiveSessionCache(course._id);
   await course.populate('lecturers', 'name email phone');
   return { ok: true, course };

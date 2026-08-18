@@ -169,6 +169,9 @@ class AppRepository(private val api: ApiService) {
     suspend fun seedToken(sessionId: String): ApiResult<SeedTokenDto> =
         apiCall { api.seedToken(sessionId) }
 
+    suspend fun releaseSeedToken(sessionId: String): ApiResult<Unit> =
+        apiCall { api.releaseSeedToken(sessionId); Unit }
+
     // ── Lecturers (admin) ───────────────────────────────────────────────────────────────
     suspend fun lecturers(query: String? = null): ApiResult<List<LecturerDto>> =
         apiCall { api.lecturers(query?.takeIf { it.isNotBlank() }).items ?: emptyList() }

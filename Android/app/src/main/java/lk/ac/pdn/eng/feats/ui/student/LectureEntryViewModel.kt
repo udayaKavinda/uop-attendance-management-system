@@ -26,6 +26,8 @@ import lk.ac.pdn.eng.feats.location.GpsLocationSource
 import lk.ac.pdn.eng.feats.location.LocationPermissions
 import lk.ac.pdn.eng.feats.location.LocationUnavailableException
 import lk.ac.pdn.eng.feats.ui.container
+import lk.ac.pdn.eng.feats.ui.AutomaticPath
+import lk.ac.pdn.eng.feats.ui.VerificationPolicy
 
 enum class ScanPhase(val label: String) {
     Idle("📡  Scan for Bluetooth Attendance"),
@@ -64,6 +66,7 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<LectureEntryState> = _state.asStateFlow()
 
     private var scanJob: Job? = null
+    private var seedingJob: Job? = null
 
     init {
         pollRunningCourses()
@@ -147,22 +150,26 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Bluetooth path (unchanged behaviour/timeout from the original BLE-only flow) ──
 
-    private suspend fun runBleFlow(courseId: String) {
+    private suspend fun runBleFlow(courseId: String, reportFailure: Boolean = true) {
         when (val target = repo.bluetoothTarget(courseId)) {
             is ApiResult.Error -> {
-                _state.value = _state.value.copy(phase = ScanPhase.Idle, error = target.message)
+                if (reportFailure) {
+                    _state.value = _state.value.copy(phase = ScanPhase.Idle, error = target.message)
+                }
                 return
             }
             is ApiResult.Success -> Unit
         }
         val token = scanForToken(30_000) ?: run {
-            _state.value = _state.value.copy(
-                phase = ScanPhase.Idle,
-                error = "No Bluetooth signal received in 30 s. Make sure the lecturer is broadcasting and you are near the room.",
-            )
+            if (reportFailure) {
+                _state.value = _state.value.copy(
+                    phase = ScanPhase.Idle,
+                    error = "No Bluetooth signal received in 30 s. Make sure the lecturer is broadcasting and you are near the room.",
+                )
+            }
             return
         }
-        submitToken(courseId, token)
+        if (!_state.value.recorded) submitToken(courseId, token, reportFailure)
     }
 
     private suspend fun scanForToken(timeoutMs: Long): String? {
@@ -175,18 +182,22 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun submitToken(courseId: String, token: String) {
+    private suspend fun submitToken(courseId: String, token: String, reportFailure: Boolean = true) {
         _state.value = _state.value.copy(phase = ScanPhase.Submitting)
-        val canAdvertise = seedAdvertiser.isSupported()
+        val canAdvertise = canParticipateInSeeding()
         when (val res = repo.recordAttendance(courseId, token = token, canAdvertise = canAdvertise)) {
             is ApiResult.Success -> {
                 if (res.data.status == "accepted") {
                     finishAccepted(res.data.seeding)
                 } else {
-                    _state.value = _state.value.copy(phase = ScanPhase.Idle, error = "Verification failed. Move closer and try again.")
+                    if (reportFailure) {
+                        _state.value = _state.value.copy(phase = ScanPhase.Idle, error = "Verification failed. Move closer and try again.")
+                    }
                 }
             }
-            is ApiResult.Error -> _state.value = _state.value.copy(phase = ScanPhase.Idle, error = res.message)
+            is ApiResult.Error -> if (reportFailure) {
+                _state.value = _state.value.copy(phase = ScanPhase.Idle, error = res.message)
+            }
         }
     }
 
@@ -197,19 +208,25 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
      * window elapses. `timeoutMs` defaults to the full 90s window; [runBothFlow]
      * passes a shorter remainder when GPS is the fallback after a Bluetooth miss.
      */
-    private suspend fun runGpsFlow(courseId: String, timeoutMs: Long = 90_000) {
+    private suspend fun runGpsFlow(
+        courseId: String,
+        timeoutMs: Long = 90_000,
+        reportFailure: Boolean = true,
+    ) {
         if (!LocationPermissions.hasFineLocation(getApplication())) {
-            _state.value = _state.value.copy(phase = ScanPhase.Idle, error = LocationPermissions.permissionDeniedMessage())
+            if (reportFailure) {
+                _state.value = _state.value.copy(phase = ScanPhase.Idle, error = LocationPermissions.permissionDeniedMessage())
+            }
             return
         }
         _state.value = _state.value.copy(phase = ScanPhase.WatchingGps)
-        val canAdvertise = seedAdvertiser.isSupported()
+        val canAdvertise = canParticipateInSeeding()
         var done = false
         var errorMessage: String? = null
 
         try {
             withTimeoutOrNull(timeoutMs) {
-                gpsSource.fixFlow().takeWhile { !done }.collect { fix ->
+                gpsSource.fixFlow().takeWhile { !done && !_state.value.recorded }.collect { fix ->
                     _state.value = _state.value.copy(phase = ScanPhase.Submitting)
                     val body = GpsFixDto(fix.lat, fix.lng, fix.accuracy)
                     when (val res = repo.recordAttendance(courseId, fix = body, canAdvertise = canAdvertise)) {
@@ -229,13 +246,13 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         } catch (e: LocationUnavailableException) {
-            _state.value = _state.value.copy(phase = ScanPhase.Idle, error = e.message)
+            if (reportFailure) _state.value = _state.value.copy(phase = ScanPhase.Idle, error = e.message)
             return
         }
 
-        if (errorMessage != null) {
+        if (errorMessage != null && reportFailure) {
             _state.value = _state.value.copy(phase = ScanPhase.Idle, error = errorMessage)
-        } else if (!_state.value.recorded) {
+        } else if (!_state.value.recorded && reportFailure) {
             _state.value = _state.value.copy(
                 phase = ScanPhase.Idle,
                 error = "Could not verify your location in time. Move closer to the building and try again.",
@@ -245,40 +262,57 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Combined path ────────────────────────────────────────────────────────────────
 
-    /**
-     * Practical simplification of the design's "scan BLE and stream GPS
-     * simultaneously": try Bluetooth first for a short window (fast when the
-     * student is already in range), then fall back to GPS for the remainder of
-     * the 90s budget. Same OR-acceptance outcome as running both concurrently,
-     * without the added coroutine/radio-cleanup complexity of true concurrency.
-     */
-    private suspend fun runBothFlow(courseId: String) {
-        val bleWindowMs = 20_000L
-        val target = repo.bluetoothTarget(courseId)
-        val token = if (target is ApiResult.Success) scanForToken(bleWindowMs) else null
-        if (token != null) {
-            submitToken(courseId, token)
-            return
+    /** Runs every available radio concurrently; either successful method wins. */
+    private suspend fun runBothFlow(courseId: String) = coroutineScope {
+        val app = getApplication<Application>()
+        val canBle = BlePermissions.scanBlocker(app) == null
+        val canGps = LocationPermissions.hasFineLocation(app)
+        val paths = VerificationPolicy.availablePaths("both", canBle, canGps)
+        if (paths.isEmpty()) {
+            _state.value = _state.value.copy(
+                phase = ScanPhase.Idle,
+                error = "Allow Bluetooth or precise location to verify this session.",
+            )
+            return@coroutineScope
         }
+
+        val jobs = buildList {
+            if (AutomaticPath.Bluetooth in paths) add(launch { runBleFlow(courseId, reportFailure = false) })
+            if (AutomaticPath.Gps in paths) add(launch { runGpsFlow(courseId, timeoutMs = 90_000, reportFailure = false) })
+        }
+        while (!_state.value.recorded && jobs.any { it.isActive }) delay(100)
+        if (_state.value.recorded) jobs.filter { it.isActive }.forEach { it.cancel() }
+        jobs.forEach { it.join() }
         if (!_state.value.recorded) {
-            runGpsFlow(courseId, timeoutMs = 70_000)
+            _state.value = _state.value.copy(
+                phase = ScanPhase.Idle,
+                error = "Neither Bluetooth nor GPS could verify attendance. Move closer and try again.",
+            )
         }
     }
 
     // ── Shared: acceptance + peer-seeding window ────────────────────────────────────
 
     /**
-     * Runs the seeding/decoy window (if any) before marking the record as done.
+     * Starts the seeding/decoy window (if any) after marking attendance accepted.
      * Seeder and decoy windows run for the identical `durationMs` with identical
      * UI (Seeding phase) — a student can't tell which one they got.
      */
-    private suspend fun finishAccepted(seeding: SeedingDto?) {
-        if (seeding?.role == "seed" || seeding?.role == "decoy") {
-            _state.value = _state.value.copy(phase = ScanPhase.Seeding)
-            runSeedingWindow(seeding)
-        }
+    private fun finishAccepted(seeding: SeedingDto?) {
+        // Mark accepted immediately so a concurrent verification path stops submitting.
         _state.value = _state.value.copy(phase = ScanPhase.Idle, recorded = true, error = null)
+        if (seeding?.role == "seed" || seeding?.role == "decoy") {
+            seedingJob?.cancel()
+            seedingJob = viewModelScope.launch {
+                _state.value = _state.value.copy(phase = ScanPhase.Seeding)
+                runSeedingWindow(seeding)
+                if (_state.value.recorded) _state.value = _state.value.copy(phase = ScanPhase.Idle)
+            }
+        }
     }
+
+    private fun canParticipateInSeeding(): Boolean =
+        BlePermissions.hasAdvertise(getApplication()) && seedAdvertiser.isSupported()
 
     private suspend fun runSeedingWindow(seeding: SeedingDto) = coroutineScope {
         val durationMs = seeding.durationMs ?: 0L
@@ -288,12 +322,21 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
         }
         val sessionId = seeding.sessionId
         val endAt = System.currentTimeMillis() + durationMs
+        var advertiseFailed = false
+        fun advertise(token: String) {
+            seedAdvertiser.advertise(token) { advertiseFailed = true }
+        }
         try {
-            seedAdvertiser.advertise(seeding.token) { /* best-effort; a mid-window failure just stops re-advertising */ }
+            advertise(seeding.token)
             while (System.currentTimeMillis() < endAt && isActive) {
                 delay(5_000)
+                if (advertiseFailed) {
+                    repo.releaseSeedToken(sessionId)
+                    delay((endAt - System.currentTimeMillis()).coerceAtLeast(0))
+                    return@coroutineScope
+                }
                 when (val res = repo.seedToken(sessionId)) {
-                    is ApiResult.Success -> res.data.token?.let { seedAdvertiser.advertise(it) { } }
+                    is ApiResult.Success -> res.data.token?.let(::advertise)
                     is ApiResult.Error -> Unit // lease may have ended server-side; keep waiting out the window regardless
                 }
             }
@@ -304,8 +347,8 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Fallback path: submit the lecturer-announced 8-digit code instead of waiting on
-     * the BLE scan. Independent of [startScan] — the automatic scan (if any is running)
-     * is left alone; this is a separate, explicit student action.
+     * the automatic attempt. If one is running it is cancelled so the code is handled
+     * immediately as a separate, explicit student action.
      */
     fun submitManualCode(code: String) {
         val courseId = _state.value.selectedCourseId
@@ -318,7 +361,8 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(error = "Enter the 8-digit attendance code.")
             return
         }
-        if (_state.value.busy) return
+        // The manual fallback is always available: stop an in-progress automatic
+        // attempt and submit the code immediately.
         scanJob?.cancel()
         scanJob = viewModelScope.launch {
             _state.value = _state.value.copy(phase = ScanPhase.Submitting, error = null)
@@ -358,5 +402,7 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         super.onCleared()
         scanJob?.cancel()
+        seedingJob?.cancel()
+        seedAdvertiser.stop()
     }
 }

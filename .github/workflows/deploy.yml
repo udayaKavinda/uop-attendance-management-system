@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - main
-      - feature/gps-pin-rotation
-      - feature/bluetooth
-      - Android-app+refined-sever
   workflow_dispatch:
 
 concurrency:
@@ -14,17 +11,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm --prefix server ci --no-audit --no-fund
+      - run: npm --prefix server test -- --runInBand
+
+  verify-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - working-directory: Android
+        run: chmod +x gradlew && ./gradlew testDebugUnitTest lintDebug assembleDebug
+
   deploy:
+    needs: [verify-server, verify-android]
     runs-on: [self-hosted, linux, x64, attendance-prod]
     timeout-minutes: 20
     env:
       APP_DIR: /opt/attendance/app
       NODE_ENV: production
-      DEPLOY_BRANCH: ${{ github.ref_name }}
     steps:
       - name: Show context
         run: |
-          echo "branch=$DEPLOY_BRANCH"
+          echo "branch=main"
           echo "runner=$(hostname)"
           echo "user=$(id -un)"
           echo "node=$(/usr/bin/node -v)"
@@ -34,8 +57,9 @@ jobs:
       - name: Sync code into APP_DIR
         run: |
           cd "$APP_DIR"
+          echo "PREVIOUS_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           git fetch --all --prune
-          git reset --hard origin/$DEPLOY_BRANCH
+          git reset --hard origin/main
           git clean -fdx -e .env
 
       - name: Server syntax check
@@ -55,10 +79,14 @@ jobs:
         run: |
           for i in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:5000/api/healthz > /dev/null; then
-              echo "healthy on branch: $DEPLOY_BRANCH"; exit 0
+              echo "healthy on main"; exit 0
             fi
             sleep 2
           done
           echo "health check failed"
           sudo systemctl status attendance --no-pager | head -n 30
+          cd "$APP_DIR"
+          git reset --hard "$PREVIOUS_SHA"
+          PATH=/usr/bin:$PATH /usr/bin/npm --prefix server ci --omit=dev --no-audit --no-fund
+          sudo /bin/systemctl restart attendance
           exit 1

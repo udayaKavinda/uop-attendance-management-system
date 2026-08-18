@@ -46,6 +46,10 @@ describe('isWithinScheduleWindow', () => {
   it('returns false for null input', () => {
     expect(isWithinScheduleWindow(null, NOW)).toBe(false);
   });
+  it('requires a one-time session occurrence date to match today', () => {
+    expect(isWithinScheduleWindow(session({ recurring: false, occurrenceDate: '2026-06-08' }), NOW)).toBe(true);
+    expect(isWithinScheduleWindow(session({ recurring: false, occurrenceDate: '2026-06-01' }), NOW)).toBe(false);
+  });
 });
 
 describe('invalidateActiveSessionCache', () => {

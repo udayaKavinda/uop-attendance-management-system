@@ -18,8 +18,10 @@ jest.mock('../models/Geofence', () => {
   const actualMongoose = jest.requireActual('mongoose');
   return {
     // Mongoose's find() returns a chainable Query; only .sort() is used by geofence.service.
-    find: jest.fn(() => ({
-      sort: jest.fn(() => Promise.resolve(mockStore.filter((g) => !g.deleted))),
+    find: jest.fn((filter = {}) => ({
+      sort: jest.fn(() => Promise.resolve(mockStore.filter(
+        (g) => !g.deleted && (filter.active !== true || g.active === true),
+      ))),
     })),
     findOne: jest.fn(({ _id, deleted }) => Promise.resolve(
       mockStore.find((g) => String(g._id) === String(_id) && g.deleted === deleted) || null,
@@ -132,5 +134,20 @@ describe('GET/POST/PATCH/DELETE /api/admin/geofences', () => {
       .set(headers(admin))
       .send({});
     expect(res.status).toBe(400);
+  });
+
+  test('inactive buildings are excluded from the selectable list', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const create = await request(app)
+      .post('/api/admin/geofences')
+      .set(headers(admin))
+      .send({ name: 'Closed hall', polygon: [[0, 0], [1, 0], [1, 1]] });
+    await request(app)
+      .patch(`/api/admin/geofences/${create.body.geofence._id}`)
+      .set(headers(admin))
+      .send({ active: false });
+
+    const list = await request(app).get('/api/admin/geofences').set(authHeader(admin));
+    expect(list.body.items).toEqual([]);
   });
 });

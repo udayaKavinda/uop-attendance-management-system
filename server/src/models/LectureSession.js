@@ -10,6 +10,8 @@ const lectureSessionSchema = new mongoose.Schema({
   startTime: { type: String, required: true }, // HH:mm
   endTime: { type: String, required: true }, // HH:mm
   recurring: { type: Boolean, default: true },
+  /** Local YYYY-MM-DD occurrence for one-time sessions; null for weekly sessions. */
+  occurrenceDate: { type: String, default: null, index: true },
   /**
    * True while a lecturer device is actively broadcasting the rotating BLE token.
    * Single switch replacing the old bluetoothEnabled + attendancePaused pair:

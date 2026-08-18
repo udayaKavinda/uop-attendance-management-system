@@ -1,11 +1,11 @@
 const Geofence = require('../models/Geofence');
 
 async function listActive() {
-  return Geofence.find({ deleted: false }).sort({ name: 1 });
+  return Geofence.find({ deleted: false, active: true }).sort({ name: 1 });
 }
 
 async function findByIds(ids) {
-  return Geofence.find({ _id: { $in: ids }, deleted: false });
+  return Geofence.find({ _id: { $in: ids }, deleted: false, active: true });
 }
 
 async function createGeofence({ name, polygon }) {

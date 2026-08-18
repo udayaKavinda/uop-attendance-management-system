@@ -119,7 +119,9 @@ fun AttendanceMatrixScreen(
                                                 Box(
                                                     Modifier.background(Palette.SuccessBg2, RoundedCornerShape(999.dp))
                                                         .padding(horizontal = 10.dp, vertical = 3.dp),
-                                                ) { Text("P", color = Palette.SuccessText, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp) }
+                                                ) {
+                                                    Text("P", color = Palette.SuccessText, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                                                }
                                             } else {
                                                 Text("—", color = Palette.Muted, fontWeight = FontWeight.SemiBold)
                                             }

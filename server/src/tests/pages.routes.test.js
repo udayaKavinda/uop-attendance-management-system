@@ -22,6 +22,8 @@ describe('public pages', () => {
     expect(res.headers['content-type']).toMatch(/text\/html/);
     expect(res.text).toContain('udayakavindadev@gmail.com');
     expect(res.text).toContain('/delete');
+    expect(res.text).toContain('GPS geofence');
+    expect(res.text).toContain('centroid');
   });
 
   test('GET /delete returns 200 HTML with contact + privacy link', async () => {

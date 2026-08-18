@@ -63,6 +63,10 @@ interface ApiService {
     @GET("api/attendance/seed-token")
     suspend fun seedToken(@Query("sessionId") sessionId: String): SeedTokenDto
 
+    /** Relinquish a real seeder lease when the local radio cannot advertise. */
+    @DELETE("api/attendance/seed-token")
+    suspend fun releaseSeedToken(@Query("sessionId") sessionId: String): SimpleSuccess
+
     // ── Admin / staff: courses ───────────────────────────────────────────────────────
     @GET("api/admin/courses")
     suspend fun adminCourses(): CoursesRes

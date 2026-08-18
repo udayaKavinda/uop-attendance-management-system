@@ -1,13 +1,13 @@
 # Production environment
 
-Production runs Express from `/opt/attendance/app/server`, with MongoDB locally.
-Nginx terminates TLS and proxies all public routes to Node on `127.0.0.1:5000`.
-There is no React build or frontend process.
+Production runs Express from `/opt/attendance/app/server`. Nginx terminates TLS and
+proxies the public host to Node on `127.0.0.1:5000`; there is no SPA/static frontend.
 
-## Environment
+## Environment variables
 
 ```dotenv
 NODE_ENV=production
+TZ=Asia/Colombo
 PORT=5000
 MONGO_URI=mongodb://127.0.0.1:27017/attendance
 APP_BASE_URL=https://attendance.eng.pdn.ac.lk
@@ -16,23 +16,54 @@ SESSION_SECRET=replace-with-a-long-random-value
 BLE_SECRET=replace-with-a-long-random-value
 GOOGLE_CLIENT_ID=replace-me
 GOOGLE_CLIENT_SECRET=replace-me
+SESSION_EXPIRE_JOB_MS=60000
 ```
 
-`APP_BASE_URL` builds the OAuth callback. `CORS_ORIGINS` is a comma-separated
-allowlist for browser/Capacitor origins. Native clients normally omit `Origin`.
+- `SESSION_SECRET` and `BLE_SECRET` are mandatory in production.
+- `TZ` controls every weekly window and attendance date. The server safely defaults to
+  `Asia/Colombo`, but production should set it explicitly.
+- `APP_BASE_URL` builds the Google OAuth callback.
+- `CORS_ORIGINS` is a comma-separated browser-origin allowlist. Native Android requests
+  normally have no `Origin` header.
 
-## Install and verify
+Keep `.env`, Android `local.properties`, `keystore.properties`, and signing keystores out
+of Git.
+
+## Install and verify manually
 
 ```bash
 cd /opt/attendance/app
-npm --prefix server ci --omit=dev
-node --check server/src/server.js
+npm --prefix server ci
+npm --prefix server test -- --runInBand
+npm --prefix server prune --omit=dev
 sudo systemctl restart attendance
 curl -fsS http://127.0.0.1:5000/api/healthz
 ```
 
-For tests, use `npm --prefix server ci` and `npm --prefix server test`.
+The systemd unit should use `WorkingDirectory=/opt/attendance/app`, load the root `.env`,
+and execute `/usr/bin/node server/src/server.js`.
 
-The systemd unit should use `WorkingDirectory=/opt/attendance/app`, load the
-root `.env`, and run `/usr/bin/node server/src/server.js`. Nginx should proxy
-the entire public host to port 5000 without a static root or SPA fallback.
+## Automated production deployment
+
+`.github/workflows/deploy.yml` deploys **main only**. Before touching production it runs:
+
+1. Server dependency installation and the full Jest suite.
+2. Android unit tests, lint, and debug assembly on JDK 17.
+3. Production sync/install/restart and local health check.
+4. Automatic reset to the previous Git revision and service restart if health fails.
+
+Feature branches cannot deploy directly to the production runner.
+
+## Android signing
+
+Debug builds need no keystore. Signed releases require `Android/keystore.properties`:
+
+```properties
+UOP_KEYSTORE_PATH=C:/absolute/path/to/uop-attendance-upload.jks
+UOP_KEYSTORE_PASSWORD=...
+UOP_KEY_ALIAS=...
+UOP_KEY_PASSWORD=...
+```
+
+Use a valid path on the current machine; never copy another developer machine's absolute
+keystore path.

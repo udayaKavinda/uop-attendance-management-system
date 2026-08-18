@@ -1226,14 +1226,15 @@ private fun SessionCard(
                         )
                     }
                 }
-                running -> SessionActionButton(
+                running && session.verification != "geofence" -> SessionActionButton(
                     text = "Start attendance broadcast",
                     icon = Icons.Outlined.Sensors,
                     tone = SessionActionTone.Primary,
                     onClick = onStartBroadcast,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                active -> SessionNotice("Broadcast controls appear during the scheduled session window.")
+                running -> SessionNotice("GPS verification is open for this session; no Bluetooth broadcast is required.")
+                active -> SessionNotice("Attendance controls appear during the scheduled session window.")
                 else -> SessionNotice("This session is inactive. Activate it to make it available.")
             }
 

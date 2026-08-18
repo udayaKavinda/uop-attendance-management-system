@@ -24,5 +24,6 @@ router.post(
   asyncHandler(attendanceController.recordUnified),
 );
 router.get('/attendance/seed-token', requireStudent, asyncHandler(attendanceController.seedToken));
+router.delete('/attendance/seed-token', requireStudent, asyncHandler(attendanceController.releaseSeedToken));
 
 module.exports = router;

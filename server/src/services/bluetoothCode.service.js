@@ -66,6 +66,7 @@ async function verifyToken(sessionId, submitted) {
   const now = Date.now();
 
   return docs.some((doc) => {
+    if (doc.role === 'seed' && doc.leaseUntil != null && now >= doc.leaseUntil) return false;
     if (doc.token === normalized) return true;
     if (doc.prevToken && doc.prevToken === normalized) {
       return now - doc.generatedAt <= GRACE_MS;

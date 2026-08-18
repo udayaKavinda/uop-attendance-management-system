@@ -361,6 +361,28 @@ describe('PATCH /api/admin/sessions/:id/broadcast', () => {
     expect(res.body.error).toMatch(/course is disabled/i);
     expect(session.save).not.toHaveBeenCalled();
   });
+
+  test('400 — geofence-only sessions cannot start a Bluetooth broadcast', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const course = makeCourse();
+    const session = makeSession({
+      course: course._id,
+      verification: 'geofence',
+      broadcasting: false,
+    });
+    Person.findById.mockResolvedValue(admin);
+    LectureSession.findOne.mockResolvedValue(session);
+    Course.findById.mockResolvedValue(course);
+
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${session._id}/broadcast`)
+      .set(headers(admin))
+      .send({ on: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/not allowed/i);
+    expect(session.save).not.toHaveBeenCalled();
+  });
 });
 
 // ─── GET /broadcast (token poll + heartbeat) ─────────────────────────────────

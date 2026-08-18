@@ -3,6 +3,7 @@ const LectureSession = require('../models/LectureSession');
 const { DAY_INDEX, toMinutes } = require('../utils/schedule');
 const { SESSION_RESOLVE_CACHE_TTL_MS, BROADCAST_STALE_MS } = require('../utils/constants');
 const settingsService = require('./settings.service');
+const { localYmd } = require('../utils/date');
 
 // 5 s cache cuts repeated Course + LectureSession reads under 100-student polling load.
 const _sessionResolveCache = new Map();
@@ -35,6 +36,8 @@ function evaluateScheduleWindow(sessionConfig, now = new Date()) {
 /** Single source of truth for whether a session is inside its weekly time window. */
 function isWithinScheduleWindow(sessionItem, now = new Date()) {
   if (!sessionItem || !sessionItem.active || sessionItem.deleted) return false;
+  if (!sessionItem.recurring && sessionItem.occurrenceDate
+    && sessionItem.occurrenceDate !== localYmd(now)) return false;
   return evaluateScheduleWindow(sessionItem, now).ok;
 }
 
@@ -98,16 +101,19 @@ async function getRunningCoursesForStudent(now = new Date()) {
     lectureDay: day,
   }).populate('course', 'code name active batch');
 
-  const manualCodeAllowed = await settingsService.isManualCodeAllowed();
+  const settings = await settingsService.getSettings();
+  const manualCodeAllowed = Boolean(settings.manualCodeAllowed);
   const runningCourses = new Map();
   sessions.forEach((s) => {
     if (!s.course?.active) return;
     if (!isWithinScheduleWindow(s, now)) return;
+    if (!settingsService.isVerificationAllowed(settings, s.verification || 'bluetooth')) return;
     runningCourses.set(String(s.course._id), {
       _id: s.course._id,
       code: s.course.code,
       batch: s.course.batch,
       name: s.course.name,
+      verification: s.verification || 'bluetooth',
       // Lets the app offer "Enter attendance code" alongside the automatic BLE
       // scan — independent of whether the lecturer's broadcast is actually on,
       // but gated by the global kill-switch regardless of the session's own setting.

@@ -61,6 +61,13 @@ async function seedToken(req, res) {
   return res.json(result.data);
 }
 
+async function releaseSeedToken(req, res) {
+  const validated = validateSessionIdQuery(req.query.sessionId);
+  if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
+  await attendanceService.releaseSeedToken(req.auth.person._id, validated.sessionId);
+  return res.json({ success: true });
+}
+
 module.exports = {
-  status, recordManualCode, recordUnified, seedToken,
+  status, recordManualCode, recordUnified, seedToken, releaseSeedToken,
 };
