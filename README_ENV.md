@@ -45,12 +45,14 @@ and execute `/usr/bin/node server/src/server.js`.
 
 ## Automated production deployment
 
-`.github/workflows/deploy.yml` deploys **main only**. Before touching production it runs:
+`.github/workflows/deploy.yml` deploys **main only** using the existing self-hosted
+`attendance-prod` runner. It does not start GitHub-hosted runners or require hosted-runner
+billing. The deployment:
 
-1. Server dependency installation and the full Jest suite.
-2. Android unit tests, lint, and debug assembly on JDK 17.
-3. Production sync/install/restart and local health check.
-4. Automatic reset to the previous Git revision and service restart if health fails.
+1. Syncs the production checkout to `origin/main` while preserving `.env`.
+2. Checks the server entry-point syntax and installs production dependencies.
+3. Restarts the service and performs a local health check.
+4. Automatically resets to the previous Git revision and restarts if health fails.
 
 Feature branches cannot deploy directly to the production runner.
 
