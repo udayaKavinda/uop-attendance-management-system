@@ -1,17 +1,14 @@
 const settingsService = require('../../services/settings.service');
-const { validateSettingsBody } = require('../../validators/settings.validator');
+const { validateSettingsBody, checkBufferOrder } = require('../../validators/settings.validator');
 
 function shape(settings) {
   return {
-    manualCodeAllowed: settings.manualCodeAllowed,
-    bluetoothAllowed: settings.bluetoothAllowed,
-    geofenceAllowed: settings.geofenceAllowed,
-    // Derived so the create-session UI doesn't have to re-implement the rule.
-    allowedVerifications: settingsService.allowedVerifications(settings),
+    bleEnabled: settings.bleEnabled !== false,
+    nearBufferM: settings.nearBufferM,
+    farBufferM: settings.farBufferM,
+    suspiciousBandAutoPass: settings.suspiciousBandAutoPass !== false,
     seedRate: settings.seedRate,
     seedWindowMs: settings.seedWindowMs,
-    bufferGpsOnly: settings.bufferGpsOnly,
-    bufferGpsBle: settings.bufferGpsBle,
   };
 }
 
@@ -24,6 +21,11 @@ async function update(req, res) {
   const validated = validateSettingsBody(req.body);
   if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
   const { ok, ...patch } = validated;
+
+  const current = await settingsService.getSettings();
+  const order = checkBufferOrder(current, patch);
+  if (!order.ok) return res.status(order.status).json({ error: order.error });
+
   const settings = await settingsService.updateSettings(patch);
   return res.json({ success: true, ...shape(settings) });
 }

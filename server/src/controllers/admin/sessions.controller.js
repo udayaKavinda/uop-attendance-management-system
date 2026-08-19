@@ -2,8 +2,8 @@ const authService = require('../../services/auth.service');
 const lectureSessionService = require('../../services/lectureSession.service');
 const sessionService = require('../../services/session.service');
 const manualCodeService = require('../../services/manualCode.service');
-const settingsService = require('../../services/settings.service');
-const { validateBroadcastBody } = require('../../validators/session.validator');
+const attendanceReviewService = require('../../services/attendanceReview.service');
+const { validateBroadcastBody, validateReviewBody } = require('../../validators/session.validator');
 const { validateManualCodeConfigBody } = require('../../validators/manualCode.validator');
 
 async function remove(req, res) {
@@ -47,51 +47,51 @@ async function getBroadcast(req, res) {
   return res.json(result.data);
 }
 
-/**
- * Staff-facing manual-code status. Overrides `enabled: false` in the response
- * (without touching the session's own stored setting) when the global
- * `manualCodeAllowed` switch is off, so the dashboard reflects reality without
- * losing the lecturer's per-session preference for when the switch flips back on.
- */
+/** Staff-facing code status. Every session has one; only the schedule window gates it. */
 async function getManualCode(req, res) {
-  const allowed = await settingsService.isManualCodeAllowed();
   const status = await manualCodeService.getStatus(req.sessionItem);
-  if (!allowed) {
-    return res.json({ ...status, enabled: false, code: null, allowed });
-  }
-  return res.json({ ...status, allowed });
+  return res.json(status);
 }
 
 async function patchManualCode(req, res) {
   const validated = validateManualCodeConfigBody(req.body);
   if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
 
-  const allowed = await settingsService.isManualCodeAllowed();
-  if (!allowed && validated.enabled) {
-    return res.status(403).json({ error: 'Manual attendance codes are disabled by the administrator' });
+  if ('rotationMode' in validated) {
+    await manualCodeService.setRotation(req.sessionItem, {
+      rotationMode: validated.rotationMode,
+      rotationSeconds: validated.rotationSeconds,
+    });
   }
-
-  if ('enabled' in validated) {
-    await manualCodeService.setEnabled(req.sessionItem, validated.enabled);
+  if ('paused' in validated) {
+    if (validated.paused) await manualCodeService.pause(req.sessionItem);
+    else await manualCodeService.resume(req.sessionItem);
   }
-  if (req.sessionItem.manualCodeEnabled) {
-    if ('rotationMode' in validated) {
-      await manualCodeService.setRotation(req.sessionItem, {
-        rotationMode: validated.rotationMode,
-        rotationSeconds: validated.rotationSeconds,
-      });
-    }
-    if ('paused' in validated) {
-      if (validated.paused) await manualCodeService.pause(req.sessionItem);
-      else await manualCodeService.resume(req.sessionItem);
-    }
-    if (validated.regenerate) {
-      await manualCodeService.regenerate(req.sessionItem);
-    }
+  if (validated.regenerate) {
+    await manualCodeService.regenerate(req.sessionItem);
   }
 
   const status = await manualCodeService.getStatus(req.sessionItem);
-  return res.json({ success: true, ...status, allowed });
+  return res.json({ success: true, ...status });
+}
+
+/** Pending code-override submissions awaiting this lecturer's decision. */
+async function listPendingReviews(req, res) {
+  const items = await attendanceReviewService.listPending(req.sessionItem);
+  return res.json({ items });
+}
+
+async function reviewSubmission(req, res) {
+  const validated = validateReviewBody(req.body);
+  if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
+  const result = await attendanceReviewService.review(
+    req.sessionItem,
+    req.params.attendanceId,
+    validated.decision,
+    req.auth.person._id,
+  );
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  return res.json({ success: true, status: result.attendance.status });
 }
 
 module.exports = {
@@ -104,4 +104,6 @@ module.exports = {
   getBroadcast,
   getManualCode,
   patchManualCode,
+  listPendingReviews,
+  reviewSubmission,
 };

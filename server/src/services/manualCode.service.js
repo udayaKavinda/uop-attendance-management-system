@@ -103,18 +103,19 @@ async function getOrRotateCode(sessionItem) {
 }
 
 /**
- * Staff-facing view: config + live state, gated on the session actually being
- * inside its schedule window — outside it, there is no live code to show even if
- * `manualCodeEnabled` is true (matches "ending the session invalidates it").
+ * Staff-facing view: config + live state. Every session has a code now — the
+ * only gate left is the schedule window, since outside it there is no live
+ * lecture to vouch for anyone (matches "ending the session invalidates it").
  */
 async function getStatus(sessionItem) {
   const base = {
-    enabled: Boolean(sessionItem.manualCodeEnabled),
     rotationMode: sessionItem.manualCodeRotationMode,
     rotationSeconds: sessionItem.manualCodeRotationSeconds,
   };
-  if (!sessionItem.manualCodeEnabled || !isRunning(sessionItem)) {
-    return { ...base, running: isRunning(sessionItem), paused: false, code: null, rotatesIn: null };
+  if (!isRunning(sessionItem)) {
+    return {
+      ...base, running: false, paused: false, code: null, rotatesIn: null,
+    };
   }
   const state = await getOrRotateCode(sessionItem);
   return {
@@ -132,24 +133,12 @@ async function removeCode(sessionItem) {
   await getModel().deleteOne({ session: key });
 }
 
-/** Enables/disables the feature for a session. Enabling seeds a fresh code; disabling removes it. */
-async function setEnabled(sessionItem, enabled) {
-  sessionItem.manualCodeEnabled = Boolean(enabled);
-  await sessionItem.save();
-  if (sessionItem.manualCodeEnabled) {
-    if (isRunning(sessionItem)) await getOrRotateCode(sessionItem);
-  } else {
-    await removeCode(sessionItem);
-  }
-  return sessionItem;
-}
-
 /** Changing the interval mid-session rotates immediately, with the usual grace window. */
 async function setRotation(sessionItem, { rotationMode, rotationSeconds }) {
   sessionItem.manualCodeRotationMode = rotationMode;
   sessionItem.manualCodeRotationSeconds = rotationSeconds;
   await sessionItem.save();
-  if (sessionItem.manualCodeEnabled && isRunning(sessionItem)) {
+  if (isRunning(sessionItem)) {
     await forceRotate(sessionItem, { keepGrace: true });
   }
   return sessionItem;
@@ -173,9 +162,9 @@ async function regenerate(sessionItem) {
 /**
  * Verifies a submitted 8-digit code against the session's live state (current code,
  * or the previous one within the automatic-rotation grace window). Does not itself
- * check `manualCodeEnabled`/global allow/schedule window — callers that already hold
- * a confirmed-running sessionItem (e.g. attendance.service's resolveActiveSessionForCourse
- * result) can call straight through; call getStatus()/isRunning() first otherwise.
+ * check the schedule window — callers that already hold a confirmed-running
+ * sessionItem (e.g. attendance.service's resolveActiveSessionForCourse result) can
+ * call straight through; call getStatus()/isRunning() first otherwise.
  */
 async function verifyCode(sessionItem, submitted) {
   const normalized = String(submitted || '').trim();
@@ -257,7 +246,6 @@ module.exports = {
   getOrRotateCode,
   getStatus,
   removeCode,
-  setEnabled,
   setRotation,
   pause,
   resume,

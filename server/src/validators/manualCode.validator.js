@@ -5,19 +5,15 @@ const ROTATION_MODES = ['none', 'interval'];
 /**
  * Body for PATCH /api/admin/sessions/:sessionId/manual-code. Every field is
  * optional and independently applied — `{ paused: true }` alone just pauses,
- * `{ enabled: true, rotationMode: 'interval', rotationSeconds: 60 }` sets up and
- * turns it on in one call. At least one recognized field is required.
+ * `{ rotationMode: 'interval', rotationSeconds: 60 }` reconfigures rotation.
+ * At least one recognized field is required.
+ *
+ * There is no `enabled` field: the code exists for every session now, and the
+ * lecturer's only choice is whether it rotates.
  */
 function validateManualCodeConfigBody(body) {
   const b = body || {};
   const result = {};
-
-  if ('enabled' in b) {
-    if (typeof b.enabled !== 'boolean') {
-      return { ok: false, status: 400, error: 'enabled must be a boolean' };
-    }
-    result.enabled = b.enabled;
-  }
 
   if ('rotationMode' in b || 'rotationSeconds' in b) {
     const rotationMode = String(b.rotationMode || 'none');

@@ -47,8 +47,15 @@ class MatrixViewModel(app: Application) : AndroidViewModel(app) {
         data.rows.orEmpty().forEach { row ->
             val cells = mutableListOf(csvCell(row.displayId ?: ""))
             sessions.forEach { s ->
-                val present = row.attendance?.get(s.id) == true
-                cells.add(if (present) "P" else "")
+                // Presence only — verification provenance stays server-side.
+                // "?" marks a submission still waiting on the lecturer's decision.
+                cells.add(
+                    when (row.attendance?.get(s.id)) {
+                        "present" -> "P"
+                        "under_review" -> "?"
+                        else -> ""
+                    },
+                )
             }
             sb.append(cells.joinToString(",")).append('\n')
         }

@@ -1,15 +1,13 @@
 const mongoose = require('mongoose');
 const { toMinutes, hasScheduleOverlap, ymd } = require('../utils/schedule');
-const settingsService = require('../services/settings.service');
 const { MIN_ROTATION_SECONDS, MAX_ROTATION_SECONDS } = require('../services/manualCode.service');
 
 const ALLOWED_DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
-const VERIFICATION_MODES = ['bluetooth', 'geofence', 'both'];
 
 function validateSessionCreateBody(body) {
   const {
-    lectureDay, startTime, endTime, recurring, verification, buildings,
-    manualCodeEnabled, manualCodeRotationMode, manualCodeRotationSeconds,
+    lectureDay, startTime, endTime, recurring, buildings,
+    manualCodeRotationMode, manualCodeRotationSeconds,
   } = body || {};
   const dayUpper = String(lectureDay || '').toUpperCase();
   if (!ALLOWED_DAYS.includes(dayUpper)) {
@@ -24,25 +22,17 @@ function validateSessionCreateBody(body) {
     return { ok: false, status: 400, error: 'recurring must be a boolean' };
   }
 
-  const mode = String(verification || '');
-  if (!VERIFICATION_MODES.includes(mode)) {
-    return { ok: false, status: 400, error: 'verification must be "bluetooth", "geofence", or "both"' };
-  }
-
+  // Mandatory: every session verifies by GPS, so a session with no polygon could
+  // never place a student in a passing band and would send the whole class to
+  // the lecturer's review queue.
   const buildingIds = Array.isArray(buildings) ? buildings.map(String) : [];
-  if (mode !== 'bluetooth') {
-    if (buildingIds.length === 0) {
-      return { ok: false, status: 400, error: 'At least one building is required for geofence-based verification' };
-    }
-    if (buildingIds.some((id) => !mongoose.isValidObjectId(id))) {
-      return { ok: false, status: 400, error: 'Invalid building id' };
-    }
+  if (buildingIds.length === 0) {
+    return { ok: false, status: 400, error: 'Select at least one building for this session' };
+  }
+  if (buildingIds.some((id) => !mongoose.isValidObjectId(id))) {
+    return { ok: false, status: 400, error: 'Invalid building id' };
   }
 
-  if (manualCodeEnabled !== undefined && typeof manualCodeEnabled !== 'boolean') {
-    return { ok: false, status: 400, error: 'manualCodeEnabled must be a boolean' };
-  }
-  const manualEnabled = Boolean(manualCodeEnabled);
   const rotationMode = manualCodeRotationMode === undefined ? 'none' : String(manualCodeRotationMode);
   if (!['none', 'interval'].includes(rotationMode)) {
     return { ok: false, status: 400, error: 'manualCodeRotationMode must be "none" or "interval"' };
@@ -65,25 +55,10 @@ function validateSessionCreateBody(body) {
     startTime,
     endTime,
     recurring,
-    verification: mode,
-    buildings: mode === 'bluetooth' ? [] : buildingIds,
-    manualCodeEnabled: manualEnabled,
+    buildings: buildingIds,
     manualCodeRotationMode: rotationMode,
     manualCodeRotationSeconds: rotationSeconds,
   };
-}
-
-/** Async, mirrors checkSessionOverlap below: DB-backed rule, not a pure shape check. */
-async function checkVerificationAllowed(verification) {
-  const settings = await settingsService.getSettings();
-  if (!settingsService.isVerificationAllowed(settings, verification)) {
-    return {
-      ok: false,
-      status: 400,
-      error: `Verification mode "${verification}" is disabled by the administrator`,
-    };
-  }
-  return { ok: true };
 }
 
 /** Body for PATCH /:sessionId/broadcast — strictly `{ on: boolean }`. */
@@ -93,6 +68,15 @@ function validateBroadcastBody(body) {
     return { ok: false, status: 400, error: 'on must be a boolean' };
   }
   return { ok: true, on };
+}
+
+/** Body for PATCH /:sessionId/reviews/:attendanceId — strictly approve or reject. */
+function validateReviewBody(body) {
+  const decision = String(body?.decision || '');
+  if (!['approve', 'reject'].includes(decision)) {
+    return { ok: false, status: 400, error: 'decision must be "approve" or "reject"' };
+  }
+  return { ok: true, decision };
 }
 
 async function checkSessionOverlap(LectureSession, courseId, day, startTime, endTime) {
@@ -115,8 +99,7 @@ async function checkSessionOverlap(LectureSession, courseId, day, startTime, end
 module.exports = {
   validateSessionCreateBody,
   validateBroadcastBody,
+  validateReviewBody,
   checkSessionOverlap,
-  checkVerificationAllowed,
   ALLOWED_DAYS,
-  VERIFICATION_MODES,
 };

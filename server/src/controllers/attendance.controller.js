@@ -10,18 +10,28 @@ async function status(req, res) {
   return res.json(data);
 }
 
+/** Whether a live BLE channel is worth scanning for; false also when BLE is globally off. */
 async function bluetoothTarget(req, res) {
   const validated = validateCourseId(req.query.courseId);
   if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
   const result = await attendanceService.getBluetoothTarget(validated.courseId);
   if (!result.ok) return res.status(result.status).json({ error: result.error });
-  return res.json({ available: true });
+  return res.json({ available: result.available });
 }
 
+const RECORD_STATUS = {
+  present: 'accepted',
+  under_review: 'under_review',
+  rejected: 'rejected',
+};
+
 /**
- * Unified submission: exactly one of token (BLE) / fix (GPS) / code (manual).
- * `status: "pending"` (GPS only) means "not yet accepted, keep streaming fixes" —
- * it is not an error; the client's own 90s window is what eventually gives up.
+ * Unified submission: exactly one of token (BLE) / fix (GPS) / code (help).
+ *
+ * `status: "collecting"` means "no verdict yet, keep going" — and deliberately
+ * covers BOTH "still gathering fixes" and "gathered enough, but you are not in a
+ * passing band". The client must not be able to tell those apart, so it cannot
+ * learn its distance band; the client's own 90s window is what gives up.
  */
 async function recordUnified(req, res) {
   const validated = validateUnifiedAttendanceBody(req.body);
@@ -33,9 +43,9 @@ async function recordUnified(req, res) {
     canAdvertise: validated.canAdvertise,
   });
   if (!result.ok) return res.status(result.status).json({ error: result.error });
-  if (result.pending) return res.json({ status: 'pending' });
+  if (result.collecting) return res.json({ status: 'collecting' });
   return res.json({
-    status: 'accepted',
+    status: RECORD_STATUS[result.attendance?.status] || 'accepted',
     ...(result.duplicate ? { duplicate: true } : {}),
     ...(result.seeding ? { seeding: result.seeding } : {}),
   });

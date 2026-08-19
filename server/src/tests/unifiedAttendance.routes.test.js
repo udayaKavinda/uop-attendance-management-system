@@ -18,9 +18,9 @@ jest.mock('../models/BleToken', () => ({
     const doc = mockBleTokenStore[sessionId];
     return Promise.resolve(doc ? [doc] : []);
   }),
-  findOneAndUpdate: jest.fn(({ sessionId }, update) => {
-    const doc = { ...(mockBleTokenStore[sessionId] || {}), sessionId, ...update };
-    mockBleTokenStore[sessionId] = doc;
+  findOneAndUpdate: jest.fn((filter, update) => {
+    const doc = { ...(mockBleTokenStore[filter.sessionId] || {}), ...filter, ...update };
+    mockBleTokenStore[filter.sessionId] = doc;
     return Promise.resolve(doc);
   }),
   deleteMany: jest.fn(({ sessionId }) => {
@@ -31,16 +31,27 @@ jest.mock('../models/BleToken', () => ({
   countDocuments: jest.fn(() => Promise.resolve(0)),
 }));
 
-let mockSettingsStore = null;
+// Returned by reference (not copied) so a test can flip a switch mid-file and
+// have it take effect through the settings service's 5s read-through cache.
+// resetSettings() mutates in place for the same reason — reassigning would leave
+// the service's cache pointing at the previous object.
+const mockSettingsStore = {};
+function resetSettings() {
+  Object.keys(mockSettingsStore).forEach((k) => delete mockSettingsStore[k]);
+  Object.assign(mockSettingsStore, {
+    bleEnabled: true,
+    nearBufferM: 50,
+    farBufferM: 100,
+    suspiciousBandAutoPass: true,
+    seedRate: 0,
+    seedWindowMs: 60000,
+  });
+}
+resetSettings();
 jest.mock('../models/Settings', () => ({
   findOneAndUpdate: jest.fn((_filter, update) => {
-    if (!mockSettingsStore) {
-      mockSettingsStore = {
-        manualCodeAllowed: true, bluetoothAllowed: true, geofenceAllowed: true, seedRate: 0, seedWindowMs: 60000, bufferGpsOnly: 30, bufferGpsBle: 15,
-      };
-    }
     if (update.$set) Object.assign(mockSettingsStore, update.$set);
-    return Promise.resolve({ ...mockSettingsStore });
+    return Promise.resolve(mockSettingsStore);
   }),
 }));
 
@@ -54,6 +65,13 @@ jest.mock('../models/Geofence', () => ({
   }),
 }));
 
+let mockManualCodeDoc = null;
+jest.mock('../models/ManualCode', () => ({
+  findOne: jest.fn(() => Promise.resolve(mockManualCodeDoc)),
+  findOneAndUpdate: jest.fn(() => Promise.resolve(mockManualCodeDoc)),
+  deleteOne: jest.fn(),
+}));
+
 jest.mock('../models/Person', () => ({ findById: jest.fn(), findOne: jest.fn() }));
 jest.mock('../models/Course', () => ({ findById: jest.fn(), findOne: jest.fn() }));
 jest.mock('../models/LectureSession', () => ({ findOne: jest.fn(), find: jest.fn() }));
@@ -64,7 +82,6 @@ jest.mock('../models/Attendance', () => ({
   countDocuments: jest.fn().mockResolvedValue(0),
   updateOne: jest.fn().mockResolvedValue({}),
 }));
-jest.mock('../models/ManualCode', () => ({ findOne: jest.fn(), findOneAndUpdate: jest.fn(), deleteOne: jest.fn() }));
 
 const request = require('supertest');
 const mongoose = require('mongoose');
@@ -78,6 +95,20 @@ const DAY_NAMES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 function todayDay() { return DAY_NAMES[new Date().getDay()]; }
 function makeId() { return new mongoose.Types.ObjectId().toHexString(); }
 
+// ~110m square near Colombo, used as the session's single building.
+const SQUARE = [[79.8000, 6.9000], [79.8010, 6.9000], [79.8010, 6.9010], [79.8000, 6.9010]];
+const INSIDE = { lat: 6.9005, lng: 79.8005, accuracy: 5 };
+const SUSPICIOUS = { lat: 6.8993, lng: 79.8005, accuracy: 5 }; // ~78m south
+const FAR = { lat: 6.8900, lng: 79.8005, accuracy: 5 }; // >1km south
+
+function addBuilding() {
+  const geofenceId = makeId();
+  mockGeofenceStore.push({
+    _id: geofenceId, polygon: SQUARE, active: true, deleted: false,
+  });
+  return geofenceId;
+}
+
 function makeSession(overrides = {}) {
   return {
     _id: makeId(),
@@ -88,9 +119,9 @@ function makeSession(overrides = {}) {
     recurring: true,
     active: true,
     deleted: false,
-    verification: 'bluetooth',
     buildings: [],
-    manualCodeEnabled: false,
+    manualCodeRotationMode: 'none',
+    manualCodeRotationSeconds: 60,
     broadcasting: false,
     lastBroadcastSeenAt: null,
     save: jest.fn().mockResolvedValue(undefined),
@@ -111,152 +142,386 @@ function authHeader(person) { return { 'x-test-user': JSON.stringify({ ...person
 const csrfHeader = { 'x-requested-with': 'fetch' };
 function headers(person) { return { ...authHeader(person), ...csrfHeader }; }
 
+/** Streams `count` identical fixes, returning the last response. */
+async function streamFixes(student, courseId, fix, count = 4) {
+  let last;
+  for (let i = 0; i < count; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    last = await request(app).post('/api/attendance').set(headers(student)).send({ courseId, fix });
+  }
+  return last;
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   Object.keys(mockBleTokenStore).forEach((k) => delete mockBleTokenStore[k]);
   mockGeofenceStore = [];
+  mockManualCodeDoc = null;
+  resetSettings();
+  Attendance.findOne.mockResolvedValue(null);
+  Attendance.create.mockImplementation((doc) => Promise.resolve({ _id: makeId(), ...doc }));
 });
 
 describe('POST /api/attendance — validation', () => {
   test('400 when none of token/fix/code are present', async () => {
-    const student = makePerson();
-    const res = await request(app).post('/api/attendance').set(headers(student)).send({ courseId: makeId() });
+    const res = await request(app).post('/api/attendance').set(headers(makePerson())).send({ courseId: makeId() });
     expect(res.status).toBe(400);
   });
 
   test('400 when more than one of token/fix/code are present', async () => {
-    const student = makePerson();
     const res = await request(app)
       .post('/api/attendance')
-      .set(headers(student))
+      .set(headers(makePerson()))
       .send({ courseId: makeId(), token: 'a'.repeat(16), code: '12345678' });
     expect(res.status).toBe(400);
   });
 });
 
-describe('POST /api/attendance — GPS fix path', () => {
-  test('accepts an authenticated student without a course-enrolment check once GPS is valid', async () => {
+describe('POST /api/attendance — GPS band decisions', () => {
+  test('accepts a student standing inside the building polygon', async () => {
     const student = makePerson();
-    const geofenceId = makeId();
-    mockGeofenceStore.push({
-      _id: geofenceId,
-      polygon: [[79.8000, 6.9000], [79.8010, 6.9000], [79.8010, 6.9010], [79.8000, 6.9010]],
-      active: true,
-      deleted: false,
-    });
-    const session = makeSession({ verification: 'geofence', buildings: [geofenceId] });
+    const session = makeSession({ buildings: [addBuilding()] });
     const course = makeCourse();
     Course.findById.mockResolvedValue(course);
     LectureSession.find.mockResolvedValue([session]);
-    Attendance.findOne.mockResolvedValue(null);
-    Attendance.create.mockResolvedValue({ _id: makeId(), method: 'gps' });
 
-    const fixBody = {
-      courseId: course._id, fix: { lat: 6.9005, lng: 79.8005, accuracy: 5 },
-    };
+    const first = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, fix: INSIDE });
+    expect(first.body.status).toBe('collecting');
 
-    const first = await request(app).post('/api/attendance').set(headers(student)).send(fixBody);
-    expect(first.status).toBe(200);
-    expect(first.body.status).toBe('pending');
-
-    let last;
-    for (let i = 0; i < 3; i += 1) {
-      // eslint-disable-next-line no-await-in-loop
-      last = await request(app).post('/api/attendance').set(headers(student)).send(fixBody);
-    }
+    const last = await streamFixes(student, course._id, INSIDE, 3);
     expect(last.status).toBe(200);
     expect(last.body.status).toBe('accepted');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'gps', status: 'present', band: 'inside' }),
+    );
   });
 
-  test('400 when the session has no building configured', async () => {
+  test('accepts a student within the near buffer of the building', async () => {
     const student = makePerson();
-    const session = makeSession({ verification: 'geofence', buildings: [] });
+    const session = makeSession({ buildings: [addBuilding()] });
     const course = makeCourse();
     Course.findById.mockResolvedValue(course);
     LectureSession.find.mockResolvedValue([session]);
 
-    const res = await request(app)
-      .post('/api/attendance')
-      .set(headers(student))
-      .send({ courseId: course._id, fix: { lat: 6.9, lng: 79.8, accuracy: 5 } });
-    expect(res.status).toBe(400);
+    const last = await streamFixes(student, course._id, { lat: 6.8997, lng: 79.8005, accuracy: 5 });
+    expect(last.body.status).toBe('accepted');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'gps', status: 'present', band: 'near' }),
+    );
   });
 
-  test('400 for a bluetooth-only session (GPS not applicable)', async () => {
+  test('a suspicious-band student is told only "collecting" — never their band', async () => {
     const student = makePerson();
-    const session = makeSession({ verification: 'bluetooth' });
+    const session = makeSession({ buildings: [addBuilding()] });
     const course = makeCourse();
     Course.findById.mockResolvedValue(course);
     LectureSession.find.mockResolvedValue([session]);
 
-    const res = await request(app)
-      .post('/api/attendance')
-      .set(headers(student))
-      .send({ courseId: course._id, fix: { lat: 6.9, lng: 79.8, accuracy: 5 } });
-    expect(res.status).toBe(400);
+    const last = await streamFixes(student, course._id, SUSPICIOUS);
+    expect(last.status).toBe(200);
+    expect(last.body).toEqual({ status: 'collecting' });
+    expect(Attendance.create).not.toHaveBeenCalled();
   });
 
-  test('400 when a referenced building is inactive', async () => {
+  test('a far-band student is indistinguishable from a suspicious one over the wire', async () => {
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const last = await streamFixes(student, course._id, FAR);
+    expect(last.body).toEqual({ status: 'collecting' });
+    expect(Attendance.create).not.toHaveBeenCalled();
+  });
+
+  test('does not accept a centroid built only from very inaccurate fixes', async () => {
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const last = await streamFixes(student, course._id, { ...INSIDE, accuracy: 300 });
+    expect(last.body).toEqual({ status: 'collecting' });
+    expect(Attendance.create).not.toHaveBeenCalled();
+  });
+
+  test('keeps collecting when every referenced building has been deactivated', async () => {
     const student = makePerson();
     const geofenceId = makeId();
     mockGeofenceStore.push({
-      _id: geofenceId,
-      polygon: [[79.8, 6.9], [79.801, 6.9], [79.801, 6.901]],
-      active: false,
-      deleted: false,
+      _id: geofenceId, polygon: SQUARE, active: false, deleted: false,
     });
     const course = makeCourse();
     Course.findById.mockResolvedValue(course);
-    LectureSession.find.mockResolvedValue([makeSession({ verification: 'geofence', buildings: [geofenceId] })]);
-    const res = await request(app)
-      .post('/api/attendance')
-      .set(headers(student))
-      .send({ courseId: course._id, fix: { lat: 6.9, lng: 79.8, accuracy: 5 } });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/active building/i);
+    LectureSession.find.mockResolvedValue([makeSession({ buildings: [geofenceId] })]);
+
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, fix: INSIDE });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('collecting');
   });
 });
 
-describe('POST /api/attendance — verification policy enforcement', () => {
-  test('rejects a Bluetooth token for a geofence-only session', async () => {
-    const student = makePerson();
-    const course = makeCourse();
-    Course.findById.mockResolvedValue(course);
-    LectureSession.find.mockResolvedValue([makeSession({
-      verification: 'geofence',
-      buildings: [makeId()],
+describe('POST /api/attendance — Bluetooth path', () => {
+  function liveBleSession() {
+    const session = makeSession({
+      buildings: [addBuilding()],
       broadcasting: true,
       lastBroadcastSeenAt: new Date(),
-    })]);
-    const res = await request(app)
-      .post('/api/attendance')
-      .set(headers(student))
-      .send({ courseId: course._id, token: 'a'.repeat(16) });
+    });
+    mockBleTokenStore[String(session._id)] = {
+      sessionId: String(session._id),
+      role: 'primary',
+      token: 'abcdef1234567890',
+      prevToken: null,
+      generatedAt: Date.now(),
+    };
+    return session;
+  }
+
+  test('accepts a valid primary token outright, without any GPS', async () => {
+    const student = makePerson();
+    const session = liveBleSession();
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, token: 'abcdef1234567890' });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('accepted');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'bluetooth', status: 'present', band: 'inside', seedRelayed: false }),
+    );
+  });
+
+  test('rejects an unknown token', async () => {
+    const student = makePerson();
+    const session = liveBleSession();
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, token: 'f'.repeat(16) });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/does not use Bluetooth/i);
+  });
+
+  test('rejects a Bluetooth submission while the global kill switch is off', async () => {
+    mockSettingsStore.bleEnabled = false;
+    const student = makePerson();
+    const session = liveBleSession();
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, token: 'abcdef1234567890' });
+    expect(res.status).toBe(403);
+  });
+
+  test('marks attendance relayed when the token came from a peer seeder', async () => {
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()], broadcasting: true, lastBroadcastSeenAt: new Date() });
+    mockBleTokenStore[String(session._id)] = {
+      sessionId: String(session._id),
+      role: 'seed',
+      token: 'abcdef1234567890',
+      prevToken: null,
+      generatedAt: Date.now(),
+      leaseUntil: Date.now() + 60_000,
+    };
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, token: 'abcdef1234567890' });
+    expect(res.body.status).toBe('accepted');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'bluetooth', seedRelayed: true }),
+    );
+  });
+});
+
+describe('POST /api/attendance — "get help" lecturer code', () => {
+  function codeSession() {
+    mockManualCodeDoc = {
+      code: '11112222', prevCode: null, generatedAt: Date.now(), paused: false,
+    };
+    return makeSession({ buildings: [addBuilding()] });
+  }
+
+  test('rejects a wrong code', async () => {
+    const student = makePerson();
+    const session = codeSession();
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, code: '99998888' });
+    expect(res.status).toBe(400);
+    expect(Attendance.create).not.toHaveBeenCalled();
+  });
+
+  test('a correct code from the suspicious band passes outright by default', async () => {
+    const student = makePerson();
+    const session = codeSession();
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    await streamFixes(student, course._id, SUSPICIOUS);
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, code: '11112222' });
+
+    expect(res.body.status).toBe('accepted');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'code_override', status: 'present', band: 'suspicious' }),
+    );
+  });
+
+  test('the admin can send the suspicious band to review instead of passing it', async () => {
+    mockSettingsStore.suspiciousBandAutoPass = false;
+    const student = makePerson();
+    const session = codeSession();
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    await streamFixes(student, course._id, SUSPICIOUS);
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, code: '11112222' });
+
+    expect(res.body.status).toBe('under_review');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'code_override', status: 'under_review', band: 'suspicious' }),
+    );
+  });
+
+  test('a correct code from beyond the far buffer only reaches lecturer review', async () => {
+    const student = makePerson();
+    const session = codeSession();
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    await streamFixes(student, course._id, FAR);
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, code: '11112222' });
+
+    expect(res.body.status).toBe('under_review');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'under_review', band: 'far' }),
+    );
+  });
+
+  test('a correct code with no GPS evidence at all reaches review, never a pass', async () => {
+    const student = makePerson();
+    const session = codeSession();
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, code: '11112222' });
+
+    expect(res.body.status).toBe('under_review');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'under_review', band: 'unknown' }),
+    );
+  });
+
+  test('a student who already passed automatically keeps that record if they submit a code anyway', async () => {
+    const student = makePerson();
+    const session = codeSession();
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    await streamFixes(student, course._id, INSIDE);
+    Attendance.create.mockClear();
+    // The GPS pass above wrote a present record; the code path now finds it.
+    Attendance.findOne.mockResolvedValue({ _id: makeId(), status: 'present' });
+
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, code: '11112222' });
+    expect(res.body).toMatchObject({ status: 'accepted', duplicate: true });
+    expect(Attendance.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/attendance — idempotency and upgrades', () => {
+  test('a second submission returns the existing record rather than creating another', async () => {
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()], broadcasting: true, lastBroadcastSeenAt: new Date() });
+    mockBleTokenStore[String(session._id)] = {
+      sessionId: String(session._id), role: 'primary', token: 'abcdef1234567890', prevToken: null, generatedAt: Date.now(),
+    };
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+    Attendance.findOne.mockResolvedValue({ _id: makeId(), status: 'present' });
+
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, token: 'abcdef1234567890' });
+    expect(res.body).toMatchObject({ status: 'accepted', duplicate: true });
+    expect(Attendance.create).not.toHaveBeenCalled();
+  });
+
+  test('a genuine Bluetooth pass upgrades an existing under-review record', async () => {
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()], broadcasting: true, lastBroadcastSeenAt: new Date() });
+    mockBleTokenStore[String(session._id)] = {
+      sessionId: String(session._id), role: 'primary', token: 'abcdef1234567890', prevToken: null, generatedAt: Date.now(),
+    };
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const pending = {
+      _id: makeId(), status: 'under_review', save: jest.fn().mockResolvedValue(undefined),
+    };
+    Attendance.findOne.mockResolvedValue(pending);
+
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, token: 'abcdef1234567890' });
+
+    expect(pending.status).toBe('present');
+    expect(pending.save).toHaveBeenCalled();
+    expect(res.body.status).toBe('accepted');
   });
 });
 
 describe('GET /api/attendance/seed-token', () => {
   test('400 for an invalid sessionId', async () => {
-    const student = makePerson();
-    const res = await request(app).get('/api/attendance/seed-token?sessionId=not-an-id').set(authHeader(student));
+    const res = await request(app).get('/api/attendance/seed-token?sessionId=not-an-id').set(authHeader(makePerson()));
     expect(res.status).toBe(400);
   });
 
   test('404 when the session does not exist', async () => {
-    const student = makePerson();
     LectureSession.findOne.mockResolvedValue(null);
-    const res = await request(app).get(`/api/attendance/seed-token?sessionId=${makeId()}`).set(authHeader(student));
+    const res = await request(app).get(`/api/attendance/seed-token?sessionId=${makeId()}`).set(authHeader(makePerson()));
     expect(res.status).toBe(404);
   });
 
   test('400 once the seeding lease has ended (no live seed row)', async () => {
-    const student = makePerson();
     const session = makeSession();
     LectureSession.findOne.mockResolvedValue(session);
-    const res = await request(app).get(`/api/attendance/seed-token?sessionId=${session._id}`).set(authHeader(student));
+    const res = await request(app).get(`/api/attendance/seed-token?sessionId=${session._id}`).set(authHeader(makePerson()));
     expect(res.status).toBe(400);
+  });
+
+  test('403 while Bluetooth is globally killed', async () => {
+    mockSettingsStore.bleEnabled = false;
+    const session = makeSession();
+    LectureSession.findOne.mockResolvedValue(session);
+    const res = await request(app).get(`/api/attendance/seed-token?sessionId=${session._id}`).set(authHeader(makePerson()));
+    expect(res.status).toBe(403);
   });
 });
 

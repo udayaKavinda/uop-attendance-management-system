@@ -110,20 +110,17 @@ fun AttendanceMatrixScreen(
                                 Row {
                                     BodyCell(row.displayId ?: "", width = 140.dp, bold = true)
                                     sessions.forEach { s ->
-                                        val present = row.attendance?.get(s.id) == true
+                                        // Three states now: present, awaiting the
+                                        // lecturer's decision, or absent.
+                                        val status = row.attendance?.get(s.id)
                                         Box(
                                             Modifier.width(120.dp).padding(vertical = 8.dp),
                                             contentAlignment = Alignment.Center,
                                         ) {
-                                            if (present) {
-                                                Box(
-                                                    Modifier.background(Palette.SuccessBg2, RoundedCornerShape(999.dp))
-                                                        .padding(horizontal = 10.dp, vertical = 3.dp),
-                                                ) {
-                                                    Text("P", color = Palette.SuccessText, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
-                                                }
-                                            } else {
-                                                Text("—", color = Palette.Muted, fontWeight = FontWeight.SemiBold)
+                                            when (status) {
+                                                "present" -> StatusPill("P", Palette.SuccessBg2, Palette.SuccessText)
+                                                "under_review" -> StatusPill("?", Palette.WarnBg, Palette.WarnText)
+                                                else -> Text("—", color = Palette.Muted, fontWeight = FontWeight.SemiBold)
                                             }
                                         }
                                     }
@@ -134,6 +131,22 @@ fun AttendanceMatrixScreen(
                 }
             }
         }
+    }
+}
+
+/** Compact presence marker: present, or awaiting the lecturer's decision. */
+@Composable
+private fun StatusPill(
+    label: String,
+    background: androidx.compose.ui.graphics.Color,
+    ink: androidx.compose.ui.graphics.Color,
+) {
+    Box(
+        Modifier
+            .background(background, RoundedCornerShape(999.dp))
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+    ) {
+        Text(label, color = ink, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
     }
 }
 

@@ -12,6 +12,7 @@ const manualCode = require('./manualCode.service');
 const settingsService = require('./settings.service');
 const geofenceService = require('./geofence.service');
 const gpsFixService = require('./gpsFix.service');
+const attemptVerdict = require('./attemptVerdict.service');
 const peerSeeding = require('./peerSeeding.service');
 
 async function getAttendanceStatus(studentPk, courseId) {
@@ -25,63 +26,73 @@ async function getAttendanceStatus(studentPk, courseId) {
   const query = { student: studentPk, course: courseId, attendanceDate };
   if (activeSessionId) query.session = activeSessionId;
   const attendance = await Attendance.findOne(query);
-  return { attended: Boolean(attendance) };
-}
-
-async function assertAutomaticMethodAllowed(session, method) {
-  const verification = session.verification;
-  const supportsMethod = method === 'bluetooth'
-    ? verification === 'bluetooth' || verification === 'both'
-    : verification === 'geofence' || verification === 'both';
-  if (!supportsMethod) {
-    return {
-      ok: false,
-      status: 400,
-      error: method === 'bluetooth'
-        ? 'This session does not use Bluetooth verification.'
-        : 'This session does not use GPS verification.',
-    };
-  }
-  const settings = await settingsService.getSettings();
-  if (!settingsService.isVerificationAllowed(settings, verification)) {
-    return { ok: false, status: 403, error: 'This session verification policy is currently disabled.' };
-  }
-  return { ok: true };
-}
-
-async function getBluetoothTarget(courseId) {
-  const resolved = await resolveActiveSessionForCourse(courseId);
-  if (resolved.error) return { ok: false, status: 400, error: resolved.error };
-  const methodGate = await assertAutomaticMethodAllowed(resolved.session, 'bluetooth');
-  if (!methodGate.ok) return methodGate;
-  if (!isBroadcastLive(resolved.session)) {
-    return { ok: false, status: 400, error: 'Attendance is not open for this session right now.' };
-  }
-  return { ok: true };
+  return { status: attendance ? attendance.status : 'none' };
 }
 
 /**
- * Shared by every attendance-submission path: idempotent create, resolving a
- * duplicate submission (same student/session/day) to the existing row instead
- * of erroring — including the race where two requests both miss the initial
- * findOne and hit the unique-index conflict on create.
+ * Whether the student should bother scanning for Bluetooth at all. False when
+ * the admin has killed BLE globally or no lecturer is broadcasting — the client
+ * then spends its whole 90s window on GPS instead of splitting attention.
  */
-async function createAttendanceRecord({ studentPk, course, session, method }) {
+async function getBluetoothTarget(courseId) {
+  const resolved = await resolveActiveSessionForCourse(courseId);
+  if (resolved.error) return { ok: false, status: 400, error: resolved.error };
+  if (!await settingsService.isBleEnabled()) {
+    return { ok: true, available: false };
+  }
+  return { ok: true, available: isBroadcastLive(resolved.session) };
+}
+
+function centroidDoc(centroid, distanceM) {
+  if (!centroid) return undefined;
+  return {
+    lat: centroid.lat,
+    lng: centroid.lng,
+    fixCount: centroid.fixCount,
+    ...(Number.isFinite(distanceM) ? { distanceM } : {}),
+  };
+}
+
+/**
+ * Idempotent write for every acceptance path.
+ *
+ * A genuine automatic pass always overwrites a non-present record: a student who
+ * was sent to review, or even rejected, and then actually walks into the room
+ * must be able to fix it themselves. Nothing else overwrites — resubmitting the
+ * code while already under review is a no-op, not a new pending row.
+ */
+async function upsertAttendance({
+  studentPk, course, session, method, status, band, centroid, seedRelayed = false,
+}) {
   const attendanceDate = localYmd();
+  const doc = {
+    student: studentPk,
+    course: course._id,
+    session: session._id,
+    courseCode: course.code,
+    // Stable, human-readable identifier for the lecture occurrence — not the
+    // ephemeral rotating token/code, which carries no meaning once rotated.
+    lectureCode: `${session.lectureDay} ${session.startTime}-${session.endTime}`,
+    attendanceDate,
+    method,
+    status,
+    band,
+    seedRelayed,
+    ...(centroid ? { centroid } : {}),
+  };
+
   const existing = await Attendance.findOne({ student: studentPk, session: session._id, attendanceDate });
-  if (existing) return { ok: true, attendance: existing, duplicate: true };
+  if (existing) {
+    if (existing.status !== 'present' && status === 'present') {
+      Object.assign(existing, doc, { reviewedAt: null, reviewedBy: null });
+      await existing.save();
+      return { ok: true, attendance: existing, duplicate: false, upgraded: true };
+    }
+    return { ok: true, attendance: existing, duplicate: true };
+  }
+
   try {
-    const attendance = await Attendance.create({
-      student: studentPk,
-      course: course._id,
-      session: session._id,
-      courseCode: course.code,
-      // Stable, human-readable identifier for the lecture occurrence — not the
-      // ephemeral rotating token/code, which carries no meaning once rotated.
-      lectureCode: `${session.lectureDay} ${session.startTime}-${session.endTime}`,
-      attendanceDate,
-      method,
-    });
+    const attendance = await Attendance.create(doc);
     return { ok: true, attendance, duplicate: false };
   } catch (err) {
     if (err && err.code === 11000) {
@@ -92,107 +103,161 @@ async function createAttendanceRecord({ studentPk, course, session, method }) {
   }
 }
 
-/** BLE path. `canAdvertise` controls peer-seeding eligibility. */
-async function recordBluetoothAttendance(studentPk, courseId, token, canAdvertise = false) {
-  const resolved = await resolveActiveSessionForCourse(courseId);
-  if (resolved.error) return { ok: false, status: 400, error: resolved.error };
-  const methodGate = await assertAutomaticMethodAllowed(resolved.session, 'bluetooth');
-  if (!methodGate.ok) return methodGate;
-  if (!isBroadcastLive(resolved.session)) {
-    return { ok: false, status: 400, error: 'Attendance is not open for this session right now.' };
-  }
-  const schedule = checkScheduleWindow(resolved.session);
-  if (!schedule.ok) return { ok: false, status: 400, error: schedule.reason };
-  if (!await bluetoothCode.verifyToken(String(resolved.session._id), token)) {
-    return { ok: false, status: 400, error: 'Invalid or expired Bluetooth token. Move closer and try again.' };
-  }
-  const result = await createAttendanceRecord({
-    studentPk, course: resolved.course, session: resolved.session, method: 'bluetooth',
-  });
-  if (!result.duplicate) {
-    result.seeding = await peerSeeding.selectSeedingRole(resolved.session, studentPk, canAdvertise);
-  }
-  return result;
-}
-
 /**
- * GPS path: one fix per call — the client streams fixes as they arrive over its
- * 90s window, and the server re-evaluates the accumulated centroid on each one.
- * `pending` (not an error) means "keep streaming"; the client's own 90s timeout,
- * not the server, is what eventually gives up.
+ * BLE path — the strongest evidence there is. Receiving a live token means the
+ * student's radio physically heard the room, so it passes outright without
+ * consulting GPS at all.
  */
-async function recordGpsFixAttendance(studentPk, courseId, fix, canAdvertise = false) {
+async function recordBluetoothAttendance(studentPk, courseId, token, canAdvertise = false) {
   const resolved = await resolveActiveSessionForCourse(courseId);
   if (resolved.error) return { ok: false, status: 400, error: resolved.error };
   const { session, course } = resolved;
 
-  const methodGate = await assertAutomaticMethodAllowed(session, 'gps');
-  if (!methodGate.ok) return methodGate;
+  if (!await settingsService.isBleEnabled()) {
+    return { ok: false, status: 403, error: 'Bluetooth verification is currently disabled.' };
+  }
+  if (!isBroadcastLive(session)) {
+    return { ok: false, status: 400, error: 'Attendance is not open for this session right now.' };
+  }
   const schedule = checkScheduleWindow(session);
   if (!schedule.ok) return { ok: false, status: 400, error: schedule.reason };
 
-  if (!Array.isArray(session.buildings) || session.buildings.length === 0) {
-    return { ok: false, status: 400, error: 'No building configured for this session.' };
-  }
-  const geofences = await geofenceService.findByIds(session.buildings);
-  if (geofences.length === 0) {
-    return { ok: false, status: 400, error: 'No active building configured for this session.' };
+  const verified = await bluetoothCode.verifyToken(String(session._id), token);
+  if (!verified.ok) {
+    return { ok: false, status: 400, error: 'Invalid or expired Bluetooth token. Move closer and try again.' };
   }
 
-  const settings = await settingsService.getSettings();
-  const bufferMeters = session.verification === 'geofence' ? settings.bufferGpsOnly : settings.bufferGpsBle;
-
-  const { accepted, centroid } = gpsFixService.evaluateFix(
-    String(studentPk), String(session._id), fix, geofences, bufferMeters,
-  );
-  if (!accepted) {
-    return { ok: true, pending: true };
-  }
-  gpsFixService.clearFixes(String(studentPk), String(session._id));
-
-  const result = await createAttendanceRecord({
-    studentPk, course, session, method: 'gps',
+  const result = await upsertAttendance({
+    studentPk,
+    course,
+    session,
+    method: 'bluetooth',
+    status: 'present',
+    band: 'inside',
+    seedRelayed: verified.role === 'seed',
   });
-  if (result.attendance && !result.duplicate && centroid) {
-    // Audit-only — never fail the attendance record over this write.
-    await Attendance.updateOne(
-      { _id: result.attendance._id },
-      { $set: { centroid: { lat: centroid.lat, lng: centroid.lng, fixCount: centroid.fixCount } } },
-    ).catch(() => {});
-  }
+
+  gpsFixService.clearFixes(String(studentPk), String(session._id));
+  attemptVerdict.clear(String(studentPk), String(session._id));
+
   if (!result.duplicate) {
-    result.seeding = await peerSeeding.selectSeedingRole(session, studentPk, canAdvertise);
+    result.seeding = await peerSeeding.selectSeedingRole(session, studentPk, canAdvertise, verified.role);
   }
   return result;
 }
 
 /**
- * Fallback path: verify the lecturer-controlled 8-digit code instead of the BLE
- * token. Independent of Bluetooth/broadcast state entirely — deliberately does
- * NOT check isBroadcastLive, since the manual code works whether or not the
- * lecturer's phone is broadcasting.
+ * GPS path: one fix per call — the client streams fixes across its 90s window and
+ * the server re-bands the accumulated centroid on each one.
+ *
+ * Everything short of a pass returns the same `collecting: true` the client sees
+ * while genuinely still gathering fixes. That is deliberate: the client is never
+ * told which band it reached, so a modified app cannot learn how far out it is,
+ * and the suspicious/far distinction stays server-side until a code is submitted.
  */
-async function recordManualCodeAttendance(studentPk, courseId, code) {
+async function recordGpsFixAttendance(studentPk, courseId, fix) {
   const resolved = await resolveActiveSessionForCourse(courseId);
   if (resolved.error) return { ok: false, status: 400, error: resolved.error };
+  const { session, course } = resolved;
 
-  const allowed = await settingsService.isManualCodeAllowed();
-  if (!allowed || !resolved.session.manualCodeEnabled) {
-    return { ok: false, status: 400, error: 'Manual attendance code is not enabled for this session.' };
-  }
-  const schedule = checkScheduleWindow(resolved.session);
+  const schedule = checkScheduleWindow(session);
   if (!schedule.ok) return { ok: false, status: 400, error: schedule.reason };
 
-  const attempt = await manualCode.verifyAttempt(String(studentPk), resolved.session, code);
+  const studentKey = String(studentPk);
+  const sessionKey = String(session._id);
+
+  const geofences = await geofenceService.findByIds(session.buildings);
+  if (geofences.length === 0) {
+    // Buildings are mandatory at creation, so this means every one was later
+    // deleted or deactivated. Fail closed: record `unknown` so a later code
+    // submission routes to review rather than silently passing.
+    attemptVerdict.record(studentKey, sessionKey, { band: 'unknown' });
+    return { ok: true, collecting: true };
+  }
+
+  const settings = await settingsService.getSettings();
+  const verdict = gpsFixService.evaluateFix(
+    studentKey, sessionKey, fix, geofences, settingsService.buffers(settings),
+  );
+  if (!verdict.ready) return { ok: true, collecting: true };
+
+  attemptVerdict.record(studentKey, sessionKey, {
+    band: verdict.band,
+    centroid: verdict.centroid,
+    distanceM: verdict.distanceM,
+  });
+
+  if (!gpsFixService.isPassBand(verdict.band)) {
+    return { ok: true, collecting: true };
+  }
+
+  const result = await upsertAttendance({
+    studentPk,
+    course,
+    session,
+    method: 'gps',
+    status: 'present',
+    band: verdict.band,
+    centroid: centroidDoc(verdict.centroid, verdict.distanceM),
+  });
+
+  gpsFixService.clearFixes(studentKey, sessionKey);
+  attemptVerdict.clear(studentKey, sessionKey);
+  // No seeding here on purpose: a GPS pass only proves the student is within the
+  // near buffer of the building, not inside the room. See peerSeeding.service.
+  return result;
+}
+
+/**
+ * "Get help" path: the lecturer's code, submitted after the automatic attempt
+ * failed. What it grants depends on how far out the student's last GPS verdict
+ * put them — a correct code is proof the lecturer is nearby and willing to
+ * vouch, not proof of location, so it never converts a far/unknown attempt into
+ * a silent pass.
+ */
+async function recordHelpCodeAttendance(studentPk, courseId, code) {
+  const resolved = await resolveActiveSessionForCourse(courseId);
+  if (resolved.error) return { ok: false, status: 400, error: resolved.error };
+  const { session, course } = resolved;
+
+  const schedule = checkScheduleWindow(session);
+  if (!schedule.ok) return { ok: false, status: 400, error: schedule.reason };
+
+  const studentKey = String(studentPk);
+  const sessionKey = String(session._id);
+
+  const attempt = await manualCode.verifyAttempt(studentKey, session, code);
   if (attempt.lockedOut) {
     return { ok: false, status: 429, error: 'Too many incorrect attempts. Try again in a couple of minutes.' };
   }
   if (!attempt.ok) {
-    return { ok: false, status: 400, error: 'Invalid or expired attendance code.' };
+    return { ok: false, status: 400, error: 'Incorrect code. Ask your lecturer to read it out again.' };
   }
-  return createAttendanceRecord({
-    studentPk, course: resolved.course, session: resolved.session, method: 'manual_code',
+
+  const settings = await settingsService.getSettings();
+  const stored = attemptVerdict.get(studentKey, sessionKey);
+  // No stored verdict means the attempt never produced a usable fix at all
+  // (location denied, no provider, no lock). Treat that as unknown, never a pass.
+  const band = stored?.band || 'unknown';
+
+  const passes = gpsFixService.isPassBand(band)
+    || (band === 'suspicious' && settings.suspiciousBandAutoPass !== false);
+
+  const result = await upsertAttendance({
+    studentPk,
+    course,
+    session,
+    method: 'code_override',
+    status: passes ? 'present' : 'under_review',
+    band,
+    centroid: centroidDoc(stored?.centroid, stored?.distanceM),
   });
+
+  if (passes) {
+    gpsFixService.clearFixes(studentKey, sessionKey);
+    attemptVerdict.clear(studentKey, sessionKey);
+  }
+  return result;
 }
 
 /** Single dispatcher behind `POST /api/attendance`; the validator requires one method. */
@@ -204,8 +269,8 @@ async function recordAttendance(studentPk, courseId, {
   // This project has no course-enrolment source, so do not add a membership gate
   // here or in the method-specific paths.
   if (token) return recordBluetoothAttendance(studentPk, courseId, token, canAdvertise);
-  if (fix) return recordGpsFixAttendance(studentPk, courseId, fix, canAdvertise);
-  return recordManualCodeAttendance(studentPk, courseId, code);
+  if (fix) return recordGpsFixAttendance(studentPk, courseId, fix);
+  return recordHelpCodeAttendance(studentPk, courseId, code);
 }
 
 async function getAttendanceMatrix(course) {
@@ -248,10 +313,13 @@ async function getAttendanceMatrix(course) {
         attendance: {},
       });
     }
-    rowsMap.get(sid).attendance[String(doc.session)] = true;
+    // Status only — `method`, `band`, and `centroid` stay server-internal.
+    rowsMap.get(sid).attendance[String(doc.session)] = doc.status;
   });
   return {
-    course: { _id: course._id, code: course.code, batch: course.batch, name: course.name },
+    course: {
+      _id: course._id, code: course.code, batch: course.batch, name: course.name,
+    },
     sessions: sessions.map((s) => ({
       _id: s._id,
       label: formatAttendanceTableColumnLabel(s, sessionMinDate.get(String(s._id))),
@@ -268,6 +336,9 @@ async function getAttendanceMatrix(course) {
 async function getSeedToken(studentPk, sessionId) {
   const sessionItem = await LectureSession.findOne({ _id: sessionId, deleted: false });
   if (!sessionItem) return { ok: false, status: 404, error: 'Session not found' };
+  if (!await settingsService.isBleEnabled()) {
+    return { ok: false, status: 403, error: 'Bluetooth is currently disabled.' };
+  }
 
   const result = await bluetoothCode.getSeedToken(String(sessionId), String(studentPk));
   if (!result) {

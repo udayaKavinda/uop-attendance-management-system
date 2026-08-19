@@ -23,7 +23,6 @@ const { GRACE_MS } = manualCode;
 function makeSession(overrides = {}) {
   return {
     _id: 'session1',
-    manualCodeEnabled: true,
     manualCodeRotationMode: 'none',
     manualCodeRotationSeconds: 60,
     save: jest.fn().mockResolvedValue(undefined),
@@ -158,23 +157,25 @@ describe('manualCode', () => {
   });
 
   describe('getStatus', () => {
-    it('reports disabled with no code when manualCodeEnabled is false', async () => {
-      const status = await manualCode.getStatus(makeSession({ manualCodeEnabled: false }));
-      expect(status).toMatchObject({ enabled: false, code: null, rotatesIn: null });
-      expect(mockModel.findOne).not.toHaveBeenCalled();
-    });
-
     it('reports no live code when the session is outside its schedule window', async () => {
       mockIsWithinScheduleWindow.mockReturnValue(false);
       const status = await manualCode.getStatus(makeSession());
-      expect(status).toMatchObject({ enabled: true, running: false, code: null });
+      expect(status).toMatchObject({ running: false, code: null, rotatesIn: null });
       expect(mockModel.findOne).not.toHaveBeenCalled();
     });
 
-    it('returns the live code while running', async () => {
+    it('returns the live code while running — every session has one', async () => {
       mockModel.findOne.mockResolvedValue({ code: '55556666', prevCode: null, generatedAt: Date.now(), paused: false });
       const status = await manualCode.getStatus(makeSession());
-      expect(status).toMatchObject({ enabled: true, running: true, code: '55556666' });
+      expect(status).toMatchObject({ running: true, code: '55556666' });
+    });
+
+    it('reports the rotation config back to the lecturer', async () => {
+      mockModel.findOne.mockResolvedValue({ code: '55556666', prevCode: null, generatedAt: Date.now(), paused: false });
+      const status = await manualCode.getStatus(makeSession({
+        manualCodeRotationMode: 'interval', manualCodeRotationSeconds: 45,
+      }));
+      expect(status).toMatchObject({ rotationMode: 'interval', rotationSeconds: 45 });
     });
   });
 

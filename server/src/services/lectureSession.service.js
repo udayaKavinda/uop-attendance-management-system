@@ -6,7 +6,7 @@ const bluetoothCode = require('./bluetoothCode.service');
 const manualCode = require('./manualCode.service');
 const settingsService = require('./settings.service');
 const {
-  validateSessionCreateBody, checkSessionOverlap, checkVerificationAllowed,
+  validateSessionCreateBody, checkSessionOverlap,
 } = require('../validators/session.validator');
 const { staffSessionMatch } = require('./auth.service');
 const { localYmd } = require('../utils/date');
@@ -30,21 +30,13 @@ async function createSession(course, body) {
   );
   if (!overlap.ok) return overlap;
 
-  const modeGate = await checkVerificationAllowed(validated.verification);
-  if (!modeGate.ok) return modeGate;
-  if (validated.manualCodeEnabled && !await settingsService.isManualCodeAllowed()) {
-    return { ok: false, status: 403, error: 'Manual attendance codes are disabled by the administrator' };
-  }
-
-  if (validated.buildings.length > 0) {
-    const found = await Geofence.countDocuments({
-      _id: { $in: validated.buildings },
-      deleted: false,
-      active: true,
-    });
-    if (found !== validated.buildings.length) {
-      return { ok: false, status: 400, error: 'One or more buildings were not found' };
-    }
+  const found = await Geofence.countDocuments({
+    _id: { $in: validated.buildings },
+    deleted: false,
+    active: true,
+  });
+  if (found !== validated.buildings.length) {
+    return { ok: false, status: 400, error: 'One or more buildings were not found' };
   }
 
   const created = await LectureSession.create({
@@ -56,9 +48,7 @@ async function createSession(course, body) {
     occurrenceDate: validated.recurring
       ? null
       : nextOccurrenceDate(validated.lectureDay, new Date(), validated.endTime),
-    verification: validated.verification,
     buildings: validated.buildings,
-    manualCodeEnabled: validated.manualCodeEnabled,
     manualCodeRotationMode: validated.manualCodeRotationMode,
     manualCodeRotationSeconds: validated.manualCodeRotationSeconds,
     active: true,
@@ -133,12 +123,9 @@ async function assertCanBroadcastNow(sessionItem, now = new Date()) {
   if (!sessionItem.active) {
     return { ok: false, status: 400, error: 'Session is not active' };
   }
-  const verification = sessionItem.verification;
-  if (verification !== 'bluetooth' && verification !== 'both') {
-    return { ok: false, status: 400, error: 'Bluetooth broadcast is not allowed for this session.' };
+  if (!await settingsService.isBleEnabled()) {
+    return { ok: false, status: 403, error: 'Bluetooth is switched off by the administrator.' };
   }
-  const modeGate = await checkVerificationAllowed(verification);
-  if (!modeGate.ok) return modeGate;
   const course = await resolveCourseForSession(sessionItem);
   if (!course?.active) {
     return { ok: false, status: 400, error: 'Course is disabled' };

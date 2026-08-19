@@ -3,19 +3,31 @@
 Native Android attendance administration and student attendance for the University of
 Peradeniya Faculty of Engineering, backed by an Express/MongoDB API.
 
-## Implemented verification modes
+## How attendance is verified
 
-- **Bluetooth** — a lecturer phone broadcasts a rotating BLE token.
-- **GPS geofence** — the student submits precise fixes during a 90-second window; the
-  server accepts a stable centroid inside one of the session's active building polygons.
-- **Both** — Bluetooth and GPS run as independent concurrent alternatives; either may
-  accept attendance.
-- **Manual code** — optional 8-digit lecturer-controlled fallback alongside any mode.
-- **Peer seeding** — selected, capable students briefly rebroadcast rotating BLE tokens;
-  expired leases are rejected at verification time.
+Every session works the same way — there is no policy to pick. A student's check-in runs
+one 90-second window in which **Bluetooth and GPS are tried together**, and the first to
+succeed marks them present:
 
-Attendance records retain the accepted method internally; the standard matrix and CSV use
-only the generic present marker `P`.
+- **Bluetooth** — a lecturer phone broadcasts a rotating BLE token. Hearing it is proof
+  of being in the room, and passes outright.
+- **GPS geofence** — the phone streams precise fixes; a stable centroid inside the
+  session's building polygon, or within the admin's pass distance of it, also passes.
+
+If neither succeeds, the student gets **Try again** (another window) or **Get help**,
+which asks for the 8-digit code the lecturer reads out. How far away they were decides
+what the code does: near the building it marks them present, further out it only queues
+them for the lecturer's **review**, where they are approved or rejected by name.
+
+Two supporting mechanisms:
+
+- **Peer seeding** — a few students who heard the lecturer directly rebroadcast the token
+  to extend range; they cannot tell whether they were really picked.
+- **Distance bands** — the pass and outer radii, and whether the outer band's code
+  passes or reviews, are admin settings.
+
+Attendance records retain the method, band, and position internally for auditing. The
+matrix and CSV show only presence and "awaiting review".
 
 ## Repository layout
 

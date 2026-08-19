@@ -27,26 +27,39 @@ jest.mock('../models/ManualCode', () => ({
   }),
 }));
 
-// Settings singleton in-memory store
-let mockSettingsStore = null;
+// Settings singleton — returned by reference and reset in place, so the settings
+// service's 5s read-through cache always points at the live object.
+const mockSettingsStore = {};
+function resetSettings() {
+  Object.keys(mockSettingsStore).forEach((k) => delete mockSettingsStore[k]);
+  Object.assign(mockSettingsStore, {
+    bleEnabled: true,
+    nearBufferM: 50,
+    farBufferM: 100,
+    suspiciousBandAutoPass: true,
+    seedRate: 0,
+    seedWindowMs: 60000,
+  });
+}
+resetSettings();
 jest.mock('../models/Settings', () => ({
   findOneAndUpdate: jest.fn((_filter, update) => {
-    // Upsert-on-missing (covers both the plain read path's $setOnInsert and the write path's $set).
-    if (!mockSettingsStore) mockSettingsStore = { manualCodeAllowed: true };
     if (update.$set) Object.assign(mockSettingsStore, update.$set);
-    return Promise.resolve({ ...mockSettingsStore });
+    return Promise.resolve(mockSettingsStore);
   }),
 }));
 
-// Mock models before loading the app
 jest.mock('../models/Person', () => ({ findById: jest.fn(), findOne: jest.fn() }));
 jest.mock('../models/Course', () => ({ findById: jest.fn(), findOne: jest.fn() }));
 jest.mock('../models/LectureSession', () => ({ findOne: jest.fn(), find: jest.fn() }));
+jest.mock('../models/Geofence', () => ({ find: jest.fn().mockResolvedValue([]) }));
 jest.mock('../models/Attendance', () => ({
   findOne: jest.fn(),
+  find: jest.fn(),
   create: jest.fn(),
   distinct: jest.fn(),
   countDocuments: jest.fn().mockResolvedValue(0),
+  updateOne: jest.fn().mockResolvedValue({}),
 }));
 
 const request = require('supertest');
@@ -70,9 +83,8 @@ function makeId() {
 }
 
 function makeSession(overrides = {}) {
-  const id = makeId();
   return {
-    _id: id,
+    _id: makeId(),
     course: makeId(),
     lectureDay: todayDay(),
     startTime: '00:00',
@@ -80,7 +92,7 @@ function makeSession(overrides = {}) {
     recurring: true,
     active: true,
     deleted: false,
-    manualCodeEnabled: false,
+    buildings: [makeId()],
     manualCodeRotationMode: 'none',
     manualCodeRotationSeconds: 60,
     save: jest.fn().mockResolvedValue(undefined),
@@ -89,9 +101,8 @@ function makeSession(overrides = {}) {
 }
 
 function makeCourse(overrides = {}) {
-  const id = makeId();
   return {
-    _id: id, code: 'CS101', active: true, lecturers: [], ...overrides,
+    _id: makeId(), code: 'CS101', active: true, lecturers: [], ...overrides,
   };
 }
 
@@ -109,13 +120,23 @@ function headers(person) {
   return { ...authHeader(person), ...csrfHeader };
 }
 
+/** Wires the session-access guard so `lecturer` owns `session`. */
+function ownSession(lecturer, session) {
+  const course = makeCourse({ lecturers: [lecturer._id] });
+  LectureSession.findOne.mockResolvedValue(session);
+  Course.findById.mockResolvedValue(course);
+  return course;
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   Object.keys(mockManualCodeStore).forEach((k) => delete mockManualCodeStore[k]);
-  mockSettingsStore = null;
+  resetSettings();
+  Attendance.findOne.mockResolvedValue(null);
+  Attendance.create.mockImplementation((doc) => Promise.resolve({ _id: makeId(), ...doc }));
 });
 
-// ─── GET/PATCH /api/admin/settings (global kill-switch) ──────────────────────
+// ─── GET/PATCH /api/admin/settings ───────────────────────────────────────────
 
 describe('GET/PATCH /api/admin/settings', () => {
   test('401 when not authenticated', async () => {
@@ -123,7 +144,7 @@ describe('GET/PATCH /api/admin/settings', () => {
     expect(res.status).toBe(401);
   });
 
-  test('lecturers can read settings (needed for the create-session mode picker) but not write them', async () => {
+  test('lecturers can read settings but not write them', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const getRes = await request(app).get('/api/admin/settings').set(authHeader(lecturer));
     expect(getRes.status).toBe(200);
@@ -131,42 +152,69 @@ describe('GET/PATCH /api/admin/settings', () => {
     const patchRes = await request(app)
       .patch('/api/admin/settings')
       .set(headers(lecturer))
-      .send({ manualCodeAllowed: false });
+      .send({ bleEnabled: false });
     expect(patchRes.status).toBe(403);
   });
 
-  test('admin can read and update settings; the kill-switch takes effect immediately', async () => {
+  test('exposes the full policy shape', async () => {
     const admin = makePerson({ role: 'admin' });
-
-    const initial = await request(app).get('/api/admin/settings').set(authHeader(admin));
-    expect(initial.status).toBe(200);
-    expect(typeof initial.body.manualCodeAllowed).toBe('boolean');
-
-    const patchOff = await request(app)
-      .patch('/api/admin/settings')
-      .set(headers(admin))
-      .send({ manualCodeAllowed: false });
-    expect(patchOff.status).toBe(200);
-    expect(patchOff.body.manualCodeAllowed).toBe(false);
-
-    const getAfterOff = await request(app).get('/api/admin/settings').set(authHeader(admin));
-    expect(getAfterOff.body.manualCodeAllowed).toBe(false);
-
-    // Restore for the describe blocks that follow.
-    const patchOn = await request(app)
-      .patch('/api/admin/settings')
-      .set(headers(admin))
-      .send({ manualCodeAllowed: true });
-    expect(patchOn.body.manualCodeAllowed).toBe(true);
+    const res = await request(app).get('/api/admin/settings').set(authHeader(admin));
+    expect(res.body).toMatchObject({
+      bleEnabled: expect.any(Boolean),
+      nearBufferM: expect.any(Number),
+      farBufferM: expect.any(Number),
+      suspiciousBandAutoPass: expect.any(Boolean),
+      seedRate: expect.any(Number),
+      seedWindowMs: expect.any(Number),
+    });
   });
 
-  test('rejects a non-boolean manualCodeAllowed', async () => {
+  test('admin can flip the Bluetooth kill switch and it reads back immediately', async () => {
     const admin = makePerson({ role: 'admin' });
-    const res = await request(app)
-      .patch('/api/admin/settings')
-      .set(headers(admin))
-      .send({ manualCodeAllowed: 'nope' });
+
+    const off = await request(app).patch('/api/admin/settings').set(headers(admin)).send({ bleEnabled: false });
+    expect(off.status).toBe(200);
+    expect(off.body.bleEnabled).toBe(false);
+
+    const after = await request(app).get('/api/admin/settings').set(authHeader(admin));
+    expect(after.body.bleEnabled).toBe(false);
+  });
+
+  test('admin can move the distance buffers', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const res = await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ nearBufferM: 25, farBufferM: 250 });
+    expect(res.body).toMatchObject({ nearBufferM: 25, farBufferM: 250 });
+  });
+
+  test('rejects a far buffer smaller than the near buffer', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const res = await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ nearBufferM: 200, farBufferM: 100 });
     expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/farBufferM/);
+  });
+
+  test('rejects a negative or absurd buffer', async () => {
+    const admin = makePerson({ role: 'admin' });
+    expect((await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ nearBufferM: -1 })).status).toBe(400);
+    expect((await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ farBufferM: 99999 })).status).toBe(400);
+  });
+
+  test('rejects a non-boolean switch', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const res = await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ bleEnabled: 'nope' });
+    expect(res.status).toBe(400);
+  });
+
+  test('admin can turn off the suspicious-band auto pass', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const res = await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ suspiciousBandAutoPass: false });
+    expect(res.body.suspiciousBandAutoPass).toBe(false);
   });
 });
 
@@ -194,31 +242,12 @@ describe('GET/PATCH /api/admin/sessions/:id/manual-code', () => {
     expect(res.status).toBe(403);
   });
 
-  test('reports disabled by default', async () => {
+  test('every running session already has a live code — no enabling step', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
-    const session = makeSession();
-    const course = makeCourse({ lecturers: [lecturer._id] });
-    LectureSession.findOne.mockResolvedValue(session);
-    Course.findById.mockResolvedValue(course);
+    ownSession(lecturer, makeSession());
+    const session = await LectureSession.findOne();
     const res = await request(app).get(`/api/admin/sessions/${session._id}/manual-code`).set(authHeader(lecturer));
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ enabled: false, code: null, allowed: true });
-  });
-
-  test('enabling seeds a fresh code while the session is running', async () => {
-    const lecturer = makePerson({ role: 'lecturer' });
-    const session = makeSession();
-    const course = makeCourse({ lecturers: [lecturer._id] });
-    LectureSession.findOne.mockResolvedValue(session);
-    Course.findById.mockResolvedValue(course);
-
-    const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/manual-code`)
-      .set(headers(lecturer))
-      .send({ enabled: true });
-
-    expect(res.status).toBe(200);
-    expect(res.body.enabled).toBe(true);
     expect(res.body.running).toBe(true);
     expect(res.body.code).toMatch(/^[0-9]{8}$/);
   });
@@ -226,14 +255,9 @@ describe('GET/PATCH /api/admin/sessions/:id/manual-code', () => {
   test('pausing freezes the code; resuming regenerates it with no grace on the old one', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const session = makeSession();
-    const course = makeCourse({ lecturers: [lecturer._id] });
-    LectureSession.findOne.mockResolvedValue(session);
-    Course.findById.mockResolvedValue(course);
+    ownSession(lecturer, session);
 
-    const first = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/manual-code`)
-      .set(headers(lecturer))
-      .send({ enabled: true });
+    const first = await request(app).get(`/api/admin/sessions/${session._id}/manual-code`).set(authHeader(lecturer));
     const firstCode = first.body.code;
 
     const paused = await request(app)
@@ -254,15 +278,9 @@ describe('GET/PATCH /api/admin/sessions/:id/manual-code', () => {
   test('regenerate forces a new code immediately', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const session = makeSession();
-    const course = makeCourse({ lecturers: [lecturer._id] });
-    LectureSession.findOne.mockResolvedValue(session);
-    Course.findById.mockResolvedValue(course);
+    ownSession(lecturer, session);
 
-    const first = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/manual-code`)
-      .set(headers(lecturer))
-      .send({ enabled: true });
-
+    const first = await request(app).get(`/api/admin/sessions/${session._id}/manual-code`).set(authHeader(lecturer));
     const regenerated = await request(app)
       .patch(`/api/admin/sessions/${session._id}/manual-code`)
       .set(headers(lecturer))
@@ -270,32 +288,23 @@ describe('GET/PATCH /api/admin/sessions/:id/manual-code', () => {
     expect(regenerated.body.code).not.toBe(first.body.code);
   });
 
-  test('rejects enabling when the global switch is off', async () => {
-    const admin = makePerson({ role: 'admin' });
-    await request(app).patch('/api/admin/settings').set(headers(admin)).send({ manualCodeAllowed: false });
-
+  test('switching to interval rotation is accepted and reported back', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const session = makeSession();
-    const course = makeCourse({ lecturers: [lecturer._id] });
-    LectureSession.findOne.mockResolvedValue(session);
-    Course.findById.mockResolvedValue(course);
+    ownSession(lecturer, session);
 
     const res = await request(app)
       .patch(`/api/admin/sessions/${session._id}/manual-code`)
       .set(headers(lecturer))
-      .send({ enabled: true });
-    expect(res.status).toBe(403);
-
-    // Restore for the describe block that follows.
-    await request(app).patch('/api/admin/settings').set(headers(admin)).send({ manualCodeAllowed: true });
+      .send({ rotationMode: 'interval', rotationSeconds: 30 });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ rotationMode: 'interval', rotationSeconds: 30 });
   });
 
   test('rejects an out-of-range rotationSeconds', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const session = makeSession();
-    const course = makeCourse({ lecturers: [lecturer._id] });
-    LectureSession.findOne.mockResolvedValue(session);
-    Course.findById.mockResolvedValue(course);
+    ownSession(lecturer, session);
 
     const res = await request(app)
       .patch(`/api/admin/sessions/${session._id}/manual-code`)
@@ -303,11 +312,23 @@ describe('GET/PATCH /api/admin/sessions/:id/manual-code', () => {
       .send({ rotationMode: 'interval', rotationSeconds: 4 });
     expect(res.status).toBe(400);
   });
+
+  test('rejects an enabled flag — the field no longer exists', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const session = makeSession();
+    ownSession(lecturer, session);
+
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${session._id}/manual-code`)
+      .set(headers(lecturer))
+      .send({ enabled: true });
+    expect(res.status).toBe(400);
+  });
 });
 
-// ─── POST /api/attendance (student submission) ─────────────────────────
+// ─── POST /api/attendance (student "get help" submission) ─────────────────────
 
-describe('POST /api/attendance', () => {
+describe('POST /api/attendance — code submission', () => {
   test('401 when not authenticated', async () => {
     const res = await request(app)
       .post('/api/attendance')
@@ -335,73 +356,48 @@ describe('POST /api/attendance', () => {
     expect(res.status).toBe(400);
   });
 
-  test('400 when manual code is not enabled for the running session', async () => {
-    const student = makePerson({ role: 'student' });
-    const session = makeSession({ manualCodeEnabled: false });
-    const course = makeCourse();
-    Course.findById.mockResolvedValue(course);
-    LectureSession.find.mockResolvedValue([session]);
-
-    const res = await request(app)
-      .post('/api/attendance')
-      .set(headers(student))
-      .send({ courseId: course._id, code: '12345678' });
-    expect(res.status).toBe(400);
-  });
-
-  test('records attendance on a correct code and is idempotent on repeat submission', async () => {
+  test('a correct code with no location evidence lands in review and is idempotent', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const student = makePerson({ role: 'student' });
-    const session = makeSession({ manualCodeEnabled: true, manualCodeRotationMode: 'none' });
-    const course = makeCourse({ lecturers: [lecturer._id] });
+    const session = makeSession();
+    const course = ownSession(lecturer, session);
 
-    // Staff enables + reveals the code — mirrors the real workflow (lecturer turns
-    // it on and reads it out to the room).
-    LectureSession.findOne.mockResolvedValue(session);
-    Course.findById.mockResolvedValue(course);
     const staffRes = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/manual-code`)
-      .set(headers(lecturer))
-      .send({ enabled: true });
-    const code = staffRes.body.code;
+      .get(`/api/admin/sessions/${session._id}/manual-code`)
+      .set(authHeader(lecturer));
+    const { code } = staffRes.body;
     expect(code).toMatch(/^[0-9]{8}$/);
 
-    // Student submits it.
     LectureSession.find.mockResolvedValue([session]);
-    Attendance.findOne.mockResolvedValue(null);
-    Attendance.create.mockResolvedValue({ _id: makeId(), method: 'manual_code' });
 
     const res = await request(app)
       .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: course._id, code });
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('accepted');
-    expect(Attendance.create).toHaveBeenCalledWith(expect.objectContaining({ method: 'manual_code' }));
+    expect(res.body.status).toBe('under_review');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'code_override', status: 'under_review' }),
+    );
 
-    // Repeat submission resolves to the existing record instead of erroring.
-    Attendance.findOne.mockResolvedValue({ _id: 'existing-att' });
+    // Resubmitting does not queue a second pending row.
+    Attendance.create.mockClear();
+    Attendance.findOne.mockResolvedValue({ _id: 'existing-att', status: 'under_review' });
     const repeat = await request(app)
       .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: course._id, code });
-    expect(repeat.status).toBe(200);
-    expect(repeat.body.duplicate).toBe(true);
+    expect(repeat.body).toMatchObject({ status: 'under_review', duplicate: true });
+    expect(Attendance.create).not.toHaveBeenCalled();
   });
 
   test('rejects a wrong code repeatedly and locks the student out after 5 attempts', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const student = makePerson({ role: 'student' });
-    const session = makeSession({ manualCodeEnabled: true, manualCodeRotationMode: 'none' });
-    const course = makeCourse({ lecturers: [lecturer._id] });
+    const session = makeSession();
+    const course = ownSession(lecturer, session);
 
-    LectureSession.findOne.mockResolvedValue(session);
-    Course.findById.mockResolvedValue(course);
-    await request(app)
-      .patch(`/api/admin/sessions/${session._id}/manual-code`)
-      .set(headers(lecturer))
-      .send({ enabled: true });
-
+    await request(app).get(`/api/admin/sessions/${session._id}/manual-code`).set(authHeader(lecturer));
     LectureSession.find.mockResolvedValue([session]);
 
     for (let i = 0; i < 5; i += 1) {
@@ -418,5 +414,127 @@ describe('POST /api/attendance', () => {
       .set(headers(student))
       .send({ courseId: course._id, code: '00000000' });
     expect(lockedRes.status).toBe(429);
+  });
+});
+
+// ─── Lecturer review queue ───────────────────────────────────────────────────
+
+describe('GET/PATCH /api/admin/sessions/:id/reviews', () => {
+  function pendingQueue(docs) {
+    Attendance.find.mockReturnValue({
+      populate: jest.fn().mockReturnValue({ sort: jest.fn().mockResolvedValue(docs) }),
+    });
+  }
+
+  test('401 when not authenticated', async () => {
+    const res = await request(app).get(`/api/admin/sessions/${makeId()}/reviews`);
+    expect(res.status).toBe(401);
+  });
+
+  test('403 when the lecturer does not own the session', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const session = makeSession();
+    LectureSession.findOne.mockResolvedValue(session);
+    Course.findById.mockResolvedValue(makeCourse({ lecturers: [] }));
+    const res = await request(app).get(`/api/admin/sessions/${session._id}/reviews`).set(authHeader(lecturer));
+    expect(res.status).toBe(403);
+  });
+
+  test('lists pending submissions with the student identity but no distance evidence', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const session = makeSession();
+    ownSession(lecturer, session);
+    const submittedAt = new Date();
+    pendingQueue([{
+      _id: 'att-1',
+      timestamp: submittedAt,
+      band: 'far',
+      method: 'code_override',
+      student: { name: 'Nimal', email: 'nimal@uop.lk', studentId: 'E123' },
+    }]);
+
+    const res = await request(app).get(`/api/admin/sessions/${session._id}/reviews`).set(authHeader(lecturer));
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0]).toMatchObject({ _id: 'att-1', name: 'Nimal', email: 'nimal@uop.lk' });
+    expect(res.body.items[0].band).toBeUndefined();
+    expect(res.body.items[0].method).toBeUndefined();
+  });
+
+  test('approving a submission marks it present and stamps the reviewer', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const session = makeSession();
+    ownSession(lecturer, session);
+    const doc = {
+      _id: 'att-1', session: session._id, status: 'under_review', save: jest.fn().mockResolvedValue(undefined),
+    };
+    Attendance.findOne.mockResolvedValue(doc);
+
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${session._id}/reviews/att-1`)
+      .set(headers(lecturer))
+      .send({ decision: 'approve' });
+
+    expect(res.status).toBe(200);
+    expect(doc.status).toBe('present');
+    expect(doc.reviewedBy).toEqual(lecturer._id);
+    expect(doc.reviewedAt).toBeInstanceOf(Date);
+    expect(doc.save).toHaveBeenCalled();
+  });
+
+  test('rejecting a submission marks it rejected rather than deleting it', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const session = makeSession();
+    ownSession(lecturer, session);
+    const doc = {
+      _id: 'att-1', session: session._id, status: 'under_review', save: jest.fn().mockResolvedValue(undefined),
+    };
+    Attendance.findOne.mockResolvedValue(doc);
+
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${session._id}/reviews/att-1`)
+      .set(headers(lecturer))
+      .send({ decision: 'reject' });
+
+    expect(res.status).toBe(200);
+    expect(doc.status).toBe('rejected');
+  });
+
+  test('rejects an unrecognized decision', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const session = makeSession();
+    ownSession(lecturer, session);
+
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${session._id}/reviews/att-1`)
+      .set(headers(lecturer))
+      .send({ decision: 'maybe' });
+    expect(res.status).toBe(400);
+  });
+
+  test('404 when the submission does not belong to this session', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const session = makeSession();
+    ownSession(lecturer, session);
+    Attendance.findOne.mockResolvedValue(null);
+
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${session._id}/reviews/att-1`)
+      .set(headers(lecturer))
+      .send({ decision: 'approve' });
+    expect(res.status).toBe(404);
+  });
+
+  test('409 when the submission was already decided', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const session = makeSession();
+    ownSession(lecturer, session);
+    Attendance.findOne.mockResolvedValue({ _id: 'att-1', status: 'present', save: jest.fn() });
+
+    const res = await request(app)
+      .patch(`/api/admin/sessions/${session._id}/reviews/att-1`)
+      .set(headers(lecturer))
+      .send({ decision: 'approve' });
+    expect(res.status).toBe(409);
   });
 });

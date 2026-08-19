@@ -19,27 +19,32 @@ const lectureSessionSchema = new mongoose.Schema({
   },
   /**
    * True while a lecturer device is actively broadcasting the rotating BLE token.
-   * Attendance is open iff this is true and the heartbeat is fresh.
+   * BLE is one of two always-on verification paths; when it is off (or globally
+   * killed) the GPS geofence still runs.
    */
   broadcasting: { type: Boolean, default: false },
   /** Heartbeat: stamped on every broadcast-token poll (~5s); lets the server auto-close dead channels. */
   lastBroadcastSeenAt: { type: Date, default: null },
   /**
-   * Lecturer-controlled fallback, independent of Bluetooth. `manualCodeEnabled`
-   * is the config; the live rotating code itself lives in the ManualCode
-   * collection (see services/manualCode.service.js) and only exists while this
-   * is true and the session is inside its schedule window.
+   * The lecturer's escalation code. Always available for every session — the
+   * lecturer only chooses whether it rotates. The live value lives in the
+   * ManualCode collection and only exists inside the schedule window.
    */
-  manualCodeEnabled: { type: Boolean, required: true },
   manualCodeRotationMode: { type: String, enum: ['none', 'interval'], required: true },
   manualCodeRotationSeconds: { type: Number, required: true },
   /**
-   * Primary verification path for this session, constrained at create/update time
-   * by Settings.allowedModes (see settings.service.isVerificationAllowed).
-   * `geofence`/`both` require at least one entry in `buildings`.
+   * Buildings whose polygons define the GPS geofence for this session. Required:
+   * every session verifies by GPS, so a session without a polygon could never
+   * place a student in the pass bands.
    */
-  verification: { type: String, enum: ['bluetooth', 'geofence', 'both'], required: true },
-  buildings: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Geofence' }],
+  buildings: {
+    type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Geofence' }],
+    required: true,
+    validate: {
+      validator: (v) => Array.isArray(v) && v.length >= 1,
+      message: 'At least one building is required',
+    },
+  },
   active: { type: Boolean, default: true, index: true },
   deleted: { type: Boolean, default: false, index: true },
 }, { timestamps: true });

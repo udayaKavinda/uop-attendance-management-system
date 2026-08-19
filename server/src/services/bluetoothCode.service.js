@@ -47,24 +47,38 @@ async function getToken(sessionId) {
  * Verify a submitted token against every live row in the session's token pool
  * (the primary broadcast plus any active peer seeders) — a match on ANY row's
  * current or (within GRACE_MS) previous token is accepted.
+ *
+ * Reports WHICH row matched, because that decides seeding eligibility: only a
+ * student who heard the lecturer's own primary token is provably in the room and
+ * may seed. Re-seeding from a student who themselves heard a seeder would grow
+ * the effective radius hop by hop.
+ *
+ * @returns {Promise<{ ok: boolean, role: 'primary'|'seed'|null }>}
  */
 async function verifyToken(sessionId, submitted) {
   const key = String(sessionId || '').trim();
   const normalized = String(submitted || '').trim().toLowerCase();
-  if (!key || !normalized) return false;
+  if (!key || !normalized) return { ok: false, role: null };
 
   const Model = getModel();
   const docs = await Model.find({ sessionId: key });
   const now = Date.now();
 
-  return docs.some((doc) => {
+  const matches = (doc) => {
     if (doc.role === 'seed' && doc.leaseUntil != null && now >= doc.leaseUntil) return false;
     if (doc.token === normalized) return true;
     if (doc.prevToken && doc.prevToken === normalized) {
       return now - doc.generatedAt <= GRACE_MS;
     }
     return false;
-  });
+  };
+
+  // Prefer a primary match: if the same value somehow lives in both pools, the
+  // stronger provenance wins.
+  const matched = docs.filter(matches);
+  if (matched.length === 0) return { ok: false, role: null };
+  const primary = matched.find((doc) => doc.role !== 'seed');
+  return { ok: true, role: primary ? 'primary' : 'seed' };
 }
 
 /** Removes the ENTIRE pool for a session — primary token and every seeder. Full teardown. */

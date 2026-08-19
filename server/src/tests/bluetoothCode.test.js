@@ -66,19 +66,23 @@ describe('bluetoothCode', () => {
   });
 
   describe('verifyToken (whole pool)', () => {
-    it('returns true for the primary token', async () => {
+    it('accepts the primary token and reports the primary role', async () => {
       mockModel.find.mockResolvedValue([
         { token: 'validtoken12345', prevToken: null, generatedAt: Date.now() },
       ]);
-      expect(await bluetoothCode.verifyToken('session1', 'validtoken12345')).toBe(true);
+      expect(await bluetoothCode.verifyToken('session1', 'validtoken12345'))
+        .toEqual({ ok: true, role: 'primary' });
     });
 
-    it('returns true for a live seeder token even when it does not match the primary', async () => {
+    it('accepts a live seeder token and reports the seed role', async () => {
       mockModel.find.mockResolvedValue([
-        { token: 'primarytoken1234', prevToken: null, generatedAt: Date.now() },
-        { token: 'seedertoken1234', prevToken: null, generatedAt: Date.now() },
+        { role: 'primary', token: 'primarytoken1234', prevToken: null, generatedAt: Date.now() },
+        {
+          role: 'seed', token: 'seedertoken1234', prevToken: null, generatedAt: Date.now(), leaseUntil: Date.now() + 60_000,
+        },
       ]);
-      expect(await bluetoothCode.verifyToken('session1', 'seedertoken1234')).toBe(true);
+      expect(await bluetoothCode.verifyToken('session1', 'seedertoken1234'))
+        .toEqual({ ok: true, role: 'seed' });
     });
 
     it('rejects an expired seeder token even before the cleanup sweep removes it', async () => {
@@ -89,45 +93,61 @@ describe('bluetoothCode', () => {
         generatedAt: Date.now() - 1000,
         leaseUntil: Date.now() - 1,
       }]);
-      expect(await bluetoothCode.verifyToken('session1', 'expiredseed1234')).toBe(false);
+      expect(await bluetoothCode.verifyToken('session1', 'expiredseed1234'))
+        .toEqual({ ok: false, role: null });
     });
 
-    it('returns false for wrong token', async () => {
+    it('prefers the primary role when the same value somehow lives in both pools', async () => {
+      const token = 'sharedtoken1234';
+      mockModel.find.mockResolvedValue([
+        {
+          role: 'seed', token, prevToken: null, generatedAt: Date.now(), leaseUntil: Date.now() + 60_000,
+        },
+        {
+          role: 'primary', token, prevToken: null, generatedAt: Date.now(),
+        },
+      ]);
+      expect(await bluetoothCode.verifyToken('session1', token))
+        .toEqual({ ok: true, role: 'primary' });
+    });
+
+    it('rejects a wrong token', async () => {
       mockModel.find.mockResolvedValue([
         { token: 'validtoken12345', prevToken: null, generatedAt: Date.now() },
       ]);
-      expect(await bluetoothCode.verifyToken('session1', 'wrongtoken12345')).toBe(false);
+      expect(await bluetoothCode.verifyToken('session1', 'wrongtoken12345'))
+        .toEqual({ ok: false, role: null });
     });
 
-    it('returns false when no tokens exist for session', async () => {
+    it('rejects when no tokens exist for the session', async () => {
       mockModel.find.mockResolvedValue([]);
-      expect(await bluetoothCode.verifyToken('session1', 'sometoken12345')).toBe(false);
+      expect((await bluetoothCode.verifyToken('session1', 'sometoken12345')).ok).toBe(false);
     });
 
-    it('accepts previous token within grace window', async () => {
+    it('accepts the previous token within the grace window', async () => {
       mockModel.find.mockResolvedValue([{
         token: 'newtoken123456789', prevToken: 'oldtoken123456789', generatedAt: Date.now() - 1000,
       }]);
-      expect(await bluetoothCode.verifyToken('session1', 'oldtoken123456789')).toBe(true);
+      expect((await bluetoothCode.verifyToken('session1', 'oldtoken123456789')).ok).toBe(true);
     });
 
-    it('rejects previous token after grace window', async () => {
+    it('rejects the previous token after the grace window', async () => {
       mockModel.find.mockResolvedValue([{
         token: 'newtoken123456789', prevToken: 'oldtoken123456789', generatedAt: Date.now() - (GRACE_MS + 1000),
       }]);
-      expect(await bluetoothCode.verifyToken('session1', 'oldtoken123456789')).toBe(false);
+      expect((await bluetoothCode.verifyToken('session1', 'oldtoken123456789')).ok).toBe(false);
     });
 
     it('is case-insensitive', async () => {
       mockModel.find.mockResolvedValue([
         { token: 'abcdef1234567890', prevToken: null, generatedAt: Date.now() },
       ]);
-      expect(await bluetoothCode.verifyToken('session1', 'ABCDEF1234567890')).toBe(true);
+      expect((await bluetoothCode.verifyToken('session1', 'ABCDEF1234567890')).ok).toBe(true);
     });
 
-    it('returns false for empty submission', async () => {
+    it('rejects an empty submission', async () => {
       mockModel.find.mockResolvedValue([{ token: 'valid', prevToken: null, generatedAt: Date.now() }]);
-      expect(await bluetoothCode.verifyToken('session1', '')).toBe(false);
+      expect((await bluetoothCode.verifyToken('session1', '')).ok).toBe(false);
     });
   });
 

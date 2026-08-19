@@ -1,7 +1,8 @@
 const Settings = require('../models/Settings');
 
-// Short cache: settings are read on every manual-code status/attendance check, so
-// avoid a DB round-trip per request while still picking up admin changes quickly.
+// Short cache: settings are read on every attendance submission and code status
+// check, so avoid a DB round-trip per request while still picking up admin
+// changes quickly.
 const CACHE_TTL_MS = 5000;
 let _cache = null; // { value, ts }
 
@@ -10,7 +11,7 @@ async function getSettings() {
   if (_cache && Date.now() - _cache.ts < CACHE_TTL_MS) return _cache.value;
   const doc = await Settings.findOneAndUpdate(
     {},
-    { $setOnInsert: { manualCodeAllowed: true } },
+    { $setOnInsert: { bleEnabled: true } },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
   _cache = { value: doc, ts: Date.now() };
@@ -27,30 +28,19 @@ async function updateSettings(patch) {
   return doc;
 }
 
-async function isManualCodeAllowed() {
+/** Global Bluetooth kill switch. GPS has no equivalent — every session needs it. */
+async function isBleEnabled() {
   const settings = await getSettings();
-  return settings.manualCodeAllowed !== false;
+  return settings.bleEnabled !== false;
 }
 
-/**
- * Whether a session may use the given `verification` value under the admin's
- * per-policy global switches. `both` needs both policies on, since it can accept
- * a student through either one.
- */
-function isVerificationAllowed(settings, verification) {
-  const bluetooth = settings.bluetoothAllowed !== false;
-  const geofence = settings.geofenceAllowed === true;
-  if (verification === 'bluetooth') return bluetooth;
-  if (verification === 'geofence') return geofence;
-  if (verification === 'both') return bluetooth && geofence;
-  return false;
-}
-
-/** The verification values a lecturer may currently pick, in strictness order. */
-function allowedVerifications(settings) {
-  return ['bluetooth', 'geofence', 'both'].filter((v) => isVerificationAllowed(settings, v));
+/** The two distance thresholds, normalized so `near` can never exceed `far`. */
+function buffers(settings) {
+  const nearBufferM = Number.isFinite(settings.nearBufferM) ? settings.nearBufferM : 50;
+  const farBufferM = Number.isFinite(settings.farBufferM) ? settings.farBufferM : 100;
+  return { nearBufferM, farBufferM: Math.max(nearBufferM, farBufferM) };
 }
 
 module.exports = {
-  getSettings, updateSettings, isManualCodeAllowed, isVerificationAllowed, allowedVerifications,
+  getSettings, updateSettings, isBleEnabled, buffers,
 };

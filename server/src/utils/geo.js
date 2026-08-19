@@ -62,17 +62,34 @@ function distanceToPolygonBoundary(point, polygon) {
 }
 
 /**
- * Accept if `[lat, lng]` is inside `polygon` ([[lng, lat], ...]), or within
- * `bufferMeters` of its boundary. Buffering-by-distance-to-boundary rather than
- * literally inflating the polygon is a standard, much simpler equivalent at this
- * scale, and avoids the edge cases of offsetting concave polygons.
+ * Distance in meters from `[lat, lng]` to `polygon` ([[lng, lat], ...]).
+ * Returns 0 for any point inside the polygon, so callers can band purely on
+ * distance. Measuring to the boundary rather than literally inflating the
+ * polygon is a standard, much simpler equivalent at this scale, and avoids the
+ * edge cases of offsetting concave shapes.
  */
-function isWithinGeofence(lat, lng, polygon, bufferMeters) {
+function distanceToGeofenceMeters(lat, lng, polygon) {
   const [refLng, refLat] = polygon[0];
   const localPolygon = polygon.map(([plng, plat]) => toLocalMeters(plng, plat, refLng, refLat));
   const localPoint = toLocalMeters(lng, lat, refLng, refLat);
-  if (isPointInPolygon(localPoint, localPolygon)) return true;
-  return distanceToPolygonBoundary(localPoint, localPolygon) <= bufferMeters;
+  if (isPointInPolygon(localPoint, localPolygon)) return 0;
+  return distanceToPolygonBoundary(localPoint, localPolygon);
+}
+
+/** Distance to the nearest of several polygons — a session may list many buildings. */
+function distanceToNearestGeofenceMeters(lat, lng, polygons) {
+  let min = Infinity;
+  for (const polygon of polygons) {
+    if (!Array.isArray(polygon) || polygon.length < 3) continue;
+    min = Math.min(min, distanceToGeofenceMeters(lat, lng, polygon));
+    if (min === 0) return 0;
+  }
+  return min;
+}
+
+/** Inside the polygon, or within `bufferMeters` of its boundary. */
+function isWithinGeofence(lat, lng, polygon, bufferMeters) {
+  return distanceToGeofenceMeters(lat, lng, polygon) <= bufferMeters;
 }
 
 module.exports = {
@@ -80,5 +97,7 @@ module.exports = {
   toLocalMeters,
   isPointInPolygon,
   distanceToPolygonBoundary,
+  distanceToGeofenceMeters,
+  distanceToNearestGeofenceMeters,
   isWithinGeofence,
 };

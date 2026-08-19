@@ -59,15 +59,16 @@ data class CourseDto(
     val lecturers: List<LecturerDto>? = null,
 )
 
-/** Strict current contract returned only by GET /api/courses/running. */
+/**
+ * Strict current contract returned only by GET /api/courses/running.
+ * Identity only: every session verifies the same way (Bluetooth + GPS together,
+ * with the lecturer's code behind "get help"), so the flow never branches per course.
+ */
 data class RunningCourseDto(
     @param:Json(name = "_id") val id: String,
     val code: String,
     val name: String,
     val batch: String,
-    /** "bluetooth" | "geofence" | "both". */
-    val verification: String,
-    val manualCodeEnabled: Boolean,
 )
 
 /** Compact course reference embedded in other payloads. */
@@ -125,14 +126,10 @@ data class StaffSessionDto(
     val broadcasting: Boolean? = null,
     val active: Boolean? = null,
     val deleted: Boolean? = null,
-    /** "bluetooth" | "geofence" | "both". */
-    val verification: String,
+    /** Geofence ids. Always at least one — required at creation. */
     val buildings: List<String>? = null,
     val manualCodeRotationMode: String? = null,
     val manualCodeRotationSeconds: Int? = null,
-    /** Set at creation (Create Session tab); the session card only shows live
-     *  controls (reveal/pause/regenerate) when this is true — no enable switch there. */
-    val manualCodeEnabled: Boolean? = null,
 )
 
 data class StaffSessionsRes(val items: List<StaffSessionDto>? = null)
@@ -144,11 +141,8 @@ data class CreateSessionReq(
     val startTime: String,
     val endTime: String,
     val recurring: Boolean,
-    /** "bluetooth" | "geofence" | "both". */
-    val verification: String,
-    /** Geofence ids; required by the server when verification includes geofence. */
-    val buildings: List<String>? = null,
-    val manualCodeEnabled: Boolean? = null,
+    /** Geofence ids. At least one is mandatory — GPS runs for every session. */
+    val buildings: List<String>,
     val manualCodeRotationMode: String? = null,
     val manualCodeRotationSeconds: Int? = null,
 )
@@ -177,14 +171,14 @@ data class BroadcastDto(
     val minutesRemaining: Int? = null,
 )
 
-// ── Manual attendance code (lecturer-controlled fallback) ──────────────────────────
+// ── Lecturer code (the "get help" escalation key) ─────────────────────────────────
 
-/** Response of GET/PATCH .../sessions/:id/manual-code. */
+/**
+ * Response of GET/PATCH .../sessions/:id/manual-code. Every session has a code —
+ * the lecturer's only choice is whether it rotates. There is no enable flag.
+ */
 data class ManualCodeStatusDto(
     val success: Boolean? = null,
-    val enabled: Boolean? = null,
-    /** Whether the global admin kill-switch currently allows the feature at all. */
-    val allowed: Boolean? = null,
     /** Whether the session is inside its scheduled window right now — the code is
      *  only actually live (non-null) while this is true. */
     val running: Boolean? = null,
@@ -198,7 +192,6 @@ data class ManualCodeStatusDto(
 
 /** Body for PATCH .../sessions/:id/manual-code. Every field is independently optional. */
 data class ManualCodeConfigReq(
-    val enabled: Boolean? = null,
     val rotationMode: String? = null,
     val rotationSeconds: Int? = null,
     val paused: Boolean? = null,
@@ -207,32 +200,48 @@ data class ManualCodeConfigReq(
 
 /** Global settings singleton. Readable by any staff; only admins may write. */
 data class SettingsDto(
-    val manualCodeAllowed: Boolean? = null,
-    /** Per-policy admin switches — a lecturer picks among whichever are enabled. */
-    val bluetoothAllowed: Boolean? = null,
-    val geofenceAllowed: Boolean? = null,
-    /** Server-derived from the two switches above: the values a session may use. */
-    val allowedVerifications: List<String>? = null,
+    /** The one kill switch: off stops broadcasts, scanning and seeding. GPS has no equivalent. */
+    val bleEnabled: Boolean? = null,
+    /** Auto-pass radius, meters from the building polygon. */
+    val nearBufferM: Int? = null,
+    /** Outer radius, meters. Beyond it, a correct code only reaches lecturer review. */
+    val farBufferM: Int? = null,
+    /** Whether a correct code between the two radii passes outright or goes to review. */
+    val suspiciousBandAutoPass: Boolean? = null,
     /** Target concurrent BLE seeder count; 0 disables peer seeding. */
     val seedRate: Int? = null,
     /** Real-seeder AND decoy window duration, ms — identical for both by design. */
     val seedWindowMs: Long? = null,
-    /** GPS buffer (meters) for geofence-only sessions. */
-    val bufferGpsOnly: Double? = null,
-    /** GPS buffer (meters) for the GPS fallback path within "both" sessions. */
-    val bufferGpsBle: Double? = null,
 )
 
 /** Body for PATCH /api/admin/settings — every field independently optional. */
 data class SettingsReq(
-    val manualCodeAllowed: Boolean? = null,
-    val bluetoothAllowed: Boolean? = null,
-    val geofenceAllowed: Boolean? = null,
+    val bleEnabled: Boolean? = null,
+    val nearBufferM: Int? = null,
+    val farBufferM: Int? = null,
+    val suspiciousBandAutoPass: Boolean? = null,
     val seedRate: Int? = null,
     val seedWindowMs: Long? = null,
-    val bufferGpsOnly: Double? = null,
-    val bufferGpsBle: Double? = null,
 )
+
+// ── Lecturer review queue ─────────────────────────────────────────────────────────
+
+/**
+ * One student awaiting a decision. Deliberately carries no distance evidence —
+ * the lecturer judges "do I recognise this person as being in my class", not a
+ * band they have no way to sanity-check.
+ */
+data class PendingReviewDto(
+    @param:Json(name = "_id") val id: String,
+    val name: String? = null,
+    val email: String? = null,
+    val submittedAt: String? = null,
+)
+
+data class PendingReviewsRes(val items: List<PendingReviewDto>? = null)
+
+/** Body for PATCH .../sessions/:id/reviews/:attendanceId. */
+data class ReviewDecisionReq(val decision: String) // "approve" | "reject"
 
 // ── Geofences (admin building polygons) ─────────────────────────────────────────
 
@@ -255,8 +264,9 @@ data class GeofenceUpdateReq(
 
 // ── Attendance (student) ────────────────────────────────────────────────────────
 
+/** "present" | "under_review" | "rejected" | "none". */
 data class AttendanceStatusDto(
-    val attended: Boolean? = null,
+    val status: String? = null,
 )
 
 // ── Unified attendance (BLE token / GPS fix / manual code, one at a time) ──────────
@@ -283,8 +293,17 @@ data class SeedingDto(
     val sessionId: String? = null,
 )
 
+/**
+ * `status` is one of:
+ *   "collecting"   — no verdict yet. Deliberately covers both "still gathering
+ *                    fixes" and "gathered enough, but not in a passing band", so
+ *                    the client can never learn its own distance band.
+ *   "accepted"     — recorded present.
+ *   "under_review" — code accepted from outside the trusted bands; awaiting the lecturer.
+ *   "rejected"     — the lecturer declined an earlier submission.
+ */
 data class UnifiedAttendanceRes(
-    val status: String? = null, // "pending" | "accepted"
+    val status: String? = null,
     val duplicate: Boolean? = null,
     val seeding: SeedingDto? = null,
 )
@@ -306,8 +325,11 @@ data class MatrixSessionDto(
 data class MatrixRowDto(
     val displayId: String? = null,
     val email: String? = null,
-    /** Session id -> present. Missing/false means absent. */
-    val attendance: Map<String, Boolean>? = null,
+    /**
+     * Session id -> "present" | "under_review" | "rejected". A missing key means
+     * absent. Verification provenance (method, band, centroid) stays server-side.
+     */
+    val attendance: Map<String, String>? = null,
 )
 
 data class AttendanceMatrixRes(

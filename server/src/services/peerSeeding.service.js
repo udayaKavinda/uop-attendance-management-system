@@ -2,24 +2,38 @@ const bluetoothCode = require('./bluetoothCode.service');
 const settingsService = require('./settings.service');
 
 /**
- * Server-driven seeder selection, run once a student is validated (BLE or GPS).
- * Mirrors the design doc's pseudocode exactly:
+ * Server-driven seeder selection, run once a student has been accepted.
  *
- *   if session.mode == geofence-only:        role = none
- *   else if not student.canAdvertise:        role = decoy
- *   else if liveSeederCount(session) < seedRate:  role = seeder; mint
+ *   if BLE is globally off:                   role = none
+ *   else if not accepted via a PRIMARY token: role = none
+ *   else if seeding is switched off:          role = none
+ *   else if not student.canAdvertise:         role = decoy
+ *   else if liveSeederCount < seedRate:       role = seeder; mint
  *   else:                                     role = decoy
  *
- * Decoys get the identical `durationMs` as real seeders (decision 3) so the two
- * are indistinguishable to the student; `role: 'none'` (geofence-only sessions,
- * decision 4) means no seeding UI should appear at all.
+ * Only primary-BLE-verified students are eligible. A GPS-passed student can sit
+ * up to the near buffer away from the building, so re-broadcasting the classroom
+ * token from their phone would push it well outside the room and undermine the
+ * "BLE proves you are in the room" premise the whole model rests on. A student
+ * who heard a seeder rather than the lecturer is excluded for the same reason,
+ * one hop further out.
+ *
+ * Decoys get the identical `durationMs` as real seeders so the two are
+ * indistinguishable. That concealment still holds where it matters: among the
+ * eligible (primary-verified) students, nobody can tell who was picked. A
+ * GPS-passed student getting no window at all reveals nothing they didn't
+ * already know — their own device knows it never heard a token.
  */
-async function selectSeedingRole(sessionItem, studentId, canAdvertise) {
-  if (sessionItem.verification === 'geofence') {
+async function selectSeedingRole(sessionItem, studentId, canAdvertise, bleRole = null) {
+  if (bleRole !== 'primary') {
     return { role: 'none' };
   }
 
   const settings = await settingsService.getSettings();
+  if (settings.bleEnabled === false) {
+    return { role: 'none' };
+  }
+
   const seedRate = settings.seedRate || 0;
   // Seeding switched off entirely: no one is ever a real seeder, so there is
   // nothing to conceal — show no window at all rather than a decoy with no purpose.

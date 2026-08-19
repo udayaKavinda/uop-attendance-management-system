@@ -45,6 +45,7 @@ import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.PauseCircleOutline
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
@@ -85,6 +86,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -105,6 +107,7 @@ import lk.ac.pdn.eng.feats.data.net.CourseDto
 import lk.ac.pdn.eng.feats.data.net.GeofenceDto
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
 import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
+import lk.ac.pdn.eng.feats.data.net.PendingReviewDto
 import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
 import lk.ac.pdn.eng.feats.ui.components.AppCard
 import lk.ac.pdn.eng.feats.ui.components.AppTextField
@@ -380,12 +383,6 @@ private fun CourseCard(
 
 // ── Create session tab ────────────────────────────────────────────────────────────
 
-private val VERIFICATION_LABELS = mapOf(
-    "bluetooth" to "Bluetooth",
-    "geofence" to "GPS geofence",
-    "both" to "Bluetooth or GPS",
-)
-
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
@@ -398,23 +395,17 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
     var showTimePicker by remember { mutableStateOf(false) }
     var pickingStart by remember { mutableStateOf(true) }
 
-    // Whichever policies the admin enabled globally; while settings are still
-    // loading, fall back to the safe default (Bluetooth only, unchanged UX).
-    val allowed = state.settings?.allowedVerifications ?: listOf("bluetooth")
-    var verification by remember(allowed) { mutableStateOf(allowed.firstOrNull() ?: "bluetooth") }
-    val manualCodeAllowedGlobally = state.settings?.manualCodeAllowed != false
+    // No verification picker any more: every session uses Bluetooth and GPS
+    // together. Buildings are what the lecturer chooses instead, and they are
+    // mandatory — GPS has nothing to measure against without a polygon.
     var selectedBuildingIds by remember { mutableStateOf(setOf<String>()) }
-    val needsBuildings = verification != "bluetooth"
 
-    // Manual attendance code — configured here at creation time; the session card
-    // in the Sessions tab only shows live controls (reveal/pause/regenerate) once
-    // this is on, not a separate enable switch.
-    var manualCodeEnabled by remember { mutableStateOf(false) }
-    var manualCodeRotates by remember { mutableStateOf(false) }
-    var manualCodeSeconds by remember { mutableStateOf("60") }
+    // The lecturer's code exists for every session; the only choice is rotation.
+    var codeRotates by remember { mutableStateOf(false) }
+    var codeSeconds by remember { mutableStateOf("60") }
 
     val canCreate = courseId != null && start.isNotBlank() && end.isNotBlank() &&
-        allowed.isNotEmpty() && (!needsBuildings || selectedBuildingIds.isNotEmpty())
+        selectedBuildingIds.isNotEmpty()
 
     if (showTimePicker) {
         val (initH, initM) = parseTime(if (pickingStart) start else end)
@@ -487,92 +478,61 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
                     Text("Recurring (weekly) session", fontSize = 14.sp)
                 }
 
-                // Pick from whatever the admin enabled globally. With exactly one
-                // enabled there's nothing to choose, so show it as plain text rather
-                // than a single-option dropdown.
-                Spacer(Modifier.height(8.dp))
-                when {
-                    allowed.isEmpty() -> ErrorBanner(
-                        "No verification policy is enabled. Ask an administrator to enable one in Settings.",
+                Spacer(Modifier.height(14.dp))
+                androidx.compose.material3.HorizontalDivider(color = Palette.Border)
+                Spacer(Modifier.height(14.dp))
+
+                Text("Where is this lecture?", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "Students are checked against these building outlines. At least one is required.",
+                    color = Palette.Muted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+                )
+                if (state.geofences.isEmpty()) {
+                    ErrorBanner(
+                        "No buildings have been drawn yet. An administrator needs to add one in the Geofences tool before sessions can be created.",
                     )
-                    allowed.size == 1 -> {
-                        Text("Verification", style = MaterialTheme.typography.labelLarge)
-                        Text(
-                            VERIFICATION_LABELS[verification].orEmpty(),
-                            color = Palette.Ink,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(top = 2.dp),
-                        )
-                    }
-                    else -> LabeledDropdown(
-                        label = "Verification",
-                        selectedText = VERIFICATION_LABELS[verification].orEmpty(),
-                        placeholder = "Choose verification",
-                        options = allowed.map { it to VERIFICATION_LABELS[it].orEmpty() },
-                        onSelect = { verification = it },
+                } else {
+                    BuildingMultiSelectDropdown(
+                        buildings = state.geofences,
+                        selectedIds = selectedBuildingIds,
+                        onToggle = { id ->
+                            selectedBuildingIds = if (id in selectedBuildingIds) {
+                                selectedBuildingIds - id
+                            } else {
+                                selectedBuildingIds + id
+                            }
+                        },
                     )
                 }
 
-                if (needsBuildings) {
-                    Spacer(Modifier.height(12.dp))
-                    if (state.geofences.isEmpty()) {
-                        Text("Buildings", style = MaterialTheme.typography.labelLarge)
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "No buildings configured yet — an admin can draw one in the Geofences tool.",
-                            color = Palette.Muted,
-                            fontSize = 12.sp,
-                        )
-                    } else {
-                        BuildingMultiSelectDropdown(
-                            buildings = state.geofences,
-                            selectedIds = selectedBuildingIds,
-                            onToggle = { id ->
-                                selectedBuildingIds = if (id in selectedBuildingIds) {
-                                    selectedBuildingIds - id
-                                } else {
-                                    selectedBuildingIds + id
-                                }
-                            },
-                        )
-                    }
-                }
+                Spacer(Modifier.height(14.dp))
+                androidx.compose.material3.HorizontalDivider(color = Palette.Border)
+                Spacer(Modifier.height(14.dp))
 
-                if (manualCodeAllowedGlobally) {
-                    Spacer(Modifier.height(14.dp))
-                    androidx.compose.material3.HorizontalDivider(color = Palette.Border)
-                    Spacer(Modifier.height(14.dp))
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                            Text("Manual attendance code", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                "Lecturer-controlled fallback alongside automatic verification.",
-                                color = Palette.Muted,
-                                fontSize = 12.sp,
-                            )
-                        }
-                        Switch(checked = manualCodeEnabled, onCheckedChange = { manualCodeEnabled = it })
-                    }
-                }
-                if (manualCodeAllowedGlobally && manualCodeEnabled) {
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = manualCodeRotates, onCheckedChange = { manualCodeRotates = it })
-                        Text("Rotate automatically", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                        if (manualCodeRotates) {
-                            AppTextField(
-                                manualCodeSeconds,
-                                { manualCodeSeconds = it.filter(Char::isDigit) },
-                                "",
-                                placeholder = "60",
-                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
-                                modifier = Modifier.width(90.dp),
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text("sec", color = Palette.Muted, fontSize = 12.sp)
-                        }
+                Text("Attendance code", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "Every session gets an 8-digit code you can read out when a student's phone can't verify itself. Rotating it limits how far a shared code travels.",
+                    color = Palette.Muted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = codeRotates, onCheckedChange = { codeRotates = it })
+                    Text("Rotate automatically", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    if (codeRotates) {
+                        AppTextField(
+                            codeSeconds,
+                            { codeSeconds = it.filter(Char::isDigit) },
+                            "",
+                            placeholder = "60",
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                            modifier = Modifier.width(90.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("sec", color = Palette.Muted, fontSize = 12.sp)
                     }
                 }
 
@@ -582,10 +542,9 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
                     onClick = {
                         vm.createSession(
                             courseId.orEmpty(), day, start, end, recurring,
-                            verification, selectedBuildingIds.toList(),
-                            manualCodeEnabled = manualCodeEnabled,
-                            manualCodeRotationMode = if (manualCodeRotates) "interval" else "none",
-                            manualCodeRotationSeconds = manualCodeSeconds.toIntOrNull()?.coerceIn(10, 3600) ?: 60,
+                            buildings = selectedBuildingIds.toList(),
+                            manualCodeRotationMode = if (codeRotates) "interval" else "none",
+                            manualCodeRotationSeconds = codeSeconds.toIntOrNull()?.coerceIn(10, 3600) ?: 60,
                         )
                     },
                     enabled = canCreate,
@@ -846,14 +805,26 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
             item { EmptyState("🗓️", "No sessions", "Create a session to see it here.") }
         } else {
             items(filtered, key = { it.id ?: it.hashCode().toString() }) { session ->
+                // Poll the queue only while the lecture is actually running — that
+                // is the only time submissions can arrive.
+                val isRunning = state.isRunning(session.id)
+                LaunchedEffect(session.id, isRunning) {
+                    val id = session.id ?: return@LaunchedEffect
+                    while (isRunning) {
+                        vm.loadPendingReviews(id)
+                        delay(15_000)
+                    }
+                }
                 SessionCard(
                     session = session,
-                    running = state.isRunning(session.id),
+                    running = isRunning,
                     broadcast = state.broadcast?.takeIf { it.sessionId == session.id },
                     manualCode = session.id?.let { state.manualCodes[it] },
                     buildingNames = state.geofences
                         .filter { it.id in session.buildings.orEmpty() }
                         .mapNotNull { it.name?.takeIf(String::isNotBlank) },
+                    bleEnabled = state.bleEnabled,
+                    pendingReviews = state.reviewsFor(session.id),
                     onActivate = { session.id?.let { if (session.active == true) vm.deactivate(it) else vm.activate(it) } },
                     onDelete = { confirmDelete = session },
                     onStartBroadcast = { session.id?.let(::requestBroadcast) },
@@ -862,6 +833,9 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                     onPauseManualCode = { session.id?.let(vm::pauseManualCode) },
                     onResumeManualCode = { session.id?.let(vm::resumeManualCode) },
                     onRegenerateManualCode = { session.id?.let(vm::regenerateManualCode) },
+                    onReview = { attendanceId, approve ->
+                        session.id?.let { vm.reviewSubmission(it, attendanceId, approve) }
+                    },
                 )
             }
         }
@@ -914,36 +888,62 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
         item {
             SettingsSection(
                 icon = Icons.AutoMirrored.Outlined.Rule,
-                title = "Verification policies",
-                subtitle = "Turn each policy on or off for the whole system. Lecturers then " +
-                    "pick whichever enabled policy suits the session they create. Applies to " +
-                    "new sessions — never strands one that's already running.",
+                title = "How attendance is verified",
+                subtitle = "Every session checks Bluetooth and GPS together for 90 seconds. " +
+                    "Hearing the classroom beacon passes a student outright; so does standing " +
+                    "within the pass distance of the building.",
             ) {
                 PolicySwitch(
-                    label = "Bluetooth proximity",
-                    detail = "Strictest — the student must physically receive the classroom beacon.",
-                    checked = settings.bluetoothAllowed == true,
-                    onCheckedChange = vm::setBluetoothAllowed,
+                    label = "Bluetooth",
+                    detail = "Off stops lecturer broadcasts, student scanning and peer seeding. " +
+                        "GPS keeps working — it has no off switch.",
+                    checked = settings.bleEnabled != false,
+                    onCheckedChange = vm::setBleEnabled,
                 )
-                Spacer(Modifier.height(10.dp))
-                PolicySwitch(
-                    label = "GPS geofence",
-                    detail = "Looser — checks the student is inside a building outline you've drawn.",
-                    checked = settings.geofenceAllowed == true,
-                    onCheckedChange = vm::setGeofenceAllowed,
-                )
-                Spacer(Modifier.height(10.dp))
-                PolicySwitch(
-                    label = "Manual attendance code",
-                    detail = "Fallback the lecturer reads out. Off rejects it everywhere, immediately.",
-                    checked = settings.manualCodeAllowed == true,
-                    onCheckedChange = vm::setManualCodeAllowedGlobally,
-                )
-
-                if (settings.bluetoothAllowed != true && settings.geofenceAllowed != true) {
+                if (settings.bleEnabled == false) {
                     Spacer(Modifier.height(10.dp))
-                    ErrorBanner("No automatic policy is enabled — lecturers cannot create sessions.")
+                    SessionNotice(
+                        "Bluetooth is off system-wide. Students can only be verified by GPS, " +
+                            "so more of them will need the attendance code.",
+                    )
                 }
+            }
+        }
+
+        item {
+            SettingsSection(
+                icon = Icons.Outlined.MyLocation,
+                title = "Distance thresholds",
+                subtitle = "Measured from the edge of the session's building outline.",
+            ) {
+                BufferFields(
+                    nearBufferM = settings.nearBufferM ?: 50,
+                    farBufferM = settings.farBufferM ?: 100,
+                    onSave = vm::setDistanceBuffers,
+                )
+            }
+        }
+
+        item {
+            SettingsSection(
+                icon = Icons.Outlined.Password,
+                title = "What the attendance code grants",
+                subtitle = "A student who can't be verified automatically may enter the code you read out. " +
+                    "How far away they were decides what it does for them.",
+            ) {
+                PolicySwitch(
+                    label = "Pass students in the outer band",
+                    detail = "On: a correct code marks them present immediately. " +
+                        "Off: they go to your review queue like anyone further away.",
+                    checked = settings.suspiciousBandAutoPass != false,
+                    onCheckedChange = vm::setSuspiciousBandAutoPass,
+                )
+                Spacer(Modifier.height(10.dp))
+                BandLegend(
+                    nearBufferM = settings.nearBufferM ?: 50,
+                    farBufferM = settings.farBufferM ?: 100,
+                    autoPass = settings.suspiciousBandAutoPass != false,
+                )
             }
         }
 
@@ -951,31 +951,60 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
             SettingsSection(
                 icon = Icons.Outlined.Groups,
                 title = "Peer seeding",
-                subtitle = "0 disables seeding. Extends Bluetooth range by having a few validated " +
-                    "students re-broadcast the token; students never know if they were picked.",
+                subtitle = "0 disables seeding. Extends Bluetooth range by having a few students who " +
+                    "heard the lecturer directly re-broadcast the token; they never know if they were picked.",
             ) {
                 SeedingFields(
                     seedRate = settings.seedRate ?: 0,
                     seedWindowMs = settings.seedWindowMs ?: 60000L,
                     onSave = vm::setSeedingParams,
                 )
+                if (settings.bleEnabled == false) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Inactive while Bluetooth is switched off above.",
+                        color = Palette.Muted,
+                        fontSize = 12.sp,
+                    )
+                }
             }
         }
+    }
+}
 
-        item {
-            SettingsSection(
-                icon = Icons.Outlined.MyLocation,
-                title = "GPS buffers (meters)",
-                subtitle = "Geofence-only sessions get the larger buffer (GPS is the only signal); " +
-                    "\"both\" sessions' GPS fallback gets the tighter one.",
-            ) {
-                BufferFields(
-                    bufferGpsOnly = settings.bufferGpsOnly ?: 30.0,
-                    bufferGpsBle = settings.bufferGpsBle ?: 15.0,
-                    onSave = vm::setGpsBuffers,
-                )
-            }
-        }
+/** Plain-language restatement of the three distance outcomes, in the admin's own numbers. */
+@Composable
+private fun BandLegend(nearBufferM: Int, farBufferM: Int, autoPass: Boolean) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(AppShapes.Panel)
+            .background(Palette.InactiveBg)
+            .padding(12.dp),
+    ) {
+        BandRow("Within ${nearBufferM}m", "Passes automatically — no code needed.", Palette.SuccessText)
+        Spacer(Modifier.height(6.dp))
+        BandRow(
+            "${nearBufferM}–${farBufferM}m",
+            if (autoPass) "A correct code marks them present." else "A correct code sends them to your review queue.",
+            if (autoPass) Palette.WarnText else Palette.AccentDark,
+        )
+        Spacer(Modifier.height(6.dp))
+        BandRow("Beyond ${farBufferM}m", "A correct code only ever reaches your review queue.", Palette.DangerText)
+    }
+}
+
+@Composable
+private fun BandRow(range: String, effect: String, ink: Color) {
+    Row(verticalAlignment = Alignment.Top) {
+        Text(
+            range,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            color = ink,
+            modifier = Modifier.width(96.dp),
+        )
+        Text(effect, color = Palette.Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
     }
 }
 
@@ -1060,28 +1089,34 @@ private fun SeedingFields(seedRate: Int, seedWindowMs: Long, onSave: (Int, Long)
 }
 
 @Composable
-private fun BufferFields(bufferGpsOnly: Double, bufferGpsBle: Double, onSave: (Double, Double) -> Unit) {
-    var onlyText by remember(bufferGpsOnly) { mutableStateOf(bufferGpsOnly.toInt().toString()) }
-    var bleText by remember(bufferGpsBle) { mutableStateOf(bufferGpsBle.toInt().toString()) }
+private fun BufferFields(nearBufferM: Int, farBufferM: Int, onSave: (Int, Int) -> Unit) {
+    var nearText by remember(nearBufferM) { mutableStateOf(nearBufferM.toString()) }
+    var farText by remember(farBufferM) { mutableStateOf(farBufferM.toString()) }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         AppTextField(
-            onlyText, { onlyText = it.filter(Char::isDigit) }, "Geofence-only",
+            nearText, { nearText = it.filter(Char::isDigit) }, "Pass within (m)",
             keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
             modifier = Modifier.weight(1f),
         )
         AppTextField(
-            bleText, { bleText = it.filter(Char::isDigit) }, "\"Both\" GPS fallback",
+            farText, { farText = it.filter(Char::isDigit) }, "Outer limit (m)",
             keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
             modifier = Modifier.weight(1f),
         )
     }
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "GPS is routinely accurate to only 20–50m indoors, so a tight pass distance sends more genuinely-present students to the code.",
+        color = Palette.Muted,
+        fontSize = 11.5.sp,
+    )
     Spacer(Modifier.height(6.dp))
     PillButton(
-        "Save buffers",
+        "Save distances",
         onClick = {
-            val only = onlyText.toDoubleOrNull() ?: return@PillButton
-            val ble = bleText.toDoubleOrNull() ?: return@PillButton
-            onSave(only, ble)
+            val near = nearText.toIntOrNull() ?: return@PillButton
+            val far = farText.toIntOrNull() ?: return@PillButton
+            onSave(near, far)
         },
         tone = PillTone.Accent,
     )
@@ -1095,6 +1130,8 @@ private fun SessionCard(
     broadcast: BroadcastState?,
     manualCode: ManualCodeStatusDto?,
     buildingNames: List<String>,
+    bleEnabled: Boolean,
+    pendingReviews: List<PendingReviewDto>,
     onActivate: () -> Unit,
     onDelete: () -> Unit,
     onStartBroadcast: () -> Unit,
@@ -1103,10 +1140,10 @@ private fun SessionCard(
     onPauseManualCode: () -> Unit,
     onResumeManualCode: () -> Unit,
     onRegenerateManualCode: () -> Unit,
+    onReview: (String, Boolean) -> Unit,
 ) {
     val active = session.active == true
     val onAir = broadcast != null
-    val verification = VERIFICATION_LABELS[session.verification] ?: session.verification
     val buildingLabel = when {
         buildingNames.isNotEmpty() -> buildingNames.joinToString(", ")
         session.buildings.orEmpty().isNotEmpty() -> "${session.buildings.orEmpty().size} buildings"
@@ -1187,7 +1224,7 @@ private fun SessionCard(
                         icon = if (session.recurring == true) Icons.Outlined.Repeat else Icons.Outlined.CalendarMonth,
                         text = if (session.recurring == true) "Weekly" else "One-time",
                     )
-                    SessionMetaChip(Icons.Outlined.Sensors, verification)
+                    SessionMetaChip(Icons.Outlined.Sensors, if (bleEnabled) "Bluetooth + GPS" else "GPS only")
                     buildingLabel?.let { SessionMetaChip(Icons.Outlined.LocationOn, it) }
                 }
             }
@@ -1227,26 +1264,32 @@ private fun SessionCard(
                         )
                     }
                 }
-                running && session.verification != "geofence" -> SessionActionButton(
+                running && bleEnabled -> SessionActionButton(
                     text = "Start attendance broadcast",
                     icon = Icons.Outlined.Sensors,
                     tone = SessionActionTone.Primary,
                     onClick = onStartBroadcast,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                running -> SessionNotice("GPS verification is open for this session; no Bluetooth broadcast is required.")
+                running -> SessionNotice(
+                    "Bluetooth is switched off system-wide. GPS is still verifying students for this session.",
+                )
                 active -> SessionNotice("Attendance controls appear during the scheduled session window.")
                 else -> SessionNotice("This session is inactive. Activate it to make it available.")
             }
 
-            if (session.manualCodeEnabled == true) {
-                ManualCodeSection(
-                    status = manualCode,
-                    onLoad = onLoadManualCode,
-                    onPause = onPauseManualCode,
-                    onResume = onResumeManualCode,
-                    onRegenerate = onRegenerateManualCode,
-                )
+            // Every session has a code, so this is unconditional now — but the live
+            // value only exists inside the scheduled window.
+            ManualCodeSection(
+                status = manualCode,
+                onLoad = onLoadManualCode,
+                onPause = onPauseManualCode,
+                onResume = onResumeManualCode,
+                onRegenerate = onRegenerateManualCode,
+            )
+
+            if (pendingReviews.isNotEmpty()) {
+                ReviewQueueSection(items = pendingReviews, onReview = onReview)
             }
 
             HorizontalDivider(color = Palette.Border, modifier = Modifier.padding(vertical = 14.dp))
@@ -1398,16 +1441,18 @@ private fun ManualCodeSection(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.Password, contentDescription = null, tint = Palette.AccentDark, modifier = Modifier.size(17.dp))
             Spacer(Modifier.width(7.dp))
-            Text("Manual attendance code", fontWeight = FontWeight.Bold, fontSize = 12.5.sp, color = Palette.Ink)
+            Text("Attendance code", fontWeight = FontWeight.Bold, fontSize = 12.5.sp, color = Palette.Ink)
         }
+        Text(
+            "Read this out when a student can't be verified automatically.",
+            color = Palette.Muted,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(top = 2.dp),
+        )
         Spacer(Modifier.height(9.dp))
 
         if (status == null) {
             Text("Loading code…", color = Palette.Muted, fontSize = 12.sp)
-            return@Column
-        }
-        if (status.allowed == false) {
-            Text("Disabled by the administrator.", color = Palette.Muted, fontSize = 12.sp)
             return@Column
         }
         if (status.running != true) {
@@ -1460,6 +1505,88 @@ private fun ManualCodeSection(
                 tone = SessionActionTone.Neutral,
                 onClick = onRegenerate,
             )
+        }
+    }
+}
+
+/**
+ * Students who gave the correct code from outside the trusted distance bands.
+ *
+ * Deliberately shows identity and nothing else: the decision this asks for is
+ * "was this person actually in my lecture", which the lecturer can answer from
+ * the room. A distance readout would only invite them to rubber-stamp a number
+ * they have no way to check.
+ */
+@Composable
+private fun ReviewQueueSection(
+    items: List<PendingReviewDto>,
+    onReview: (String, Boolean) -> Unit,
+) {
+    Column(
+        Modifier
+            .padding(top = 12.dp)
+            .fillMaxWidth()
+            .background(Palette.WarnBg, RoundedCornerShape(14.dp))
+            .border(1.dp, Palette.WarnText.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+            .padding(13.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.AutoMirrored.Outlined.HelpOutline,
+                contentDescription = null,
+                tint = Palette.WarnText,
+                modifier = Modifier.size(17.dp),
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                if (items.size == 1) "1 student needs your decision" else "${items.size} students need your decision",
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.5.sp,
+                color = Palette.WarnText,
+            )
+        }
+        Text(
+            "They entered the correct code but were too far away to verify on their own.",
+            color = Palette.WarnText.copy(alpha = 0.85f),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(top = 2.dp, bottom = 9.dp),
+        )
+
+        items.forEach { item ->
+            Column(
+                Modifier
+                    .padding(bottom = 8.dp)
+                    .fillMaxWidth()
+                    .background(Palette.Card, RoundedCornerShape(11.dp))
+                    .padding(11.dp),
+            ) {
+                Text(
+                    item.name ?: item.email ?: "Unknown student",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = Palette.Ink,
+                )
+                item.email?.takeIf { it != item.name }?.let {
+                    Text(it, color = Palette.Muted, fontSize = 11.5.sp)
+                }
+                Spacer(Modifier.height(9.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SessionActionButton(
+                        text = "Mark present",
+                        icon = Icons.Outlined.PlayCircleOutline,
+                        tone = SessionActionTone.Success,
+                        onClick = { onReview(item.id, true) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    SessionActionButton(
+                        text = "Reject",
+                        icon = Icons.Outlined.DeleteOutline,
+                        tone = SessionActionTone.Danger,
+                        onClick = { onReview(item.id, false) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
         }
     }
 }

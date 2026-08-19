@@ -42,15 +42,15 @@ async function closeOutOfWindowBroadcasts(now = new Date()) {
 }
 
 /**
- * Removes manual attendance codes for sessions that have left their scheduled
- * window — same "ending the session invalidates it" rule as the BLE token, and
- * necessary here since manualCodeEnabled is a standing config (not a per-lecture
- * on/off like broadcasting), so a recurring session's code would otherwise sit
- * valid indefinitely between occurrences.
+ * Removes lecturer codes for sessions that have left their scheduled window —
+ * same "ending the session invalidates it" rule as the BLE token. Necessary
+ * because the code is standing config for every session (not a per-lecture on/off
+ * like broadcasting), so a recurring session's code would otherwise sit valid
+ * indefinitely between occurrences.
  */
 async function closeOutOfWindowManualCodes(now = new Date()) {
-  const enabled = await LectureSession.find({ manualCodeEnabled: true, deleted: false });
-  for (const s of enabled) {
+  const sessions = await LectureSession.find({ deleted: false });
+  for (const s of sessions) {
     if (!isWithinScheduleWindow(s, now)) {
       await manualCode.removeCode(s);
     }

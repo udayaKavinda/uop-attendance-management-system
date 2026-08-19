@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -19,41 +20,47 @@ import lk.ac.pdn.eng.feats.ble.BlePermissions
 import lk.ac.pdn.eng.feats.ble.BleScanner
 import lk.ac.pdn.eng.feats.ble.BleUnavailableException
 import lk.ac.pdn.eng.feats.data.net.ApiResult
-import lk.ac.pdn.eng.feats.data.net.RunningCourseDto
 import lk.ac.pdn.eng.feats.data.net.GpsFixDto
+import lk.ac.pdn.eng.feats.data.net.RunningCourseDto
 import lk.ac.pdn.eng.feats.data.net.SeedingDto
 import lk.ac.pdn.eng.feats.location.GpsLocationSource
 import lk.ac.pdn.eng.feats.location.LocationPermissions
-import lk.ac.pdn.eng.feats.location.LocationUnavailableException
 import lk.ac.pdn.eng.feats.ui.container
-import lk.ac.pdn.eng.feats.ui.AutomaticPath
-import lk.ac.pdn.eng.feats.ui.VerificationPolicy
 
-enum class ScanPhase(val label: String) {
-    Idle("📡  Scan for Bluetooth Attendance"),
-    Fetching("Looking up session…"),
-    Watching("Scanning for classroom signal…"),
-    WatchingGps("Verifying your location…"),
-    Submitting("Verifying attendance…"),
-    Seeding("Finishing up…"),
-}
+/** Where the student is in the single check-in attempt. */
+enum class CheckInPhase { Idle, Preparing, Checking, Seeding }
 
-data class LectureEntryState(
+/** The server's verdict, as far as the student is allowed to know it. */
+enum class Outcome { None, Present, UnderReview, Rejected }
+
+data class CheckInState(
     val courses: List<RunningCourseDto> = emptyList(),
     val selectedCourseId: String? = null,
-    val phase: ScanPhase = ScanPhase.Idle,
-    val recorded: Boolean = false,
-    val checkingStatus: Boolean = false,
+    val phase: CheckInPhase = CheckInPhase.Idle,
+    val outcome: Outcome = Outcome.None,
+    /** Countdown shown during the window, purely cosmetic. */
+    val secondsLeft: Int = 0,
+    /** True once the window elapsed without a pass: offer Try again / Get help. */
+    val needsHelp: Boolean = false,
+    val helpDialogOpen: Boolean = false,
+    val helpSubmitting: Boolean = false,
+    val helpError: String? = null,
     val error: String? = null,
-    val needsPermission: Boolean = false,
+    val checkingStatus: Boolean = false,
 ) {
-    val scanning: Boolean get() = phase != ScanPhase.Idle
-    val busy: Boolean get() = scanning || checkingStatus
-
+    val busy: Boolean get() = phase != CheckInPhase.Idle || checkingStatus
+    val running: Boolean get() = phase == CheckInPhase.Preparing || phase == CheckInPhase.Checking
     val selectedCourse: RunningCourseDto? get() = courses.firstOrNull { it.id == selectedCourseId }
-    val verification: String? get() = selectedCourse?.verification
+    val settled: Boolean get() = outcome != Outcome.None
 }
 
+/**
+ * One attempt = one 90-second window in which Bluetooth and GPS run together and
+ * either one can win. The client never learns *why* it failed — the server
+ * answers "collecting" for both "still gathering fixes" and "gathered enough but
+ * you are too far away" — so all this can conclude when the window ends is
+ * "not verified", and offer the lecturer's code as the way out.
+ */
 class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo get() = container.repository
@@ -61,30 +68,34 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
     private val gpsSource = GpsLocationSource(app)
     private val seedAdvertiser = BleAdvertiser(app)
 
-    private val _state = MutableStateFlow(LectureEntryState())
-    val state: StateFlow<LectureEntryState> = _state.asStateFlow()
+    private val _state = MutableStateFlow(CheckInState())
+    val state: StateFlow<CheckInState> = _state.asStateFlow()
 
-    private var scanJob: Job? = null
+    private var windowJob: Job? = null
     private var seedingJob: Job? = null
 
     init {
         pollRunningCourses()
     }
 
+    // ── Course list ──────────────────────────────────────────────────────────────
+
     private fun pollRunningCourses() {
         viewModelScope.launch {
             while (isActive) {
                 when (val res = repo.runningCourses()) {
-                    is ApiResult.Success -> {
+                    is ApiResult.Success -> _state.update { s ->
                         val items = res.data
-                        _state.value = _state.value.copy(courses = items, error = null).let { s ->
-                            // Drop selection if its course stopped running.
-                            if (s.selectedCourseId != null && items.none { it.id == s.selectedCourseId }) {
-                                s.copy(selectedCourseId = null, recorded = false)
-                            } else s
-                        }
+                        val stillRunning = s.selectedCourseId == null || items.any { it.id == s.selectedCourseId }
+                        s.copy(
+                            courses = items,
+                            error = null,
+                            selectedCourseId = if (stillRunning) s.selectedCourseId else null,
+                            outcome = if (stillRunning) s.outcome else Outcome.None,
+                            needsHelp = if (stillRunning) s.needsHelp else false,
+                        )
                     }
-                    is ApiResult.Error -> _state.value = _state.value.copy(error = res.message)
+                    is ApiResult.Error -> _state.update { it.copy(error = res.message) }
                 }
                 delay(10_000)
             }
@@ -92,238 +103,232 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectCourse(courseId: String?) {
-        _state.value = _state.value.copy(selectedCourseId = courseId, recorded = false, error = null)
+        cancelAttempt()
+        _state.update {
+            it.copy(
+                selectedCourseId = courseId,
+                outcome = Outcome.None,
+                needsHelp = false,
+                error = null,
+                helpError = null,
+            )
+        }
         if (courseId != null) refreshStatus(courseId)
     }
 
+    /** Picks up a record made earlier — including one still awaiting the lecturer. */
     private fun refreshStatus(courseId: String) {
         viewModelScope.launch {
-            _state.value = _state.value.copy(checkingStatus = true)
+            _state.update { it.copy(checkingStatus = true) }
             when (val res = repo.attendanceStatus(courseId)) {
-                is ApiResult.Success ->
-                    _state.value = _state.value.copy(recorded = res.data.attended == true, checkingStatus = false)
-                is ApiResult.Error ->
-                    _state.value = _state.value.copy(error = res.message, recorded = false, checkingStatus = false)
+                is ApiResult.Success -> _state.update {
+                    it.copy(outcome = outcomeOf(res.data.status), checkingStatus = false)
+                }
+                is ApiResult.Error -> _state.update {
+                    it.copy(error = res.message, checkingStatus = false)
+                }
             }
         }
     }
 
-    fun reportScanBlocked(message: String) {
-        _state.value = _state.value.copy(error = message)
-    }
+    // ── The 90-second window ─────────────────────────────────────────────────────
 
-    fun onPermissionDenied() {
-        _state.value = _state.value.copy(
-            needsPermission = false,
-            error = BlePermissions.scanPermissionDeniedMessage(),
-        )
-    }
-
-    fun onLocationPermissionDenied() {
-        _state.value = _state.value.copy(error = LocationPermissions.permissionDeniedMessage())
-    }
-
-    /**
-     * Called once preflight for the session's verification mode is clear — the
-     * screen checks BLE and/or location permissions/adapters first, matching the
-     * pattern already established for the Bluetooth-only path, then calls this.
-     */
-    fun startScan() {
+    fun startCheckIn() {
         val courseId = _state.value.selectedCourseId
         if (courseId == null) {
-            _state.value = _state.value.copy(error = "Select a course first.")
+            _state.update { it.copy(error = "Select your course first.") }
             return
         }
-        if (_state.value.scanning) return
-        val verification = _state.value.verification
-        if (verification !in setOf("bluetooth", "geofence", "both")) {
-            _state.value = _state.value.copy(error = "The session has an invalid verification policy.")
-            return
-        }
-        scanJob?.cancel()
-        scanJob = viewModelScope.launch {
-            _state.value = _state.value.copy(phase = ScanPhase.Fetching, error = null)
-            when (verification) {
-                "geofence" -> runGpsFlow(courseId)
-                "both" -> runBothFlow(courseId)
-                "bluetooth" -> runBleFlow(courseId)
-            }
-        }
+        if (_state.value.running) return
+        windowJob?.cancel()
+        windowJob = viewModelScope.launch { runWindow(courseId) }
     }
 
-    // ── Bluetooth path (unchanged behaviour/timeout from the original BLE-only flow) ──
+    /** "Try again" is simply another full window. */
+    fun tryAgain() {
+        _state.update { it.copy(needsHelp = false, error = null) }
+        startCheckIn()
+    }
 
-    private suspend fun runBleFlow(courseId: String, reportFailure: Boolean = true) {
-        when (val target = repo.bluetoothTarget(courseId)) {
-            is ApiResult.Error -> {
-                if (reportFailure) {
-                    _state.value = _state.value.copy(phase = ScanPhase.Idle, error = target.message)
-                }
-                return
-            }
-            is ApiResult.Success -> Unit
+    private suspend fun runWindow(courseId: String) = coroutineScope {
+        val app = getApplication<Application>()
+        _state.update {
+            it.copy(phase = CheckInPhase.Preparing, error = null, needsHelp = false, secondsLeft = WINDOW_SECONDS)
         }
-        val token = scanForToken(30_000) ?: run {
-            if (reportFailure) {
-                _state.value = _state.value.copy(
-                    phase = ScanPhase.Idle,
-                    error = "No Bluetooth signal received in 30 s. Make sure the lecturer is broadcasting and you are near the room.",
+
+        // Only scan when the radio is usable AND a lecturer is actually broadcasting;
+        // otherwise the whole window goes to GPS instead of splitting attention.
+        val bleUsable = BlePermissions.scanBlocker(app) == null && bluetoothWorthScanning(courseId)
+        val gpsUsable = LocationPermissions.hasFineLocation(app)
+
+        if (!bleUsable && !gpsUsable) {
+            _state.update {
+                it.copy(
+                    phase = CheckInPhase.Idle,
+                    needsHelp = true,
+                    secondsLeft = 0,
+                    error = "We could not use Bluetooth or your location. Ask your lecturer for the code.",
                 )
             }
-            return
-        }
-        if (!_state.value.recorded) submitToken(courseId, token, reportFailure)
-    }
-
-    private suspend fun scanForToken(timeoutMs: Long): String? {
-        _state.value = _state.value.copy(phase = ScanPhase.Watching)
-        return try {
-            withTimeoutOrNull(timeoutMs) { scanner.tokenFlow().first() }
-        } catch (e: BleUnavailableException) {
-            _state.value = _state.value.copy(phase = ScanPhase.Idle, error = e.message)
-            null
-        }
-    }
-
-    private suspend fun submitToken(courseId: String, token: String, reportFailure: Boolean = true) {
-        _state.value = _state.value.copy(phase = ScanPhase.Submitting)
-        val canAdvertise = canParticipateInSeeding()
-        when (val res = repo.recordAttendance(courseId, token = token, canAdvertise = canAdvertise)) {
-            is ApiResult.Success -> {
-                if (res.data.status == "accepted") {
-                    finishAccepted(res.data.seeding)
-                } else {
-                    if (reportFailure) {
-                        _state.value = _state.value.copy(phase = ScanPhase.Idle, error = "Verification failed. Move closer and try again.")
-                    }
-                }
-            }
-            is ApiResult.Error -> if (reportFailure) {
-                _state.value = _state.value.copy(phase = ScanPhase.Idle, error = res.message)
-            }
-        }
-    }
-
-    // ── GPS geofence path ─────────────────────────────────────────────────────────────
-
-    /**
-     * Streams fixes, submitting each one, until the server accepts, errors, or the
-     * window elapses. `timeoutMs` defaults to the full 90s window; [runBothFlow]
-     * passes a shorter remainder when GPS is the fallback after a Bluetooth miss.
-     */
-    private suspend fun runGpsFlow(
-        courseId: String,
-        timeoutMs: Long = 90_000,
-        reportFailure: Boolean = true,
-    ) {
-        if (!LocationPermissions.hasFineLocation(getApplication())) {
-            if (reportFailure) {
-                _state.value = _state.value.copy(phase = ScanPhase.Idle, error = LocationPermissions.permissionDeniedMessage())
-            }
-            return
-        }
-        _state.value = _state.value.copy(phase = ScanPhase.WatchingGps)
-        val canAdvertise = canParticipateInSeeding()
-        var done = false
-        var errorMessage: String? = null
-
-        try {
-            withTimeoutOrNull(timeoutMs) {
-                gpsSource.fixFlow().takeWhile { !done && !_state.value.recorded }.collect { fix ->
-                    _state.value = _state.value.copy(phase = ScanPhase.Submitting)
-                    val body = GpsFixDto(fix.lat, fix.lng, fix.accuracy)
-                    when (val res = repo.recordAttendance(courseId, fix = body, canAdvertise = canAdvertise)) {
-                        is ApiResult.Success -> {
-                            if (res.data.status == "accepted") {
-                                done = true
-                                finishAccepted(res.data.seeding)
-                            } else {
-                                _state.value = _state.value.copy(phase = ScanPhase.WatchingGps)
-                            }
-                        }
-                        is ApiResult.Error -> {
-                            done = true
-                            errorMessage = res.message
-                        }
-                    }
-                }
-            }
-        } catch (e: LocationUnavailableException) {
-            if (reportFailure) _state.value = _state.value.copy(phase = ScanPhase.Idle, error = e.message)
-            return
-        }
-
-        if (errorMessage != null && reportFailure) {
-            _state.value = _state.value.copy(phase = ScanPhase.Idle, error = errorMessage)
-        } else if (!_state.value.recorded && reportFailure) {
-            _state.value = _state.value.copy(
-                phase = ScanPhase.Idle,
-                error = "Could not verify your location in time. Move closer to the building and try again.",
-            )
-        }
-    }
-
-    // ── Combined path ────────────────────────────────────────────────────────────────
-
-    /** Runs every available radio concurrently; either successful method wins. */
-    private suspend fun runBothFlow(courseId: String) = coroutineScope {
-        val app = getApplication<Application>()
-        val canBle = BlePermissions.scanBlocker(app) == null
-        val canGps = LocationPermissions.hasFineLocation(app)
-        val paths = VerificationPolicy.availablePaths("both", canBle, canGps)
-        if (paths.isEmpty()) {
-            _state.value = _state.value.copy(
-                phase = ScanPhase.Idle,
-                error = "Allow Bluetooth or precise location to verify this session.",
-            )
             return@coroutineScope
         }
 
-        val jobs = buildList {
-            if (AutomaticPath.Bluetooth in paths) add(launch { runBleFlow(courseId, reportFailure = false) })
-            if (AutomaticPath.Gps in paths) add(launch { runGpsFlow(courseId, timeoutMs = 90_000, reportFailure = false) })
+        val canAdvertise = canParticipateInSeeding()
+        _state.update { it.copy(phase = CheckInPhase.Checking) }
+
+        val ticker = launch {
+            for (remaining in WINDOW_SECONDS - 1 downTo 0) {
+                delay(1_000)
+                _state.update { it.copy(secondsLeft = remaining) }
+            }
         }
-        while (!_state.value.recorded && jobs.any { it.isActive }) delay(100)
-        if (_state.value.recorded) jobs.filter { it.isActive }.forEach { it.cancel() }
-        jobs.forEach { it.join() }
-        if (!_state.value.recorded) {
-            _state.value = _state.value.copy(
-                phase = ScanPhase.Idle,
-                error = "Neither Bluetooth nor GPS could verify attendance. Move closer and try again.",
-            )
+
+        withTimeoutOrNull(WINDOW_SECONDS * 1_000L) {
+            val paths = buildList {
+                if (bleUsable) add(launch { bluetoothPath(courseId, canAdvertise) })
+                if (gpsUsable) add(launch { gpsPath(courseId, canAdvertise) })
+            }
+            // Whichever path succeeds first ends the window for both.
+            while (!_state.value.settled && paths.any { it.isActive }) delay(100)
+            paths.forEach { it.cancel() }
+        }
+        ticker.cancel()
+
+        if (!_state.value.settled) {
+            _state.update { it.copy(phase = CheckInPhase.Idle, needsHelp = true, secondsLeft = 0) }
         }
     }
 
-    // ── Shared: acceptance + peer-seeding window ────────────────────────────────────
+    private suspend fun bluetoothWorthScanning(courseId: String): Boolean =
+        when (val res = repo.bluetoothAvailable(courseId)) {
+            is ApiResult.Success -> res.data
+            is ApiResult.Error -> false
+        }
+
+    private suspend fun bluetoothPath(courseId: String, canAdvertise: Boolean) {
+        val token = try {
+            scanner.tokenFlow().first()
+        } catch (e: BleUnavailableException) {
+            return // GPS carries the rest of the window on its own
+        }
+        if (_state.value.settled) return
+        submit(courseId, token = token, canAdvertise = canAdvertise)
+    }
+
+    private suspend fun gpsPath(courseId: String, canAdvertise: Boolean) {
+        try {
+            gpsSource.fixFlow()
+                .takeWhile { !_state.value.settled }
+                .collect { fix ->
+                    submit(
+                        courseId,
+                        fix = GpsFixDto(fix.lat, fix.lng, fix.accuracy),
+                        canAdvertise = canAdvertise,
+                    )
+                }
+        } catch (e: Exception) {
+            // No provider, permission revoked mid-window, etc. Bluetooth may still win.
+        }
+    }
 
     /**
-     * Starts the seeding/decoy window (if any) after marking attendance accepted.
-     * Seeder and decoy windows run for the identical `durationMs` with identical
-     * UI (Seeding phase) — a student can't tell which one they got.
+     * Anything other than "accepted" is treated as "keep trying" — including the
+     * server's deliberately ambiguous "collecting". Transport errors are ignored
+     * for the same reason: the window, not any single request, decides.
      */
-    private fun finishAccepted(seeding: SeedingDto?) {
-        // Mark accepted immediately so a concurrent verification path stops submitting.
-        _state.value = _state.value.copy(phase = ScanPhase.Idle, recorded = true, error = null)
-        if (seeding?.role == "seed" || seeding?.role == "decoy") {
-            seedingJob?.cancel()
-            seedingJob = viewModelScope.launch {
-                _state.value = _state.value.copy(phase = ScanPhase.Seeding)
-                runSeedingWindow(seeding)
-                if (_state.value.recorded) _state.value = _state.value.copy(phase = ScanPhase.Idle)
+    private suspend fun submit(
+        courseId: String,
+        token: String? = null,
+        fix: GpsFixDto? = null,
+        canAdvertise: Boolean,
+    ) {
+        val res = repo.recordAttendance(courseId, token = token, fix = fix, canAdvertise = canAdvertise)
+        if (res is ApiResult.Success && res.data.status == "accepted") {
+            onAccepted(res.data.seeding)
+        }
+    }
+
+    private fun onAccepted(seeding: SeedingDto?) {
+        _state.update {
+            it.copy(
+                phase = CheckInPhase.Idle,
+                outcome = Outcome.Present,
+                needsHelp = false,
+                helpDialogOpen = false,
+                error = null,
+                secondsLeft = 0,
+            )
+        }
+        startSeedingWindow(seeding)
+    }
+
+    // ── "Get help": the lecturer's code ──────────────────────────────────────────
+
+    fun openHelp() {
+        _state.update { it.copy(helpDialogOpen = true, helpError = null) }
+    }
+
+    fun dismissHelp() {
+        _state.update { it.copy(helpDialogOpen = false, helpError = null) }
+    }
+
+    fun submitHelpCode(code: String) {
+        val courseId = _state.value.selectedCourseId ?: return
+        val trimmed = code.trim()
+        if (!trimmed.matches(Regex("^[0-9]{8}$"))) {
+            _state.update { it.copy(helpError = "Enter the 8-digit code your lecturer read out.") }
+            return
+        }
+        cancelAttempt()
+        windowJob = viewModelScope.launch {
+            _state.update { it.copy(helpSubmitting = true, helpError = null) }
+            when (val res = repo.recordAttendance(courseId, code = trimmed)) {
+                is ApiResult.Success -> {
+                    val outcome = outcomeOf(res.data.status)
+                    _state.update {
+                        it.copy(
+                            helpSubmitting = false,
+                            helpDialogOpen = outcome == Outcome.None,
+                            helpError = if (outcome == Outcome.None) "That code was not accepted." else null,
+                            outcome = outcome,
+                            needsHelp = outcome == Outcome.None,
+                            phase = CheckInPhase.Idle,
+                        )
+                    }
+                }
+                is ApiResult.Error -> _state.update {
+                    it.copy(helpSubmitting = false, helpError = res.message)
+                }
             }
         }
     }
+
+    // ── Peer seeding ─────────────────────────────────────────────────────────────
 
     private fun canParticipateInSeeding(): Boolean =
         BlePermissions.hasAdvertise(getApplication()) && seedAdvertiser.isSupported()
 
+    /**
+     * Seeder and decoy windows are identical in length and appearance, so a
+     * student cannot tell which one they were given.
+     */
+    private fun startSeedingWindow(seeding: SeedingDto?) {
+        if (seeding?.role != "seed" && seeding?.role != "decoy") return
+        seedingJob?.cancel()
+        seedingJob = viewModelScope.launch {
+            _state.update { it.copy(phase = CheckInPhase.Seeding) }
+            runSeedingWindow(seeding)
+            _state.update { it.copy(phase = CheckInPhase.Idle) }
+        }
+    }
+
     private suspend fun runSeedingWindow(seeding: SeedingDto) = coroutineScope {
         val durationMs = seeding.durationMs ?: 0L
-        if (seeding.role != "seed" || seeding.token == null || seeding.sessionId == null) {
+        val sessionId = seeding.sessionId
+        if (seeding.role != "seed" || seeding.token == null || sessionId == null) {
             delay(durationMs.coerceAtLeast(0))
             return@coroutineScope
         }
-        val sessionId = seeding.sessionId
         val endAt = System.currentTimeMillis() + durationMs
         var advertiseFailed = false
         fun advertise(token: String) {
@@ -340,7 +345,9 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 when (val res = repo.seedToken(sessionId)) {
                     is ApiResult.Success -> res.data.token?.let(::advertise)
-                    is ApiResult.Error -> Unit // lease may have ended server-side; keep waiting out the window regardless
+                    // Lease may have ended server-side; wait the window out either way
+                    // so the visible duration never depends on the real role.
+                    is ApiResult.Error -> Unit
                 }
             }
         } finally {
@@ -348,64 +355,68 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /**
-     * Fallback path: submit the lecturer-announced 8-digit code instead of waiting on
-     * the automatic attempt. If one is running it is cancelled so the code is handled
-     * immediately as a separate, explicit student action.
-     */
-    fun submitManualCode(code: String) {
-        val courseId = _state.value.selectedCourseId
-        if (courseId == null) {
-            _state.value = _state.value.copy(error = "Select a course first.")
-            return
-        }
-        val trimmed = code.trim()
-        if (!trimmed.matches(Regex("^[0-9]{8}$"))) {
-            _state.value = _state.value.copy(error = "Enter the 8-digit attendance code.")
-            return
-        }
-        // The manual fallback is always available: stop an in-progress automatic
-        // attempt and submit the code immediately.
-        scanJob?.cancel()
-        scanJob = viewModelScope.launch {
-            _state.value = _state.value.copy(phase = ScanPhase.Submitting, error = null)
-            when (val res = repo.recordAttendance(courseId, code = trimmed)) {
-                is ApiResult.Success -> {
-                    val ok = res.data.status == "accepted"
-                    _state.value = _state.value.copy(
-                        phase = ScanPhase.Idle,
-                        recorded = ok,
-                        error = if (ok) null else "Incorrect code. Try again.",
-                    )
-                }
-                is ApiResult.Error ->
-                    _state.value = _state.value.copy(phase = ScanPhase.Idle, error = res.message)
-            }
+    // ── Lifecycle ────────────────────────────────────────────────────────────────
+
+    private fun cancelAttempt() {
+        windowJob?.cancel()
+        windowJob = null
+    }
+
+    fun cancelCheckIn() {
+        cancelAttempt()
+        if (_state.value.running) {
+            _state.update { it.copy(phase = CheckInPhase.Idle, secondsLeft = 0) }
         }
     }
 
-    /** Returns to the course picker so the student can mark attendance for another lecture. */
-    fun resetForAnotherCourse() {
-        scanJob?.cancel()
-        scanJob = null
-        _state.value = _state.value.copy(
-            selectedCourseId = null,
-            recorded = false,
-            phase = ScanPhase.Idle,
-            error = null,
-        )
+    fun markAnotherCourse() {
+        cancelAttempt()
+        _state.update {
+            it.copy(
+                selectedCourseId = null,
+                outcome = Outcome.None,
+                needsHelp = false,
+                phase = CheckInPhase.Idle,
+                error = null,
+                helpError = null,
+                helpDialogOpen = false,
+                secondsLeft = 0,
+            )
+        }
     }
 
-    fun cancelScan() {
-        scanJob?.cancel()
-        scanJob = null
-        if (_state.value.scanning) _state.value = _state.value.copy(phase = ScanPhase.Idle)
+    fun dismissError() {
+        _state.update { it.copy(error = null) }
     }
 
     override fun onCleared() {
         super.onCleared()
-        scanJob?.cancel()
+        windowJob?.cancel()
         seedingJob?.cancel()
         seedAdvertiser.stop()
+    }
+
+    companion object {
+        const val WINDOW_SECONDS = 90
+
+        private fun outcomeOf(status: String?): Outcome = when (status) {
+            "present", "accepted" -> Outcome.Present
+            "under_review" -> Outcome.UnderReview
+            "rejected" -> Outcome.Rejected
+            else -> Outcome.None
+        }
+
+        /**
+         * Everything the check-in may need, asked for once up front: Bluetooth
+         * scanning, precise location, and advertising for peer seeding. Denying
+         * advertising never blocks attendance — it only makes this device
+         * ineligible to seed.
+         */
+        fun requiredPermissions(): Array<String> =
+            (
+                BlePermissions.scanPermissions()
+                    + LocationPermissions.permissions()
+                    + BlePermissions.advertisePermissions()
+                ).distinct().toTypedArray()
     }
 }

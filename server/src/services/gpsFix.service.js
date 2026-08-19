@@ -1,4 +1,4 @@
-const { haversineMeters, isWithinGeofence } = require('../utils/geo');
+const { haversineMeters, distanceToNearestGeofenceMeters } = require('../utils/geo');
 
 /**
  * Per-(student, session) GPS fix accumulator, transient — matches the design's
@@ -9,6 +9,13 @@ const fixBuffers = new Map(); // key -> [{ lat, lng, accuracy, ts }]
 
 const FIX_WINDOW_MS = 90_000; // matches the client's 90s runtime window
 const MIN_FIXES = 4;
+/**
+ * If not one contributing fix beat this accuracy, the centroid is too vague to
+ * band honestly — a 200m-accurate "fix" sitting 40m from the building says
+ * nothing. Such attempts resolve to `unknown`, which routes to lecturer review
+ * rather than silently passing or silently failing.
+ */
+const ACCURACY_CEILING_M = 75;
 
 function fixKey(studentId, sessionId) {
   return `${studentId}:${sessionId}`;
@@ -32,9 +39,9 @@ function clearFixes(studentId, sessionId) {
 }
 
 /**
- * Step 1 of the design's algorithm: require >= 4 fixes, then drop fixes whose
- * distance from the median location exceeds ~2x the median distance (with a
- * floor so a tight, low-noise cluster doesn't over-trim on tiny jitter).
+ * Step 1: require >= 4 fixes, then drop fixes whose distance from the median
+ * location exceeds ~2x the median distance (with a floor so a tight, low-noise
+ * cluster doesn't over-trim on tiny jitter).
  */
 function removeOutliersByMedianDistance(fixes) {
   if (fixes.length < MIN_FIXES) return null;
@@ -62,14 +69,16 @@ function accuracyWeightedCentroid(fixes) {
   let sumWeight = 0;
   let sumLat = 0;
   let sumLng = 0;
+  let bestAccuracy = Infinity;
   for (const f of fixes) {
     const accuracy = Math.max(1, Number(f.accuracy) || 50);
     const weight = 1 / (accuracy * accuracy);
     sumWeight += weight;
     sumLat += f.lat * weight;
     sumLng += f.lng * weight;
+    bestAccuracy = Math.min(bestAccuracy, accuracy);
   }
-  return { lat: sumLat / sumWeight, lng: sumLng / sumWeight };
+  return { lat: sumLat / sumWeight, lng: sumLng / sumWeight, bestAccuracy };
 }
 
 /** Returns null if there aren't enough fixes yet to decide. */
@@ -82,28 +91,64 @@ function computeCentroid(studentId, sessionId) {
 }
 
 /**
- * Appends the new fix, recomputes the centroid, and tests it against every
- * still-live building attached to the session. Returns `{ accepted, centroid }`
- * — `centroid` is null while still waiting on more fixes (< 4).
+ * Sorts a distance into the design's four bands. `inside`/`near` are the
+ * auto-pass bands; `suspicious` and `far` both send the student to the
+ * try-again/get-help screen and differ only in what a correct code then does.
  */
-function evaluateFix(studentId, sessionId, fix, geofences, bufferMeters) {
+function classifyDistance(distanceM, { nearBufferM, farBufferM }) {
+  if (!Number.isFinite(distanceM)) return 'unknown';
+  if (distanceM === 0) return 'inside';
+  if (distanceM <= nearBufferM) return 'near';
+  if (distanceM <= farBufferM) return 'suspicious';
+  return 'far';
+}
+
+const PASS_BANDS = new Set(['inside', 'near']);
+
+function isPassBand(band) {
+  return PASS_BANDS.has(band);
+}
+
+/**
+ * Appends the new fix and re-bands the accumulated centroid against every
+ * still-live building on the session.
+ *
+ * `ready: false` means "still collecting, no verdict yet". A ready verdict
+ * carries a band but deliberately no pass/fail wording — the caller decides,
+ * and the client is never told which band it landed in.
+ */
+function evaluateFix(studentId, sessionId, fix, geofences, buffers) {
   addFix(studentId, sessionId, fix);
   const centroid = computeCentroid(studentId, sessionId);
-  if (!centroid) return { accepted: false, centroid: null };
+  if (!centroid) return { ready: false, band: null, centroid: null };
 
-  const accepted = geofences.some(
-    (g) => isWithinGeofence(centroid.lat, centroid.lng, g.polygon, bufferMeters),
+  if (centroid.bestAccuracy > ACCURACY_CEILING_M) {
+    return { ready: true, band: 'unknown', centroid, distanceM: null };
+  }
+
+  const distanceM = distanceToNearestGeofenceMeters(
+    centroid.lat,
+    centroid.lng,
+    geofences.map((g) => g.polygon),
   );
-  return { accepted, centroid };
+  return {
+    ready: true,
+    band: classifyDistance(distanceM, buffers),
+    centroid,
+    distanceM: Number.isFinite(distanceM) ? distanceM : null,
+  };
 }
 
 module.exports = {
   FIX_WINDOW_MS,
   MIN_FIXES,
+  ACCURACY_CEILING_M,
   addFix,
   clearFixes,
   removeOutliersByMedianDistance,
   accuracyWeightedCentroid,
   computeCentroid,
+  classifyDistance,
+  isPassBand,
   evaluateFix,
 };

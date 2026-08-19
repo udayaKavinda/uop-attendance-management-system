@@ -51,19 +51,29 @@ jest.mock('../models/Attendance', () => ({
 }));
 
 // Settings singleton mock — accepting attendance now also runs seeder selection,
-// which reads Settings.seedRate (default 0, so seeding stays a no-op for these tests).
-let mockSettingsStore = null;
+// which reads Settings.seedRate (default 0, so seeding stays a no-op for these
+// tests). Returned by reference and reset in place so a test can flip the
+// Bluetooth kill switch through the settings service's read-through cache.
+const mockSettingsStore = {};
+function resetSettings() {
+  Object.keys(mockSettingsStore).forEach((k) => delete mockSettingsStore[k]);
+  Object.assign(mockSettingsStore, {
+    bleEnabled: true,
+    nearBufferM: 50,
+    farBufferM: 100,
+    suspiciousBandAutoPass: true,
+    seedRate: 0,
+    seedWindowMs: 60000,
+  });
+}
+resetSettings();
 jest.mock('../models/Settings', () => ({
   findOneAndUpdate: jest.fn((_filter, update) => {
-    if (!mockSettingsStore) {
-      mockSettingsStore = {
-        manualCodeAllowed: true, bluetoothAllowed: true, geofenceAllowed: false, seedRate: 0, seedWindowMs: 60000, bufferGpsOnly: 30, bufferGpsBle: 15,
-      };
-    }
     if (update.$set) Object.assign(mockSettingsStore, update.$set);
-    return Promise.resolve({ ...mockSettingsStore });
+    return Promise.resolve(mockSettingsStore);
   }),
 }));
+jest.mock('../models/Geofence', () => ({ find: jest.fn().mockResolvedValue([]) }));
 
 const request = require('supertest');
 const mongoose = require('mongoose');
@@ -103,7 +113,9 @@ function makeSession(overrides = {}) {
     startTime: '00:00',
     endTime: '23:59',
     recurring: true,
-    verification: 'bluetooth',
+    buildings: [makeId()],
+    manualCodeRotationMode: 'none',
+    manualCodeRotationSeconds: 60,
     active: true,
     deleted: false,
     broadcasting: true,
@@ -150,6 +162,7 @@ function headers(person) {
 beforeEach(() => {
   jest.clearAllMocks();
   Object.keys(_bleTokenStore).forEach(k => delete _bleTokenStore[k]);
+  resetSettings();
 });
 
 // ─── PATCH /broadcast (on/off toggle) ────────────────────────────────────────
@@ -274,7 +287,7 @@ describe('PATCH /api/admin/sessions/:id/broadcast', () => {
     expect(session.broadcasting).toBe(false);
     expect(session.lastBroadcastSeenAt).toBeNull();
     // Token removed
-    expect(await bluetoothCode.verifyToken(String(session._id), 'anytoken')).toBe(false);
+    expect((await bluetoothCode.verifyToken(String(session._id), 'anytoken')).ok).toBe(false);
   });
 
   test('200 — admin can toggle broadcast for any session without course ownership', async () => {
@@ -359,14 +372,11 @@ describe('PATCH /api/admin/sessions/:id/broadcast', () => {
     expect(session.save).not.toHaveBeenCalled();
   });
 
-  test('400 — geofence-only sessions cannot start a Bluetooth broadcast', async () => {
+  test('403 — no session can broadcast while the global Bluetooth kill switch is off', async () => {
+    mockSettingsStore.bleEnabled = false;
     const admin = makePerson({ role: 'admin' });
     const course = makeCourse();
-    const session = makeSession({
-      course: course._id,
-      verification: 'geofence',
-      broadcasting: false,
-    });
+    const session = makeSession({ course: course._id, broadcasting: false });
     Person.findById.mockResolvedValue(admin);
     LectureSession.findOne.mockResolvedValue(session);
     Course.findById.mockResolvedValue(course);
@@ -376,8 +386,8 @@ describe('PATCH /api/admin/sessions/:id/broadcast', () => {
       .set(headers(admin))
       .send({ on: true });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/not allowed/i);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/bluetooth/i);
     expect(session.save).not.toHaveBeenCalled();
   });
 });
@@ -534,7 +544,9 @@ describe('GET /api/bluetooth-target', () => {
     expect(res.body.error).toMatch(/no active lecture session/i);
   });
 
-  test('400 when broadcast is off', async () => {
+  // Not an error any more: GPS still runs for the full window, so "no Bluetooth
+  // to listen for" is normal information, not a failed request.
+  test('200 available:false when broadcast is off', async () => {
     const student = makePerson({ role: 'student' });
     const course = makeCourse();
     const session = makeSession({ course: course._id, broadcasting: false });
@@ -546,11 +558,11 @@ describe('GET /api/bluetooth-target', () => {
     const res = await request(app)
       .get(`/api/bluetooth-target?courseId=${course._id}`)
       .set(headers(student));
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/not open/i);
+    expect(res.status).toBe(200);
+    expect(res.body.available).toBe(false);
   });
 
-  test('400 when broadcast heartbeat is stale (dead broadcaster)', async () => {
+  test('200 available:false when the broadcast heartbeat is stale (dead broadcaster)', async () => {
     const student = makePerson({ role: 'student' });
     const course = makeCourse();
     const session = makeSession({
@@ -566,8 +578,25 @@ describe('GET /api/bluetooth-target', () => {
     const res = await request(app)
       .get(`/api/bluetooth-target?courseId=${course._id}`)
       .set(headers(student));
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/not open/i);
+    expect(res.status).toBe(200);
+    expect(res.body.available).toBe(false);
+  });
+
+  test('200 available:false while the global Bluetooth kill switch is off', async () => {
+    mockSettingsStore.bleEnabled = false;
+    const student = makePerson({ role: 'student' });
+    const course = makeCourse();
+    const session = makeSession({ course: course._id });
+
+    Person.findById.mockResolvedValue(student);
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const res = await request(app)
+      .get(`/api/bluetooth-target?courseId=${course._id}`)
+      .set(headers(student));
+    expect(res.status).toBe(200);
+    expect(res.body.available).toBe(false);
   });
 
   test('200 — confirms that a Bluetooth attendance channel is available', async () => {
@@ -753,7 +782,7 @@ describe('POST /api/attendance', () => {
     const course = makeCourse();
     const session = makeSession({ course: course._id });
 
-    const existingAttendance = { _id: makeId(), method: 'bluetooth' };
+    const existingAttendance = { _id: makeId(), method: 'bluetooth', status: 'present' };
     Person.findById.mockResolvedValue(student);
     Course.findById.mockResolvedValue(course);
     LectureSession.find.mockResolvedValue([session]);

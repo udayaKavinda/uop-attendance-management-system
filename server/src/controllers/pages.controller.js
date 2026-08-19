@@ -44,13 +44,16 @@ deleted.</p>
   <li><strong>Phone number</strong> — optionally, for lecturer/staff directory records
   (entered by an administrator, not required for students).</li>
   <li><strong>Attendance records</strong> — the course, lecture session, date, and time
-  you recorded attendance, and the method used (Bluetooth proximity, GPS geofence,
-  or a lecturer-provided manual code).</li>
-  <li><strong>Location information</strong> — for GPS-geofence sessions, precise
-  location fixes are processed during the short verification window. Rejected and
-  intermediate fixes are held only in server memory for that attempt. When attendance
-  is accepted, the resulting centroid and contributing-fix count are stored with the
-  attendance record for academic-integrity auditing.</li>
+  you recorded attendance, whether it was accepted outright or is awaiting your
+  lecturer's review, and the method used (Bluetooth proximity, GPS geofence, or a
+  lecturer-provided attendance code).</li>
+  <li><strong>Location information</strong> — every session is verified by GPS
+  alongside Bluetooth, so precise location fixes are processed during the short
+  (90-second) verification window whenever you check in. Intermediate and rejected
+  fixes are held only in server memory for that attempt and are never written to the
+  database. When attendance is accepted, the resulting averaged position, its
+  contributing-fix count, and its distance from the lecture building are stored with
+  the attendance record for academic-integrity auditing.</li>
   <li><strong>Bluetooth tokens</strong> — short-lived rotating codes used only to verify
   physical presence in a classroom during attendance. These are not personal data and
   automatically expire.</li>

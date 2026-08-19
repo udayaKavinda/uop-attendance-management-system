@@ -1,19 +1,17 @@
 # Attendance Verification Design — Implemented System
 
-Status: implemented and aligned with the Android/server READMEs as of 2026-08-19.
+Status: implemented. This document describes the system as built, not a proposal.
 
-This document records the intended end-to-end behavior and security invariants. It does
-not override runtime configuration or instruct deployment; those belong in the READMEs.
+## The model in one paragraph
 
-## Goals
-
-1. Verify physical classroom presence through Bluetooth proximity, a GPS building
-   geofence, or either signal.
-2. Keep method policy controlled by staff/admin settings and enforced by the server.
-3. Provide a deliberately weaker but tightly controlled human-readable fallback code.
-4. Extend Bluetooth reach through privacy-preserving peer seeding.
-5. Preserve the accepted verification method internally for auditing while keeping the
-   standard matrix and CSV as simple present/absent reports.
+Every lecture session verifies attendance the same way. There is no per-session policy
+to choose. When a student checks in, their phone spends up to 90 seconds listening for
+the lecturer's Bluetooth beacon *and* streaming GPS fixes at the same time; either one
+can pass them, and the first to succeed ends the window. If neither does, they are
+offered **Try again** (another 90 seconds) or **Get help**, which asks for the 8-digit
+code the lecturer reads out. What that code grants depends on how far from the building
+the student's GPS put them — close enough and it passes them outright, too far and it
+only queues them for the lecturer's review.
 
 ## Explicit product boundaries
 
@@ -21,222 +19,124 @@ not override runtime configuration or instruct deployment; those belong in the R
   repository, so the server does not infer membership from course batch or email format.
 - GPS verification is foreground and permission-based; the app does not continuously
   track students.
-- In-memory nonce, manual-attempt, GPS-fix, and exchange-code state assumes one server
+- In-memory nonce, code-attempt, GPS-fix, and attempt-verdict state assumes one server
   process. A shared store is required before horizontal scaling.
 
-## Session modes
+## Decision table
 
-| `LectureSession.verification` | Android behavior | Server acceptance | Staff broadcast |
-|---|---|---|---|
-| `bluetooth` | scan BLE, 30 s | live valid primary/seeder token | available in window |
-| `geofence` | stream GPS, 90 s | stable centroid in active building | hidden and rejected |
-| `both` | BLE and GPS concurrently | either valid method | available |
+Distances are measured from the edge of the session's building polygon and are
+admin-configurable (defaults shown).
 
-The server returns `verification` in `/api/courses/running`. Session creation requires an
-explicit policy, the database field is required, and Android does not infer a missing mode.
+| Evidence gathered in the window | Result | Student sees |
+|---|---|---|
+| Valid BLE token received | **Present** | Attendance recorded |
+| GPS centroid inside the polygon | **Present** | Attendance recorded |
+| GPS centroid within `nearBufferM` (50m) | **Present** | Attendance recorded |
+| GPS centroid within `farBufferM` (100m) | Suspicious | Try again / Get help → correct code → **Present**¹ |
+| GPS centroid beyond `farBufferM` | Far | Try again / Get help → correct code → **Under review** |
+| No usable GPS fix at all | Unknown | Try again / Get help → correct code → **Under review** |
 
-Global Bluetooth/geofence allow switches apply immediately. A disabled policy:
+¹ Only while `suspiciousBandAutoPass` is on (the default). Turning it off routes this
+band to review as well.
 
-- prevents creating that mode;
-- removes existing sessions using it from student running discovery;
-- rejects new automatic submissions; and
-- rejects/ends incompatible BLE broadcast activity.
+## Why the client is never told its band
 
-This fail-closed rule avoids a settings UI that says “disabled” while old sessions still
-accept the method.
+The server answers `status: "collecting"` for **both** "still gathering fixes" and
+"gathered enough, but you are not in a passing band". A modified client therefore cannot
+learn how far out it is, and the suspicious/far distinction stays server-side until a
+code is actually submitted. The only place the difference becomes visible is the outcome
+after submitting the code, which is unavoidable — and by then the record already exists.
 
-## Runtime flows
+## Why `unknown` exists
 
-### Bluetooth
+A centroid built entirely from very inaccurate fixes says nothing useful. If no
+contributing fix beat `ACCURACY_CEILING_M` (75m), the attempt bands as `unknown` rather
+than being trusted — a ±200m "fix" sitting 40m from the building must not silently pass
+as `near`. `unknown` routes to review, never to a pass. The same band applies when a
+student produced no fix at all (location denied, no provider, no lock).
 
-1. Staff starts broadcast for a running `bluetooth` or `both` session.
-2. The server verifies role/course ownership, session/course state, policy, schedule, and
-   method compatibility.
-3. Android's foreground service polls approximately every five seconds. The poll refreshes
-   the broadcast heartbeat and returns the current 15-second rotating token.
-4. Student scans for the token and submits it through `POST /api/attendance`.
-5. Server repeats method/schedule/broadcast checks and matches against the primary plus
-   unexpired seeder token pool.
-6. Attendance is created idempotently with `method: "bluetooth"`.
+## Verdict retention
 
-The previous token is accepted only for the 2-second rotation grace period. A stale
-broadcast heartbeat, disabled/out-of-window session, or expired seeder lease is rejected
-at read/verification time, independent of cleanup jobs.
+The band from the automatic attempt has to outlive the attempt itself: the GPS fix
+buffer drops anything older than 90 seconds, and by the time a student reads the failure
+screen, asks the lecturer, and types 8 digits, their fixes are long gone. So the verdict
+(band, centroid, distance) is stored separately for 10 minutes in
+`services/attemptVerdict.service.js`.
 
-### GPS geofence
+Like the OAuth exchange-code store, the sign-in nonce store, and the GPS fix buffer
+itself, this is in-memory and single-process.
 
-1. Android requests precise foreground location and starts a 90-second fix stream.
-2. Each fix contains latitude, longitude, and accuracy; the unified API accepts one fix
-   per request.
-3. Server accumulates a short-lived attempt buffer, filters unacceptable fixes/outliers,
-   and returns `pending` until enough stable evidence exists.
-4. The surviving centroid is tested against every configured **active, non-deleted**
-   building polygon with the mode-specific buffer.
-5. On success, server clears the attempt buffer and creates attendance with
-   `method: "gps"`. The accepted centroid/fix count are retained for audit.
+## Upgrades
 
-Intermediate/rejected fixes are not attendance records and are not persisted.
-
-### Both
-
-Android starts every available path concurrently. Bluetooth denial, disabled adapter, or
-unsupported hardware must not prevent GPS; location denial must not prevent Bluetooth.
-Both call the same idempotent attendance API. The first accepted method creates the record;
-a racing accepted request receives the existing record.
-
-### Manual code
-
-Manual code is orthogonal to all three automatic modes.
-
-- It is available when `Settings.manualCodeAllowed` and
-  `LectureSession.manualCodeEnabled` are both true.
-- The student can submit it while an automatic attempt is active; Android cancels that
-  attempt and sends the code immediately.
-- The code is exactly eight digits, separate from BLE secrets, optionally rotating, and
-  visible only to authorized staff.
-- Five failed attempts within the attempt window cause a temporary per-student/session
-  lockout.
-- Pause freezes presentation; resume or manual regenerate invalidates the exposed code
-  immediately. Automatic rotation has only the 2-second grace window.
-- Success records `method: "manual_code"`.
-
-Session creation carries manual enable/rotation fields in the same server request. This
-prevents a “session created” success followed by an invisible failed configuration call.
+A genuine automatic pass always overwrites a non-present record. A student who was sent
+to review — or even rejected — and then actually walks into the room can fix it
+themselves by checking in again. Nothing else overwrites: resubmitting the code while
+already under review is a no-op, not a second pending row.
 
 ## Peer seeding
 
-After successful automatic verification, the server may assign a real seeder, a decoy, or
-no role.
+Only students who heard the **lecturer's own primary token** are eligible to seed. A
+GPS-passed student can be up to the near buffer away from the building, so
+re-broadcasting the classroom token from their phone would push it well outside the room
+and undermine the "BLE proves you are in the room" premise the top of the decision table
+rests on. A student who heard a *seeder* rather than the lecturer is excluded for the
+same reason, one hop further out — which is why `verifyToken` reports which pool row
+matched.
 
-- Android reports `canAdvertise=true` only when BLE advertising is supported **and** the
-  runtime advertise/connect permission is granted.
-- Android requests advertising permission together with attendance permissions on Android
-  12+, but denial never blocks the student's own attendance.
-- Real and decoy windows use identical duration and UI so a student cannot learn their
-  role from the screen.
-- Real seeders receive their own rotating token row and poll for rotation/heartbeat.
-- If the local advertiser fails after selection, Android removes its own lease and still
-  waits out the same UI window so role privacy is preserved.
-- `leaseUntil` is checked both by token verification and the background deletion sweep.
+Among eligible students, real seeders and decoys get identical window durations and
+identical UI, so nobody can tell which they were given. A GPS-passed student getting no
+window at all reveals nothing they did not already know: their own device knows it never
+heard a token.
 
-Ending/deactivating/deleting a session removes all primary and seed token rows.
+## Admin controls
 
-## Geofences and map
+| Setting | Default | Effect |
+|---|---|---|
+| `bleEnabled` | true | The one kill switch. Off stops lecturer broadcasts, student scanning, and seeding. GPS has no equivalent — every session depends on it. |
+| `nearBufferM` | 50 | Auto-pass radius, meters. |
+| `farBufferM` | 100 | Outer radius, meters. Must be ≥ `nearBufferM`. |
+| `suspiciousBandAutoPass` | true | Whether a correct code between the radii passes outright or goes to review. |
+| `seedRate` | 0 | Target concurrent seeders; 0 disables seeding. |
+| `seedWindowMs` | 60000 | Seeder **and** decoy window length. |
 
-`Geofence` stores a named polygon as ordered `[lng, lat]` points plus active/deleted flags.
-At least three valid in-range vertices are required. Only active, non-deleted buildings
-are returned to staff selectors or GPS validation.
+A note on the default: GPS is routinely accurate to only 20–50m indoors, so a tight
+`nearBufferM` pushes genuinely-present students into the code path. 50m is a deliberate
+compromise, not a precision claim.
 
-The Android admin tool is native osmdroid/OpenStreetMap. Its initial camera is the Faculty
-of Engineering, University of Peradeniya; administrators may pan/zoom before drawing. No
-Google Maps key, billing account, or WebView is required.
+## Session configuration
 
-Create-session building selection is searchable and multi-select. Selected items have
-explicit selected color/state and removable chips. At least one building is required for
-`geofence` and `both`.
+A session has no verification field. What the lecturer chooses is:
 
-## Scheduling
+- **Buildings** — mandatory, at least one. Without a polygon GPS has nothing to measure
+  against and every student would land in the review queue.
+- **Code rotation** — whether the 8-digit code rotates on an interval, and how fast.
+  The code itself always exists; there is no enable switch.
 
-- Times use strict, zero-padded 24-hour `HH:mm` and must satisfy start < end.
-- Recurring sessions run weekly on the configured weekday.
-- One-time sessions receive an explicit local `occurrenceDate` for the next selected
-  weekday, including today. Window resolution requires both date and weekday to match.
-- A one-time session is deactivated after its occurrence and cannot silently reappear the
-  next week after server downtime.
-- Schedule logic uses the configured IANA `TZ`, default `Asia/Colombo`.
+## Lecturer review
 
-## Data contracts
+`under_review` submissions appear in the session card while the lecture is running, with
+**Mark present** / **Reject** per student. The queue shows identity and submission time
+and deliberately **not** the distance band or method: the question being asked is "was
+this person actually in my lecture", which the lecturer can answer from the room. A
+distance readout would only invite rubber-stamping a number they cannot check.
 
-### LectureSession verification fields
+Rejection sets `status: 'rejected'` rather than deleting the row, so the decision is
+auditable and a student cannot retry the code to get a fresh pending record.
 
-```text
-verification: bluetooth | geofence | both
-buildings: ObjectId[] -> Geofence
-manualCodeEnabled: Boolean
-manualCodeRotationMode: none | interval
-manualCodeRotationSeconds: Number
-occurrenceDate: YYYY-MM-DD | null
-```
+## What stays server-internal
 
-### Attendance provenance
+`method`, `band`, `seedRelayed`, and `centroid` are audit fields. They never appear in
+the attendance matrix, the CSV export, or any student-facing payload. The matrix exposes
+`status` only (`present` / `under_review` / `rejected`), because the lecturer has to act
+on it.
 
-There is one provenance field; no redundant `acceptedVia` field is used:
+## Known limits
 
-```text
-method: bluetooth | gps | manual_code
-centroid?: { lat, lng, fixCount }
-```
-
-Matrix cells intentionally map `sessionId -> Boolean`; Android and CSV use the compact
-generic present marker `P`. Verification provenance remains internal to attendance records.
-
-### Secrets
-
-- `BleToken`: high-entropy primary/seed tokens, owner/role, rotation state, optional
-  seeder lease.
-- `ManualCode`: separate eight-digit code, previous code, rotation timestamp, paused state.
-
-Keeping the stores separate avoids treating a human-readable fallback as if it had BLE
-token entropy.
-
-## API contract
-
-`POST /api/attendance` accepts exactly one proof:
-
-```json
-{
-  "courseId": "...",
-  "token": "optional BLE token",
-  "fix": { "lat": 7.25, "lng": 80.59, "accuracy": 8 },
-  "code": "optional 8-digit code",
-  "canAdvertise": false
-}
-```
-
-Only one of `token`, `fix`, or `code` may be present. Responses are:
-
-```json
-{ "status": "pending" }
-```
-
-or
-
-```json
-{
-  "status": "accepted",
-  "seeding": {
-    "role": "seed",
-    "durationMs": 60000,
-    "sessionId": "...",
-    "token": "0123456789abcdef"
-  }
-}
-```
-
-## Security and privacy invariants
-
-- Roles and lecturer ownership are derived from the authenticated server session.
-- Mutation requests require the CSRF header; sensitive routes are rate-limited.
-- GPS-only sessions cannot start or accept BLE broadcast/token attendance.
-- Inactive/deleted geofences never validate GPS attendance.
-- Manual code has both global and per-session gates plus guess lockout.
-- Attendance is idempotent per student/session/local date.
-- The public privacy policy discloses Bluetooth, GPS/manual methods, transient GPS fixes,
-  and stored accepted centroids. Its revision date is static and intentional.
-
-## Test and deployment gates
-
-Required before production:
-
-```bash
-npm --prefix server test -- --runInBand
-cd Android && ./gradlew testDebugUnitTest lintDebug assembleDebug
-```
-
-Regression coverage includes the running-course verification DTO, mode bypass rejection,
-active geofences, strict time and one-time dates, manual config validation, expired seeder
-leases, authentication, GPS geometry/fix filtering, broadcasts, and public pages.
-
-Production deployment is main-only, waits for both server and Android verification jobs,
-health-checks the restarted service, and rolls back to the previous Git revision on
-failure.
+- The 50–100m band with `suspiciousBandAutoPass` on is the main abuse surface: a student
+  in the canteen who has the code from a group chat passes silently. Mitigations in place
+  are the audit fields, the per-(student, session) attempt cap (5 tries / 5 min, then a
+  2-minute lockout), and code rotation. The switch exists so this can be tightened after
+  observing real use.
+- BLE range is extended deliberately by seeding, so "BLE == in the room" is approximate.
+  Restricting seeding to primary-verified students bounds the chain to one hop.
+- All four in-memory stores block horizontal scaling.

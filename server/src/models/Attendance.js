@@ -8,13 +8,36 @@ const attendanceSchema = new mongoose.Schema({
   lectureCode: { type: String, required: true },
   attendanceDate: { type: String, required: true, index: true },
   timestamp: { type: Date, default: Date.now },
-  method: { type: String, enum: ['bluetooth', 'gps', 'manual_code'], required: true },
-  /** GPS path only: the accepted centroid + how many surviving fixes produced it, for audit. */
+  /**
+   * The only field the lecturer sees besides presence itself. `under_review` is a
+   * code-override submission from outside the trusted bands, awaiting a decision.
+   */
+  status: {
+    type: String,
+    enum: ['present', 'under_review', 'rejected'],
+    default: 'present',
+    required: true,
+    index: true,
+  },
+  /** Server-internal provenance — never exposed in matrices, rosters, or exports. */
+  method: { type: String, enum: ['bluetooth', 'gps', 'code_override'], required: true },
+  /** Server-internal distance band at the moment of acceptance. Audit only. */
+  band: {
+    type: String,
+    enum: ['inside', 'near', 'suspicious', 'far', 'unknown'],
+    default: null,
+  },
+  /** True when the accepted BLE token came from a peer seeder rather than the lecturer. */
+  seedRelayed: { type: Boolean, default: false },
+  /** GPS paths only: the centroid + how many surviving fixes produced it, for audit. */
   centroid: {
     lat: { type: Number },
     lng: { type: Number },
     fixCount: { type: Number },
+    distanceM: { type: Number },
   },
+  reviewedAt: { type: Date, default: null },
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Person', default: null },
 });
 
 attendanceSchema.index({ student: 1, session: 1, attendanceDate: 1 }, { unique: true });

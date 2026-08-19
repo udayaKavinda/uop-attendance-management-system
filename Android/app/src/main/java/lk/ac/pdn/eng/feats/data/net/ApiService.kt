@@ -119,12 +119,24 @@ interface ApiService {
     @GET("api/admin/sessions/{sessionId}/manual-code")
     suspend fun manualCodeStatus(@Path("sessionId") sessionId: String): ManualCodeStatusDto
 
-    /** Enable/disable, change rotation, pause/resume, or force-regenerate — any subset. */
+    /** Change rotation, pause/resume, or force-regenerate — any subset. */
     @PATCH("api/admin/sessions/{sessionId}/manual-code")
     suspend fun setManualCode(
         @Path("sessionId") sessionId: String,
         @Body body: ManualCodeConfigReq,
     ): ManualCodeStatusDto
+
+    /** Students who gave a correct code from outside the trusted bands. */
+    @GET("api/admin/sessions/{sessionId}/reviews")
+    suspend fun pendingReviews(@Path("sessionId") sessionId: String): PendingReviewsRes
+
+    /** Approve or reject one pending submission. */
+    @PATCH("api/admin/sessions/{sessionId}/reviews/{attendanceId}")
+    suspend fun reviewSubmission(
+        @Path("sessionId") sessionId: String,
+        @Path("attendanceId") attendanceId: String,
+        @Body body: ReviewDecisionReq,
+    ): SimpleSuccess
 
     // ── Admin: settings ───────────────────────────────────────────────────────────────
     @GET("api/admin/settings")

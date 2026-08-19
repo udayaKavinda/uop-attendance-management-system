@@ -22,6 +22,7 @@ import lk.ac.pdn.eng.feats.data.net.GeofenceUpdateReq
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
 import lk.ac.pdn.eng.feats.data.net.ManualCodeConfigReq
 import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
+import lk.ac.pdn.eng.feats.data.net.PendingReviewDto
 import lk.ac.pdn.eng.feats.data.net.RunningSessionDto
 import lk.ac.pdn.eng.feats.data.net.SettingsDto
 import lk.ac.pdn.eng.feats.data.net.SettingsReq
@@ -43,16 +44,20 @@ data class StaffState(
     val selectedLecturerFilter: LecturerDto? = null,
     val lecturerSearchResults: List<LecturerDto> = emptyList(),
     val lecturerSearchLoading: Boolean = false,
-    /** Per-session manual-code status, fetched on demand when a card is expanded. */
+    /** Per-session lecturer-code status, fetched on demand when a card is expanded. */
     val manualCodes: Map<String, ManualCodeStatusDto> = emptyMap(),
-    /** Admin-only global settings (manual-code switch, allowedModes, seeding, buffers); null until loaded. */
+    /** Global policy (BLE kill switch, distance buffers, seeding); null until loaded. */
     val settings: SettingsDto? = null,
-    /** Admin-only building list for the geofence mode + the map tool. */
+    /** Building list for the session builder + the admin map tool. */
     val geofences: List<GeofenceDto> = emptyList(),
+    /** Per-session queue of code submissions awaiting a decision. */
+    val pendingReviews: Map<String, List<PendingReviewDto>> = emptyMap(),
 ) {
     val isAdmin: Boolean get() = role == "admin"
-    val manualCodeAllowed: Boolean? get() = settings?.manualCodeAllowed
+    val bleEnabled: Boolean get() = settings?.bleEnabled != false
     fun isRunning(sessionId: String?): Boolean = sessionId != null && running.containsKey(sessionId)
+    fun reviewsFor(sessionId: String?): List<PendingReviewDto> =
+        sessionId?.let { pendingReviews[it] } ?: emptyList()
 
     /** Courses visible in the admin Courses tab (filtered by selected lecturer). */
     fun filteredCourses(): List<CourseDto> {
@@ -73,8 +78,9 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
         pollRunning()
         observeBroadcastService()
-        // Every staff member needs `allowedModes` for the create-session mode picker,
-        // and `buildings` to pick from for geofence sessions — not admin-only reads.
+        // Both are staff-readable, not admin-only: every lecturer needs the BLE
+        // switch to know whether broadcasting is even offered, and the building
+        // list to create a session at all.
         loadGlobalSettings()
         loadGeofences()
     }
@@ -271,15 +277,15 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         start: String,
         end: String,
         recurring: Boolean,
-        verification: String = "bluetooth",
         buildings: List<String> = emptyList(),
-        manualCodeEnabled: Boolean = false,
         manualCodeRotationMode: String = "none",
         manualCodeRotationSeconds: Int = 60,
     ) {
         if (courseId.isBlank()) { setError("Choose a course first."); return }
-        if (verification != "bluetooth" && buildings.isEmpty()) {
-            setError("Select at least one building for geofence-based verification.")
+        // Mandatory: GPS runs for every session, so without a polygon nobody could
+        // ever land in a passing band.
+        if (buildings.isEmpty()) {
+            setError("Select at least one building for this session.")
             return
         }
         viewModelScope.launch {
@@ -288,9 +294,7 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
                 startTime = start,
                 endTime = end,
                 recurring = recurring,
-                verification = verification,
                 buildings = buildings,
-                manualCodeEnabled = manualCodeEnabled,
                 manualCodeRotationMode = manualCodeRotationMode,
                 manualCodeRotationSeconds = manualCodeRotationSeconds,
             )
@@ -333,9 +337,8 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
      * service. If the radio later fails, the service rolls the server back.
      */
     fun startBroadcast(sessionId: String) {
-        val session = _state.value.sessions.firstOrNull { it.id == sessionId }
-        if (session?.verification == "geofence") {
-            setError("This is a GPS-only session; Bluetooth broadcast is not available.")
+        if (!_state.value.bleEnabled) {
+            setError("Bluetooth is switched off by the administrator. GPS still verifies this session.")
             return
         }
         if (!_state.value.isRunning(sessionId)) {
@@ -398,6 +401,40 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(manualCodes = _state.value.manualCodes + (sessionId to status))
     }
 
+    fun setCodeRotation(sessionId: String, rotates: Boolean, seconds: Int) = patchManualCode(
+        sessionId,
+        ManualCodeConfigReq(
+            rotationMode = if (rotates) "interval" else "none",
+            rotationSeconds = seconds,
+        ),
+    )
+
+    // ── Review queue (code submissions from outside the trusted bands) ────────────────
+
+    fun loadPendingReviews(sessionId: String) {
+        viewModelScope.launch {
+            when (val res = repo.pendingReviews(sessionId)) {
+                is ApiResult.Success ->
+                    _state.value = _state.value.copy(
+                        pendingReviews = _state.value.pendingReviews + (sessionId to res.data),
+                    )
+                is ApiResult.Error -> Unit // a stale queue is better than an error banner here
+            }
+        }
+    }
+
+    fun reviewSubmission(sessionId: String, attendanceId: String, approve: Boolean) {
+        viewModelScope.launch {
+            when (val res = repo.reviewSubmission(sessionId, attendanceId, approve)) {
+                is ApiResult.Success -> {
+                    setFlash(if (approve) "Marked present." else "Submission rejected.")
+                    loadPendingReviews(sessionId)
+                }
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
+    }
+
     // ── Settings (admin: mode policy, seeding, buffers, manual-code kill-switch) ───────
 
     private fun loadGlobalSettings() {
@@ -409,31 +446,29 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setManualCodeAllowedGlobally(allowed: Boolean) {
-        patchSettings(
-            SettingsReq(manualCodeAllowed = allowed),
-            if (allowed) "Manual attendance codes enabled." else "Manual attendance codes disabled for everyone.",
-        )
-    }
-
-    fun setBluetoothAllowed(allowed: Boolean) = patchSettings(
-        SettingsReq(bluetoothAllowed = allowed),
-        if (allowed) "Bluetooth verification enabled." else "Bluetooth verification disabled.",
+    fun setBleEnabled(enabled: Boolean) = patchSettings(
+        SettingsReq(bleEnabled = enabled),
+        if (enabled) "Bluetooth turned on for every session." else "Bluetooth switched off. GPS still verifies attendance.",
     )
 
-    fun setGeofenceAllowed(allowed: Boolean) = patchSettings(
-        SettingsReq(geofenceAllowed = allowed),
-        if (allowed) "GPS geofence verification enabled." else "GPS geofence verification disabled.",
+    fun setSuspiciousBandAutoPass(autoPass: Boolean) = patchSettings(
+        SettingsReq(suspiciousBandAutoPass = autoPass),
+        if (autoPass) "A correct code now passes students in the outer band." else "The outer band now goes to lecturer review.",
     )
 
     fun setSeedingParams(seedRate: Int, seedWindowMs: Long) =
         patchSettings(SettingsReq(seedRate = seedRate, seedWindowMs = seedWindowMs), "Seeding settings updated.")
 
-    fun setGpsBuffers(bufferGpsOnly: Double, bufferGpsBle: Double) =
+    fun setDistanceBuffers(nearBufferM: Int, farBufferM: Int) {
+        if (farBufferM < nearBufferM) {
+            setError("The outer distance must be at least as large as the pass distance.")
+            return
+        }
         patchSettings(
-            SettingsReq(bufferGpsOnly = bufferGpsOnly, bufferGpsBle = bufferGpsBle),
-            "GPS buffers updated.",
+            SettingsReq(nearBufferM = nearBufferM, farBufferM = farBufferM),
+            "Distance thresholds updated.",
         )
+    }
 
     private fun patchSettings(req: SettingsReq, success: String) {
         viewModelScope.launch {
