@@ -71,6 +71,16 @@ data class StaffState(
     fun isRunning(sessionId: String?): Boolean = sessionId != null && running.containsKey(sessionId)
     fun reviewsFor(sessionId: String?): List<PendingReviewDto> =
         sessionId?.let { pendingReviews[it] } ?: emptyList()
+
+    /**
+     * Server-side "is this session broadcasting" truth, visible to every viewer (not just
+     * the device actually transmitting). Prefers [running] — refreshed every ~10s by
+     * pollRunning() — over the session's own `broadcasting` field, which is only as fresh
+     * as the last full [sessions] reload, so another staff member's dashboard reflects a
+     * broadcast starting/stopping within seconds rather than only after a manual refresh.
+     */
+    fun isBroadcastingOnServer(session: StaffSessionDto): Boolean =
+        running[session.id]?.broadcasting ?: (session.broadcasting == true)
 }
 
 class StaffViewModel(app: Application) : AndroidViewModel(app) {
@@ -217,43 +227,24 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Load-time reconciliation: if the server says a session is broadcasting,
-     * this phone either takes over the broadcast (silent preflight passed) or
-     * turns it off on the server, so server state and the radio always agree.
-     * With multiple flagged sessions (stale leftovers), the one inside its
-     * schedule window wins and the rest are turned off.
+     * Load-time reconciliation for THIS device's own local radio only — never starts
+     * broadcasting here. `BroadcastService.state` is in-memory and per-process, so
+     * `current == null` means either "this device was never broadcasting" or "this
+     * device's app process died," and there is no reliable way to tell those apart from
+     * "a completely different device (e.g. an admin's phone, or a co-owning lecturer's)
+     * is legitimately broadcasting right now." Treating the latter as "nobody's on it,
+     * so I'll take over" would make a second device silently start advertising the same
+     * session's BLE token the moment its owner opens the Sessions tab — exactly the bug
+     * this used to have. The server's own stale-broadcast sweep is what closes a genuinely
+     * abandoned broadcast; this method only ever stops a service actually running here.
      */
-    private suspend fun reconcileBroadcast(sessions: List<StaffSessionDto>) {
-        val serverOn = sessions.filter { it.broadcasting == true && it.id != null }
-        if (serverOn.isEmpty()) return
-        val current = BroadcastService.state.value?.sessionId
-
-        val target = when {
-            serverOn.any { it.id == current } -> serverOn.first { it.id == current }
-            serverOn.size == 1 -> serverOn.first()
-            else -> {
-                val runningIds = when (val res = repo.runningSessions()) {
-                    is ApiResult.Success -> res.data.mapNotNull { it.sessionId }.toSet()
-                    is ApiResult.Error -> emptySet()
-                }
-                serverOn.firstOrNull { it.id in runningIds } ?: serverOn.first()
-            }
-        }
-
-        // Stale leftovers: anything else still flagged on the server gets closed.
-        serverOn.filter { it.id != target.id }.forEach { s ->
-            s.id?.let { repo.setBroadcasting(it, false) }
-        }
-
-        if (target.id == current) return
-        val app = getApplication<Application>()
-        val blocker = BroadcastService.broadcastBlocker(app)
-        if (blocker == null) {
-            BroadcastService.start(app, target.id!!, sessionLabel(target))
-        } else {
-            repo.setBroadcasting(target.id!!, false)
-            setError("Broadcast was turned off: $blocker")
-            refreshSessionsOnly()
+    private fun reconcileBroadcast(sessions: List<StaffSessionDto>) {
+        val current = BroadcastService.state.value?.sessionId ?: return
+        val stillOnServer = sessions.any { it.id == current && it.broadcasting == true }
+        if (!stillOnServer) {
+            // Someone else deactivated/stopped it, or the server swept it as stale —
+            // this device's radio must not keep advertising a channel the server closed.
+            BroadcastService.stop(getApplication())
         }
     }
 
@@ -502,16 +493,9 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Turn the broadcast OFF: radio first, then the server flag. */
-    fun stopBroadcast(sessionId: String) {
-        BroadcastService.stop(getApplication())
-        viewModelScope.launch {
-            when (val res = repo.setBroadcasting(sessionId, false)) {
-                is ApiResult.Success -> { setFlash("Broadcast stopped."); refreshSessionsOnly() }
-                is ApiResult.Error -> setError(res.message)
-            }
-        }
-    }
+    // Broadcasting is stopped only via deactivate() now — see its doc comment. There is
+    // no standalone "stop broadcast, keep session active" action, matching Activate
+    // doubling as "start broadcast" with a single symmetric control.
 
     // ── Manual attendance code (fallback, staff-controlled) ───────────────────────────
 

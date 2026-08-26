@@ -54,7 +54,6 @@ import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -879,6 +878,7 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                     session = session,
                     running = isRunning,
                     broadcast = state.broadcast?.takeIf { it.sessionId == session.id },
+                    liveOnServer = state.isBroadcastingOnServer(session),
                     manualCode = session.id?.let { state.manualCodes[it] },
                     buildingNames = state.geofences
                         .filter { it.id in session.buildings.orEmpty() }
@@ -887,7 +887,6 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                     pendingReviews = state.reviewsFor(session.id),
                     onActivate = { session.id?.let { if (session.active == true) vm.deactivate(it) else vm.activate(it) } },
                     onDelete = { confirmDelete = session },
-                    onStopBroadcast = { session.id?.let(vm::stopBroadcast) },
                     onLoadManualCode = { session.id?.let(vm::loadManualCode) },
                     onPauseManualCode = { session.id?.let(vm::pauseManualCode) },
                     onResumeManualCode = { session.id?.let(vm::resumeManualCode) },
@@ -1258,9 +1257,11 @@ private fun SessionCard(
     buildingNames: List<String>,
     bleEnabled: Boolean,
     pendingReviews: List<PendingReviewDto>,
+    /** Server's `broadcasting` flag, freshest available — see call site (10s running-poll,
+     *  falling back to the less-fresh full session list only if that poll hasn't hit yet). */
+    liveOnServer: Boolean,
     onActivate: () -> Unit,
     onDelete: () -> Unit,
-    onStopBroadcast: () -> Unit,
     onLoadManualCode: () -> Unit,
     onPauseManualCode: () -> Unit,
     onResumeManualCode: () -> Unit,
@@ -1268,7 +1269,12 @@ private fun SessionCard(
     onReview: (String, Boolean) -> Unit,
 ) {
     val active = session.active == true
-    val onAir = broadcast != null
+    // `broadcast` mirrors BroadcastService.state — non-null only on the phone that is
+    // actually transmitting. `liveOnServer` is the server-side truth, visible to every
+    // viewer (e.g. an admin looking at a session a lecturer is broadcasting from their own
+    // phone). Both must be checked, or a remote viewer would wrongly see "not broadcasting".
+    val liveHere = broadcast != null
+    val liveAnywhere = liveOnServer || liveHere
     val buildingLabel = when {
         buildingNames.isNotEmpty() -> buildingNames.joinToString(", ")
         session.buildings.orEmpty().isNotEmpty() -> "${session.buildings.orEmpty().size} buildings"
@@ -1279,7 +1285,7 @@ private fun SessionCard(
         Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
         border = when {
-            onAir -> Palette.SuccessBorder
+            liveAnywhere -> Palette.SuccessBorder
             running -> Palette.RunningBorder
             else -> Palette.Border
         },
@@ -1289,13 +1295,13 @@ private fun SessionCard(
                 Box(
                     modifier = Modifier
                         .size(44.dp)
-                        .background(if (onAir) Palette.SuccessBg else Palette.AccentSoft, RoundedCornerShape(13.dp)),
+                        .background(if (liveAnywhere) Palette.SuccessBg else Palette.AccentSoft, RoundedCornerShape(13.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         Icons.Outlined.Schedule,
                         contentDescription = null,
-                        tint = if (onAir) Palette.SuccessText else Palette.AccentDark,
+                        tint = if (liveAnywhere) Palette.SuccessText else Palette.AccentDark,
                         modifier = Modifier.size(22.dp),
                     )
                 }
@@ -1315,7 +1321,7 @@ private fun SessionCard(
                         maxLines = 1,
                     )
                 }
-                SessionStatePill(active = active, running = running, onAir = onAir)
+                SessionStatePill(active = active, running = running, onAir = liveAnywhere)
             }
 
             Spacer(Modifier.height(14.dp))
@@ -1355,7 +1361,7 @@ private fun SessionCard(
 
             Spacer(Modifier.height(12.dp))
             when {
-                onAir -> {
+                liveAnywhere -> {
                     Column(
                         Modifier
                             .fillMaxWidth()
@@ -1368,23 +1374,34 @@ private fun SessionCard(
                             Spacer(Modifier.width(7.dp))
                             Text("ATTENDANCE IS LIVE", color = Palette.SuccessText, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
                         }
-                        val details = listOfNotNull(
-                            broadcast.attendanceCount?.let { if (it == 1) "1 student marked" else "$it students marked" },
-                            broadcast.minutesRemaining?.let { "${it}m remaining" },
-                        ).joinToString(" · ")
-                        if (details.isNotBlank()) {
-                            Text(details, color = Palette.SuccessText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                        if (liveHere) {
+                            val details = listOfNotNull(
+                                broadcast?.attendanceCount?.let { if (it == 1) "1 student marked" else "$it students marked" },
+                                broadcast?.minutesRemaining?.let { "${it}m remaining" },
+                            ).joinToString(" · ")
+                            if (details.isNotBlank()) {
+                                Text(details, color = Palette.SuccessText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                            }
+                            broadcast?.error?.let {
+                                Text(it, color = Palette.ErrorText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                            }
+                        } else {
+                            // Broadcasting from a different device — no local BroadcastState to read counts
+                            // from, and we deliberately don't poll GET .../broadcast here since that poll
+                            // doubles as the broadcaster's own heartbeat; polling it from a viewing device
+                            // would falsely keep a dead broadcast looking alive.
+                            Text(
+                                "Broadcasting from another device.",
+                                color = Palette.SuccessText,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
                         }
-                        broadcast.error?.let {
-                            Text(it, color = Palette.ErrorText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-                        }
-                        Spacer(Modifier.height(10.dp))
-                        SessionActionButton(
-                            text = "Stop broadcast",
-                            icon = Icons.Outlined.StopCircle,
-                            tone = SessionActionTone.Danger,
-                            onClick = onStopBroadcast,
-                            modifier = Modifier.fillMaxWidth(),
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Deactivate below to stop the broadcast.",
+                            color = Palette.SuccessText.copy(alpha = 0.8f),
+                            fontSize = 11.sp,
                         )
                     }
                 }
