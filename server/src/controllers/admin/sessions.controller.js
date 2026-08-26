@@ -5,6 +5,7 @@ const manualCodeService = require('../../services/manualCode.service');
 const attendanceReviewService = require('../../services/attendanceReview.service');
 const { validateBroadcastBody, validateReviewBody } = require('../../validators/session.validator');
 const { validateManualCodeConfigBody } = require('../../validators/manualCode.validator');
+const { parsePagination } = require('../../utils/pagination');
 
 async function remove(req, res) {
   await lectureSessionService.softDeleteSession(req.sessionItem);
@@ -23,8 +24,10 @@ async function deactivate(req, res) {
 }
 
 async function list(req, res) {
-  const items = await lectureSessionService.listAllForStaff(req.auth);
-  return res.json({ items });
+  const pagination = parsePagination(req.query);
+  const result = await lectureSessionService.listAllForStaff(req.auth, pagination);
+  if (Array.isArray(result)) return res.json({ items: result });
+  return res.json(result);
 }
 
 async function listRunning(req, res) {

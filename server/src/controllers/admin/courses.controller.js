@@ -1,11 +1,19 @@
+const mongoose = require('mongoose');
 const courseService = require('../../services/course.service');
 const lectureSessionService = require('../../services/lectureSession.service');
 const attendanceService = require('../../services/attendance.service');
 const { validateCreateCourseBody } = require('../../validators/course.validator');
+const { parsePagination } = require('../../utils/pagination');
 
 async function list(req, res) {
-  const items = await courseService.listForStaff(req.auth);
-  return res.json({ items });
+  const pagination = parsePagination(req.query);
+  const rawLecturerId = req.query.lecturerId;
+  const lecturerId = typeof rawLecturerId === 'string' && mongoose.isValidObjectId(rawLecturerId)
+    ? rawLecturerId
+    : undefined;
+  const result = await courseService.listForStaff(req.auth, pagination, lecturerId);
+  if (Array.isArray(result)) return res.json({ items: result });
+  return res.json(result);
 }
 
 async function create(req, res) {
@@ -13,19 +21,16 @@ async function create(req, res) {
   if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
   try {
     const result = await courseService.createCourse(req.auth, validated);
-    if (!result.ok) return res.status(result.status).json({ error: result.error });
-    return res.json({ success: true, course: result.course });
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error, courses: result.created });
+    }
+    return res.json({ success: true, courses: result.courses });
   } catch (err) {
     if (err && err.code === 11000) {
       return res.status(400).json({ error: 'A course with this code and batch already exists' });
     }
     throw err;
   }
-}
-
-async function remove(req, res) {
-  await courseService.deleteCourse(req.course);
-  return res.json({ success: true });
 }
 
 async function disable(req, res) {
@@ -44,6 +49,13 @@ async function assignLecturer(req, res) {
   return res.json({ success: true, course: result.course });
 }
 
+/** Owner or admin adds ONE co-owner to a course they already have access to. */
+async function addLecturer(req, res) {
+  const result = await courseService.addLecturer(req.course, req.body.lecturerId);
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  return res.json({ success: true, course: result.course });
+}
+
 async function createSession(req, res) {
   const result = await lectureSessionService.createSession(req.course, req.body);
   if (!result.ok) return res.status(result.status).json({ error: result.error });
@@ -58,10 +70,10 @@ async function attendanceMatrix(req, res) {
 module.exports = {
   list,
   create,
-  remove,
   disable,
   enable,
   assignLecturer,
+  addLecturer,
   createSession,
   attendanceMatrix,
 };

@@ -3,14 +3,26 @@ const Person = require('../models/Person');
 const Course = require('../models/Course');
 const { escapeRegex } = require('../utils/regex');
 
-async function listLecturers(query) {
+/**
+ * `pagination` omitted (or `hasLimit: false`) returns every matching lecturer,
+ * as before. Passed with `hasLimit: true`, returns a page instead.
+ */
+async function listLecturers(query, pagination) {
   const q = String(query || '').trim();
   const filter = { role: 'lecturer', deleted: false };
   if (q) {
     const re = new RegExp(escapeRegex(q), 'i');
     filter.$or = [{ name: re }, { email: re }, { phone: re }];
   }
-  return Person.find(filter).sort({ name: 1, email: 1 });
+  const dbQuery = Person.find(filter).sort({ name: 1, email: 1 });
+  if (!pagination || !pagination.hasLimit) return dbQuery;
+
+  const { page, limit } = pagination;
+  const [items, total] = await Promise.all([
+    dbQuery.skip((page - 1) * limit).limit(limit),
+    Person.countDocuments(filter),
+  ]);
+  return { items, total, page, limit, hasMore: page * limit < total };
 }
 
 async function createOrUpdateLecturer({ name, email, phone }) {

@@ -32,6 +32,19 @@ const settingsSchema = new mongoose.Schema({
   seedRate: { type: Number, default: 0, min: 0 },
   /** Real seeder AND decoy window duration, ms — identical for both so neither is distinguishable. */
   seedWindowMs: { type: Number, default: 60_000, min: 10_000 },
+
+  /**
+   * Email domain new self-registering students must match (case-insensitive
+   * suffix on the part after '@'). Empty string disables the restriction.
+   * Lecturers/admins are provisioned by an admin and are never subject to this.
+   */
+  studentEmailDomain: { type: String, default: 'eng.pdn.ac.lk', trim: true, lowercase: true },
+
+  /**
+   * Android `versionCode` an installed app must meet or exceed. 0 disables the
+   * check. Bumped by an admin after publishing a release that must not be skipped.
+   */
+  minSupportedVersionCode: { type: Number, default: 0, min: 0 },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Settings', settingsSchema);

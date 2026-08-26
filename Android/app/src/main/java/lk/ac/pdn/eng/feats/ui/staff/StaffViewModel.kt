@@ -5,8 +5,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -32,15 +35,25 @@ import lk.ac.pdn.eng.feats.ui.container
 data class StaffState(
     val role: String = "lecturer",
     val courses: List<CourseDto> = emptyList(),
+    val coursesPage: Int = 1,
+    val coursesHasMore: Boolean = false,
+    val coursesLoadingMore: Boolean = false,
     val sessions: List<StaffSessionDto> = emptyList(),
+    val sessionsPage: Int = 1,
+    val sessionsHasMore: Boolean = false,
+    val sessionsLoadingMore: Boolean = false,
     val lecturers: List<LecturerDto> = emptyList(),
+    val lecturersPage: Int = 1,
+    val lecturersHasMore: Boolean = false,
+    val lecturersLoadingMore: Boolean = false,
     val running: Map<String, RunningSessionDto> = emptyMap(),
     val loading: Boolean = false,
     val error: String? = null,
     val flash: String? = null,
     /** Mirrors [BroadcastService.state]: non-null while THIS phone is on the air. */
     val broadcast: BroadcastState? = null,
-    /** Admin Courses tab: filter list + create-for lecturer. */
+    /** Admin Courses tab: filter list + create-for lecturer. Server-side scoped (not a client filter),
+     *  so it stays correct regardless of how many course pages are loaded. */
     val selectedLecturerFilter: LecturerDto? = null,
     val lecturerSearchResults: List<LecturerDto> = emptyList(),
     val lecturerSearchLoading: Boolean = false,
@@ -58,12 +71,6 @@ data class StaffState(
     fun isRunning(sessionId: String?): Boolean = sessionId != null && running.containsKey(sessionId)
     fun reviewsFor(sessionId: String?): List<PendingReviewDto> =
         sessionId?.let { pendingReviews[it] } ?: emptyList()
-
-    /** Courses visible in the admin Courses tab (filtered by selected lecturer). */
-    fun filteredCourses(): List<CourseDto> {
-        val filterId = selectedLecturerFilter?.id ?: return courses
-        return courses.filter { c -> c.lecturers?.any { it.id == filterId } == true }
-    }
 }
 
 class StaffViewModel(app: Application) : AndroidViewModel(app) {
@@ -73,6 +80,15 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(StaffState(role = container.prefs.cachedUser()?.role ?: "lecturer"))
     val state: StateFlow<StaffState> = _state.asStateFlow()
     private var lecturerSearchJob: Job? = null
+
+    /**
+     * Emits once a just-activated session is confirmed running (and BLE is on) —
+     * the UI layer collects this to run the broadcast permission preflight, since
+     * that needs an Activity to host permission launchers. This is what makes
+     * "Activate" double as "start broadcast" without a separate button.
+     */
+    private val _broadcastReady = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val broadcastReady: SharedFlow<String> = _broadcastReady.asSharedFlow()
 
     init {
         refresh()
@@ -109,26 +125,94 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
     private fun setFlash(msg: String) { _state.value = _state.value.copy(flash = msg) }
     private fun setError(msg: String) { _state.value = _state.value.copy(error = msg) }
 
+    /** Reloads page 1 of every list — used at startup and after any mutation. */
     fun refresh() {
         viewModelScope.launch {
             _state.value = _state.value.copy(loading = true)
-            val coursesRes = repo.adminCourses()
-            val sessionsRes = repo.allSessions()
-            val lecturersRes = if (_state.value.isAdmin) repo.lecturers() else null
+            val lecturerFilterId = _state.value.selectedLecturerFilter?.id
+            val coursesRes = repo.adminCourses(1, lecturerFilterId)
+            val sessionsRes = repo.allSessions(1)
+            val lecturersRes = if (_state.value.isAdmin) repo.lecturersPage(1) else null
 
             var next = _state.value.copy(loading = false)
             when (coursesRes) {
-                is ApiResult.Success -> next = next.copy(courses = coursesRes.data)
+                is ApiResult.Success -> next = next.copy(
+                    courses = coursesRes.data.items,
+                    coursesPage = 1,
+                    coursesHasMore = coursesRes.data.hasMore,
+                )
                 is ApiResult.Error -> next = next.copy(error = coursesRes.message)
             }
             when (sessionsRes) {
-                is ApiResult.Success -> next = next.copy(sessions = sessionsRes.data)
+                is ApiResult.Success -> next = next.copy(
+                    sessions = sessionsRes.data.items,
+                    sessionsPage = 1,
+                    sessionsHasMore = sessionsRes.data.hasMore,
+                )
                 is ApiResult.Error -> next = next.copy(error = sessionsRes.message)
             }
-            if (lecturersRes is ApiResult.Success) next = next.copy(lecturers = lecturersRes.data)
+            if (lecturersRes is ApiResult.Success) next = next.copy(
+                lecturers = lecturersRes.data.items,
+                lecturersPage = 1,
+                lecturersHasMore = lecturersRes.data.hasMore,
+            )
             _state.value = next
 
-            if (sessionsRes is ApiResult.Success) reconcileBroadcast(sessionsRes.data)
+            if (sessionsRes is ApiResult.Success) reconcileBroadcast(sessionsRes.data.items)
+        }
+    }
+
+    fun loadMoreCourses() {
+        val s = _state.value
+        if (!s.coursesHasMore || s.coursesLoadingMore) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(coursesLoadingMore = true)
+            val nextPage = s.coursesPage + 1
+            when (val res = repo.adminCourses(nextPage, s.selectedLecturerFilter?.id)) {
+                is ApiResult.Success -> _state.value = _state.value.copy(
+                    courses = _state.value.courses + res.data.items,
+                    coursesPage = nextPage,
+                    coursesHasMore = res.data.hasMore,
+                    coursesLoadingMore = false,
+                )
+                is ApiResult.Error -> _state.value = _state.value.copy(coursesLoadingMore = false, error = res.message)
+            }
+        }
+    }
+
+    fun loadMoreSessions() {
+        val s = _state.value
+        if (!s.sessionsHasMore || s.sessionsLoadingMore) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(sessionsLoadingMore = true)
+            val nextPage = s.sessionsPage + 1
+            when (val res = repo.allSessions(nextPage)) {
+                is ApiResult.Success -> _state.value = _state.value.copy(
+                    sessions = _state.value.sessions + res.data.items,
+                    sessionsPage = nextPage,
+                    sessionsHasMore = res.data.hasMore,
+                    sessionsLoadingMore = false,
+                )
+                is ApiResult.Error -> _state.value = _state.value.copy(sessionsLoadingMore = false, error = res.message)
+            }
+        }
+    }
+
+    fun loadMoreLecturers() {
+        val s = _state.value
+        if (!s.lecturersHasMore || s.lecturersLoadingMore) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(lecturersLoadingMore = true)
+            val nextPage = s.lecturersPage + 1
+            when (val res = repo.lecturersPage(nextPage)) {
+                is ApiResult.Success -> _state.value = _state.value.copy(
+                    lecturers = _state.value.lecturers + res.data.items,
+                    lecturersPage = nextPage,
+                    lecturersHasMore = res.data.hasMore,
+                    lecturersLoadingMore = false,
+                )
+                is ApiResult.Error -> _state.value = _state.value.copy(lecturersLoadingMore = false, error = res.message)
+            }
         }
     }
 
@@ -174,8 +258,12 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun refreshSessionsOnly() {
-        when (val res = repo.allSessions()) {
-            is ApiResult.Success -> _state.value = _state.value.copy(sessions = res.data)
+        when (val res = repo.allSessions(1)) {
+            is ApiResult.Success -> _state.value = _state.value.copy(
+                sessions = res.data.items,
+                sessionsPage = 1,
+                sessionsHasMore = res.data.hasMore,
+            )
             is ApiResult.Error -> Unit
         }
     }
@@ -190,25 +278,41 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
     private fun pollRunning() {
         viewModelScope.launch {
             while (isActive) {
-                when (val res = repo.runningSessions()) {
-                    is ApiResult.Success ->
-                        _state.value = _state.value.copy(
-                            running = res.data.associateBy { it.sessionId ?: "" }.filterKeys { it.isNotEmpty() },
-                        )
-                    is ApiResult.Error -> Unit // keep last known running set
-                }
+                refreshRunningNow()
                 delay(10_000)
             }
         }
     }
 
+    /** Out-of-cycle running-set refresh, so a just-activated session doesn't wait for the next poll tick. */
+    private suspend fun refreshRunningNow() {
+        when (val res = repo.runningSessions()) {
+            is ApiResult.Success ->
+                _state.value = _state.value.copy(
+                    running = res.data.associateBy { it.sessionId ?: "" }.filterKeys { it.isNotEmpty() },
+                )
+            is ApiResult.Error -> Unit // keep last known running set
+        }
+    }
+
     // ── Courses ────────────────────────────────────────────────────────────────────
 
+    /** Re-fetches courses scoped to this lecturer server-side, so the filter stays correct however many pages exist. */
     fun setLecturerFilter(lecturer: LecturerDto?) {
         _state.value = _state.value.copy(
             selectedLecturerFilter = lecturer,
             lecturerSearchResults = emptyList(),
         )
+        viewModelScope.launch {
+            when (val res = repo.adminCourses(1, lecturer?.id)) {
+                is ApiResult.Success -> _state.value = _state.value.copy(
+                    courses = res.data.items,
+                    coursesPage = 1,
+                    coursesHasMore = res.data.hasMore,
+                )
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
     }
 
     /** Debounced lecturer lookup for the Courses filter and Owners dialog. */
@@ -233,9 +337,9 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun createCourse(code: String, batch: String, name: String) {
-        if (code.isBlank() || name.isBlank() || batch.isBlank()) {
-            setError("Course code, batch and name are required.")
+    fun createCourse(code: String, batches: List<String>, name: String) {
+        if (code.isBlank() || name.isBlank() || batches.isEmpty()) {
+            setError("Course code, at least one batch, and name are required.")
             return
         }
         val lecturerIds = if (_state.value.isAdmin) {
@@ -249,21 +353,30 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
             null
         }
         viewModelScope.launch {
-            when (val res = repo.createCourse(CreateCourseReq(name.trim(), code.trim(), batch.trim(), lecturerIds))) {
+            when (val res = repo.createCourse(CreateCourseReq(name.trim(), code.trim(), batches, lecturerIds))) {
                 is ApiResult.Success -> { setFlash("Course added."); refresh() }
                 is ApiResult.Error -> setError(res.message)
             }
         }
     }
 
-    fun deleteCourse(courseId: String) = mutate("Course deleted.") { repo.deleteCourse(courseId) }
-    fun disableCourse(courseId: String) = mutate("Course disabled.") { repo.disableCourse(courseId) }
-    fun enableCourse(courseId: String) = mutate("Course enabled.") { repo.enableCourse(courseId) }
+    fun disableCourse(courseId: String) = mutate("Course archived.") { repo.disableCourse(courseId) }
+    fun enableCourse(courseId: String) = mutate("Course unarchived.") { repo.enableCourse(courseId) }
 
     fun assignLecturers(courseId: String, lecturerIds: List<String>) {
         viewModelScope.launch {
             when (val res = repo.assignLecturer(courseId, lecturerIds)) {
                 is ApiResult.Success -> { setFlash("Owners updated."); refresh() }
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
+    }
+
+    /** Additive-only: a course owner adds ONE more co-owner (cannot remove one this way). */
+    fun addLecturer(courseId: String, lecturerId: String) {
+        viewModelScope.launch {
+            when (val res = repo.addLecturer(courseId, lecturerId)) {
+                is ApiResult.Success -> { setFlash("Owner added."); refresh() }
                 is ApiResult.Error -> setError(res.message)
             }
         }
@@ -308,8 +421,36 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun activate(sessionId: String) = mutate("Session activated.") { repo.activateSession(sessionId) }
-    fun deactivate(sessionId: String) = mutate("Session deactivated.") { repo.deactivateSession(sessionId) }
+    /** Activating also doubles as "start broadcast" — see [broadcastReady]. */
+    fun activate(sessionId: String) {
+        viewModelScope.launch {
+            when (val res = repo.activateSession(sessionId)) {
+                is ApiResult.Success -> {
+                    setFlash("Session activated.")
+                    refresh()
+                    refreshRunningNow()
+                    if (_state.value.isRunning(sessionId) && _state.value.bleEnabled) {
+                        _broadcastReady.emit(sessionId)
+                    }
+                }
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
+    }
+
+    /** Deactivating also stops this phone's radio if it's the one broadcasting this session. */
+    fun deactivate(sessionId: String) {
+        viewModelScope.launch {
+            if (BroadcastService.state.value?.sessionId == sessionId) {
+                BroadcastService.stop(getApplication())
+            }
+            when (val res = repo.deactivateSession(sessionId)) {
+                is ApiResult.Success -> { setFlash("Session deactivated."); refresh() }
+                is ApiResult.Error -> setError(res.message)
+            }
+        }
+    }
+
     fun deleteSession(sessionId: String) = mutate("Session deleted.") { repo.deleteSession(sessionId) }
 
     // ── Lecturers (admin) ────────────────────────────────────────────────────────────
@@ -458,6 +599,16 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setSeedingParams(seedRate: Int, seedWindowMs: Long) =
         patchSettings(SettingsReq(seedRate = seedRate, seedWindowMs = seedWindowMs), "Seeding settings updated.")
+
+    fun setStudentEmailDomain(domain: String) = patchSettings(
+        SettingsReq(studentEmailDomain = domain),
+        if (domain.isBlank()) "Student email domain check disabled." else "Student email domain updated.",
+    )
+
+    fun setMinSupportedVersionCode(versionCode: Int) = patchSettings(
+        SettingsReq(minSupportedVersionCode = versionCode),
+        if (versionCode <= 0) "Mandatory update check disabled." else "Minimum app version updated.",
+    )
 
     fun setDistanceBuffers(nearBufferM: Int, farBufferM: Int) {
         if (farBufferM < nearBufferM) {

@@ -179,15 +179,12 @@ private fun CheckInBody(
     Text("Your running lectures", style = MaterialTheme.typography.labelLarge)
     Spacer(Modifier.height(8.dp))
 
-    state.courses.forEach { course ->
-        CourseRow(
-            course = course,
-            selected = course.id == state.selectedCourseId,
-            enabled = !state.busy,
-            onClick = { vm.selectCourse(course.id) },
-        )
-        Spacer(Modifier.height(8.dp))
-    }
+    CourseSearchDropdown(
+        courses = state.courses,
+        selectedId = state.selectedCourseId,
+        enabled = !state.busy,
+        onSelect = vm::selectCourse,
+    )
 
     Spacer(Modifier.height(10.dp))
 
@@ -421,6 +418,65 @@ private fun OutcomeCard(
 }
 
 // ── Pieces ───────────────────────────────────────────────────────────────────
+
+/**
+ * Search-as-you-type picker over currently-running sessions only — the campus-wide
+ * list has no enrolment filter, so this keeps it usable when many courses are live
+ * at once instead of scrolling a plain list.
+ */
+@Composable
+private fun CourseSearchDropdown(
+    courses: List<RunningCourseDto>,
+    selectedId: String?,
+    enabled: Boolean,
+    onSelect: (String?) -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    val selected = courses.firstOrNull { it.id == selectedId }
+
+    if (selected != null) {
+        CourseRow(
+            course = selected,
+            selected = true,
+            enabled = enabled,
+            onClick = { onSelect(null); query = "" },
+        )
+        return
+    }
+
+    AppTextField(
+        query,
+        { query = it },
+        "Search your lecture",
+        placeholder = "Course code or name…",
+        enabled = enabled,
+    )
+
+    val matches = if (query.isBlank()) {
+        courses
+    } else {
+        courses.filter { "${it.code} ${it.name} ${it.batch}".contains(query, ignoreCase = true) }
+    }
+
+    Spacer(Modifier.height(8.dp))
+    if (matches.isEmpty()) {
+        Text(
+            if (query.isBlank()) "No lectures are running right now." else "No running lecture matches \"$query\".",
+            color = Palette.Muted,
+            fontSize = 12.sp,
+        )
+    } else {
+        matches.take(20).forEach { course ->
+            CourseRow(
+                course = course,
+                selected = false,
+                enabled = enabled,
+                onClick = { onSelect(course.id); query = "" },
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
 
 @Composable
 private fun CourseRow(

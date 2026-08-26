@@ -246,6 +246,28 @@ fun LoadingGate(message: String = "Please wait.") {
     }
 }
 
+/** Full-screen, non-dismissible block shown when the server reports this build is too old. */
+@Composable
+fun UpdateRequiredScreen(onUpdate: () -> Unit) {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("⬆️", fontSize = 40.sp)
+            Text("Update required", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(
+                "A newer version of this app is required to continue. Please update to keep using it.",
+                color = Palette.Muted,
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(4.dp))
+            PrimaryButton(text = "Update now", onClick = onUpdate)
+        }
+    }
+}
+
 /** Success confirmation block (.success-icon + .status-wrap). */
 @Composable
 fun SuccessState(title: String, subtitle: String) {

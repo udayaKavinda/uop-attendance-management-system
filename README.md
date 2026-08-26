@@ -65,8 +65,21 @@ Android details are in [server/README.md](server/README.md) and
 
 ## Access model
 
-Students discover the courses that have sessions running right now. The repository
-does not contain an enrolment/registration data source, so it does not claim or attempt
-student-to-course membership filtering. Recording attendance still requires a valid
-server-enforced session method and physical/manual proof. Lecturer actions are restricted
-to owned courses; admins may manage the whole installation.
+Students discover the courses that have sessions running right now — a searchable
+picker, not a scrolling list, since campus-wide "running now" can be a lot of sessions
+at once. The repository does not contain an enrolment/registration data source, so it
+does not claim or attempt student-to-course membership filtering. Recording attendance
+still requires a valid server-enforced session method and physical/manual proof.
+New student accounts must sign in with an admin-configured email domain (default
+`eng.pdn.ac.lk`; empty disables the check) — existing accounts and lecturers/admins
+provisioned directly by an admin are never subject to it. Lecturer actions are restricted
+to owned courses, though any owner may add a co-owner; admins may manage the whole
+installation, including reassigning or removing owners outright.
+
+An admin-set minimum Android `versionCode` blocks the app with a full-screen, non-dismissible
+update prompt below that version — there is no live Play Store lookup, so this is bumped
+by hand after publishing a release that must not be skipped.
+
+"Delete" on a course or lecturer hides it rather than destroying data — the same as
+disabling — and hidden entries sort to the bottom of admin lists instead of disappearing
+outright.

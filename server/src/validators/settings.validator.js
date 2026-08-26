@@ -41,6 +41,22 @@ function validateSettingsBody(body) {
     result.seedWindowMs = Math.round(seedWindowMs);
   }
 
+  if ('studentEmailDomain' in b) {
+    const domain = String(b.studentEmailDomain || '').trim().toLowerCase();
+    if (domain && !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(domain)) {
+      return { ok: false, status: 400, error: 'studentEmailDomain must be a valid domain, or empty to disable' };
+    }
+    result.studentEmailDomain = domain;
+  }
+
+  if ('minSupportedVersionCode' in b) {
+    const versionCode = Number(b.minSupportedVersionCode);
+    if (!Number.isInteger(versionCode) || versionCode < 0) {
+      return { ok: false, status: 400, error: 'minSupportedVersionCode must be a non-negative integer' };
+    }
+    result.minSupportedVersionCode = versionCode;
+  }
+
   if (Object.keys(result).length === 0) {
     return { ok: false, status: 400, error: 'No recognized settings fields in body' };
   }

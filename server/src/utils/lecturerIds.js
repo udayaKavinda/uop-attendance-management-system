@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const { MAX_COURSE_LECTURERS } = require('./constants');
 
 function normalizeLecturerIds(rawLecturerIds) {
   if (!Array.isArray(rawLecturerIds)) return [];
@@ -11,7 +10,6 @@ function normalizeLecturerIds(rawLecturerIds) {
     if (seen.has(id)) continue;
     seen.add(id);
     uniq.push(id);
-    if (uniq.length >= MAX_COURSE_LECTURERS) break;
   }
   return uniq;
 }

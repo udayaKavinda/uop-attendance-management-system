@@ -4,6 +4,9 @@ import com.squareup.moshi.Moshi
 import retrofit2.HttpException
 import java.io.IOException
 
+/** One page of a paginated list endpoint — `hasMore` drives whether "load more" is offered. */
+data class Page<T>(val items: List<T>, val hasMore: Boolean)
+
 /** Lightweight result wrapper for repository calls. */
 sealed interface ApiResult<out T> {
     data class Success<T>(val data: T) : ApiResult<T>

@@ -8,9 +8,12 @@ or React client.
 
 ### Student
 
-- Signs in with Google Credential Manager; browser OAuth is the fallback.
+- Signs in with Google Credential Manager; browser OAuth is the fallback. New
+  self-registering accounts must use an admin-configured email domain (default
+  `eng.pdn.ac.lk`); existing accounts are unaffected.
 - Sees campus-wide courses with a session running now (the project has no enrolment data
-  source or membership filter).
+  source or membership filter) through a search-as-you-type picker rather than a plain
+  scrolling list, since "running now" can be many sessions at once.
 - Picks a lecture and presses **Check me in** — one button, one 90-second window, no
   method to choose. The running-course payload carries identity only.
 - On failure: **Try again** (another window) or **Get help**, which asks for the
@@ -22,16 +25,33 @@ or React client.
 ### Lecturer
 
 Tabs: **Courses**, **Create session**, and **Sessions**. Lecturers manage only courses they
-own, create sessions (choosing buildings — mandatory — and code rotation), broadcast
-Bluetooth while a session runs, reveal/pause/regenerate the attendance code, decide the
-review queue, and open attendance reports.
+own, add co-owners to a course they own (additive only — never removes an existing owner;
+wholesale reassignment stays admin-only), create sessions (choosing buildings — mandatory —
+and code rotation), broadcast Bluetooth while a session runs, reveal/pause/regenerate the
+attendance code, decide the review queue, and open attendance reports. Neither dashboard
+header shows a "University of Peradeniya" subtitle — that branding lives only on the sign-in
+screen.
 
 ### Administrator
 
 Tabs: **Courses**, **Create session**, **Sessions**, **Lecturers**, **Geofences**, and
-**Settings**. Admins additionally manage course owners, the lecturer directory, building
-polygons, the Bluetooth kill switch, the two distance thresholds, whether the outer band
-auto-passes on a correct code, and peer-seeding parameters.
+**Settings**. Admins additionally manage course owners (including removing one), the
+lecturer directory, building polygons, the Bluetooth kill switch, the two distance
+thresholds, whether the outer band auto-passes on a correct code, peer-seeding parameters,
+the student sign-in email domain, and the minimum app version that's allowed to run.
+
+### Courses, sessions, and lecturers at scale
+
+The Courses, Sessions, and Lecturers tabs load 50 rows at a time (`page`/`limit` on the
+underlying list endpoints) with a **Load more** control at the bottom, so an installation
+with hundreds of courses, sessions, or lecturers doesn't load — or render — everything at
+once. A course code is auto-uppercased and stripped to letters/numbers as it's typed; a
+batch is forced into `E` + two digits (e.g. `E23`), and a course can be created with
+multiple batches at once (one Course document per batch, sharing the same name/owners).
+Creating a course whose code+batch already exists is rejected with the existing owner's
+name so the lecturer knows who to ask. "Delete" on a course or lecturer hides it (same as
+disabling a course) rather than destroying data, and hidden entries sort to the bottom of
+their list; the old separate hard-delete button no longer exists.
 
 ## Attendance flow
 
@@ -55,6 +75,14 @@ failing silently.
 Lecturer broadcasting runs in a foreground service with a persistent notification, server
 heartbeat, rotating 15-second token, student count, and remaining session time. Both the
 UI and the server refuse to broadcast while the global Bluetooth switch is off.
+
+Session cards have a single **Activate**/**Deactivate** control — there is no separate
+"start broadcast" button. Activating a session that's already inside its scheduled window
+also runs the broadcast permission preflight and starts broadcasting in the same tap;
+deactivating also stops this phone's radio if it was the one broadcasting. Cards sort
+soonest/currently-running first rather than by creation or last-edited time, and no longer
+show a "Bluetooth + GPS" chip, since that's the same for every session and carries no
+information.
 
 ### Lecturer code and peer seeding
 
@@ -81,7 +109,11 @@ only.
 
 ## Session creation and reporting
 
-- The course selector uses active server data. There is no verification selector.
+- The course selector uses active server data. There is no verification selector. It draws
+  from whichever course pages are currently loaded (see "at scale" above) — on an
+  installation with more than 50 courses, an admin creating a session for a course beyond
+  the first page needs to load more courses first (a lecturer's own course count rarely
+  reaches this).
 - Building selection is a searchable, multi-select dropdown with selected-color state and
   removable chips, and is **required** — GPS has nothing to measure against without it.
 - The form scrolls on compact screens; the Create button remains part of the content and
@@ -126,7 +158,8 @@ Requirements: Android Studio/JDK 17 and an Android SDK with compile SDK 36.
 ```
 
 App configuration: application id `lk.ac.pdn.eng.feats`, min SDK 24, target SDK 37,
-version `1.3.0` (`versionCode 4`).
+version `1.4.0` (`versionCode 5`). The server's `minSupportedVersionCode` setting is
+compared against this `versionCode` on every launch.
 
 For a signed release, create the ignored `keystore.properties` described in the root
 `README_ENV.md`. Use a keystore path valid on the machine performing the build.
@@ -153,13 +186,15 @@ app/src/main/java/lk/ac/pdn/eng/feats/
 
 Authentication: `/api/auth/google-nonce`, `/api/auth/google-id-token`,
 `/api/auth/exchange-code`, `/api/me`, `/api/logout`, plus `/auth/google` fallback.
+`/api/app-version` (public) is checked once at launch, independent of login state.
 
 Student: `/api/courses/running`, `/api/attendance-status`, `/api/attendance`,
 `/api/bluetooth-target`, and `/api/attendance/seed-token`.
 
-Staff/admin: `/api/admin/courses`, course sessions and attendance matrix,
-`/api/admin/sessions` with broadcast, lecturer-code, and review-queue actions,
-`/api/admin/lecturers`, `/api/admin/geofences`, and `/api/admin/settings`.
+Staff/admin: `/api/admin/courses` (paged, plus `add-lecturer`), course sessions and
+attendance matrix, `/api/admin/sessions` (paged) with broadcast, lecturer-code, and
+review-queue actions, `/api/admin/lecturers` (paged), `/api/admin/geofences`, and
+`/api/admin/settings`.
 
 The server README is the authoritative request/response and access-control reference.
 

@@ -18,9 +18,9 @@ courseSchema.index({ lecturers: 1 });
 
 courseSchema.path('lecturers').validate(function validateLecturers(v) {
   const list = Array.isArray(v) ? v : [];
-  if (list.length === 0 || list.length > 5) return false;
+  if (list.length === 0) return false;
   const normalized = list.map((id) => String(id));
   return new Set(normalized).size === normalized.length;
-}, 'lecturers must include 1 to 5 unique lecturer ids');
+}, 'lecturers must include at least 1 unique lecturer id');
 
 module.exports = mongoose.model('Course', courseSchema);

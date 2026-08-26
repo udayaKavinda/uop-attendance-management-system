@@ -1,6 +1,10 @@
 const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const Person = require('../models/Person');
+const settingsService = require('./settings.service');
+
+/** Thrown by `upsertGooglePerson` when a brand-new student email fails the domain check. */
+class EmailDomainRejectedError extends Error {}
 
 /**
  * Shared Google identity logic for BOTH sign-in paths:
@@ -84,6 +88,14 @@ async function upsertGooglePerson({ email, googleSub }) {
 
   let person = await Person.findOne({ email: emailNorm });
   if (!person) {
+    // Only brand-new accounts are gated — they always start as students.
+    // Lecturers/admins are provisioned directly by an admin, so an existing
+    // Person of any role always passes straight through.
+    const settings = await settingsService.getSettings();
+    const domain = String(settings.studentEmailDomain || '').trim().toLowerCase();
+    if (domain && !emailNorm.endsWith(`@${domain}`)) {
+      throw new EmailDomainRejectedError(`Only @${domain} email addresses can sign in as a student`);
+    }
     person = await Person.create({
       email: emailNorm,
       studentId: googleSub,
@@ -156,7 +168,15 @@ async function signInWithGoogleIdToken(idToken, expectedNonce) {
     return { ok: false, status: 403, error: 'Google account email is not verified' };
   }
 
-  const person = await upsertGooglePerson({ email, googleSub: payload.sub });
+  let person;
+  try {
+    person = await upsertGooglePerson({ email, googleSub: payload.sub });
+  } catch (err) {
+    if (err instanceof EmailDomainRejectedError) {
+      return { ok: false, status: 403, error: err.message };
+    }
+    throw err;
+  }
   return { ok: true, person };
 }
 
@@ -166,4 +186,5 @@ module.exports = {
   consumeSignInNonce,
   upsertGooglePerson,
   signInWithGoogleIdToken,
+  EmailDomainRejectedError,
 };

@@ -1,5 +1,6 @@
 package lk.ac.pdn.eng.feats.data.repo
 
+import lk.ac.pdn.eng.feats.data.net.AddLecturerReq
 import lk.ac.pdn.eng.feats.data.net.ApiResult
 import lk.ac.pdn.eng.feats.data.net.ApiService
 import lk.ac.pdn.eng.feats.data.net.AssignLecturerReq
@@ -19,6 +20,7 @@ import lk.ac.pdn.eng.feats.data.net.LecturerDto
 import lk.ac.pdn.eng.feats.data.net.ManualCodeConfigReq
 import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
 import lk.ac.pdn.eng.feats.data.net.MeDto
+import lk.ac.pdn.eng.feats.data.net.Page
 import lk.ac.pdn.eng.feats.data.net.PendingReviewDto
 import lk.ac.pdn.eng.feats.data.net.ReviewDecisionReq
 import lk.ac.pdn.eng.feats.data.net.RunningSessionDto
@@ -32,6 +34,9 @@ import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
 import lk.ac.pdn.eng.feats.data.net.UnifiedAttendanceReq
 import lk.ac.pdn.eng.feats.data.net.UnifiedAttendanceRes
 import lk.ac.pdn.eng.feats.data.net.apiCall
+
+/** Page size for the admin Courses/Sessions/Lecturers lists — keeps hundreds of rows off one request. */
+const val ADMIN_LIST_PAGE_SIZE = 50
 
 /**
  * Thin facade over [ApiService] returning [ApiResult]. Repositories are kept
@@ -52,23 +57,30 @@ class AppRepository(private val api: ApiService) {
 
     suspend fun me(): ApiResult<MeDto> = apiCall { api.me() }
 
+    /** Public: the minimum versionCode this app must meet or exceed right now. */
+    suspend fun appVersion(): ApiResult<Int> =
+        apiCall { api.appVersion().minSupportedVersionCode ?: 0 }
+
     suspend fun logout(): ApiResult<Unit> = apiCall { api.logout(); Unit }
 
     // ── Courses ────────────────────────────────────────────────────────────────────
     suspend fun runningCourses(): ApiResult<List<RunningCourseDto>> =
         apiCall { api.runningCourses().items }
 
-    suspend fun adminCourses(): ApiResult<List<CourseDto>> =
-        apiCall { api.adminCourses().items ?: emptyList() }
+    suspend fun adminCourses(page: Int, lecturerId: String? = null): ApiResult<Page<CourseDto>> =
+        apiCall {
+            val res = api.adminCourses(page, ADMIN_LIST_PAGE_SIZE, lecturerId)
+            Page(res.items ?: emptyList(), res.hasMore ?: false)
+        }
 
-    suspend fun createCourse(req: CreateCourseReq): ApiResult<CourseDto?> =
-        apiCall { api.createCourse(req).course }
+    suspend fun createCourse(req: CreateCourseReq): ApiResult<List<CourseDto>> =
+        apiCall { api.createCourse(req).courses ?: emptyList() }
 
     suspend fun assignLecturer(courseId: String, lecturerIds: List<String>): ApiResult<CourseDto?> =
         apiCall { api.assignLecturer(courseId, AssignLecturerReq(lecturerIds)).course }
 
-    suspend fun deleteCourse(courseId: String): ApiResult<Unit> =
-        apiCall { api.deleteCourse(courseId); Unit }
+    suspend fun addLecturer(courseId: String, lecturerId: String): ApiResult<CourseDto?> =
+        apiCall { api.addLecturer(courseId, AddLecturerReq(lecturerId)).course }
 
     suspend fun disableCourse(courseId: String): ApiResult<Unit> =
         apiCall { api.disableCourse(courseId); Unit }
@@ -77,8 +89,11 @@ class AppRepository(private val api: ApiService) {
         apiCall { api.enableCourse(courseId); Unit }
 
     // ── Sessions ───────────────────────────────────────────────────────────────────
-    suspend fun allSessions(): ApiResult<List<StaffSessionDto>> =
-        apiCall { api.allSessions().items ?: emptyList() }
+    suspend fun allSessions(page: Int): ApiResult<Page<StaffSessionDto>> =
+        apiCall {
+            val res = api.allSessions(page, ADMIN_LIST_PAGE_SIZE)
+            Page(res.items ?: emptyList(), res.hasMore ?: false)
+        }
 
     suspend fun createSession(courseId: String, req: CreateSessionReq): ApiResult<SessionDto?> =
         apiCall { api.createSession(courseId, req).session }
@@ -170,8 +185,16 @@ class AppRepository(private val api: ApiService) {
         apiCall { api.releaseSeedToken(sessionId); Unit }
 
     // ── Lecturers (admin) ───────────────────────────────────────────────────────────────
+    /** Typeahead search (Courses-tab filter, Owners dialog) — small result set, no paging needed. */
     suspend fun lecturers(query: String? = null): ApiResult<List<LecturerDto>> =
         apiCall { api.lecturers(query?.takeIf { it.isNotBlank() }).items ?: emptyList() }
+
+    /** Lecturers-tab directory — paged, since an installation may have hundreds of lecturers. */
+    suspend fun lecturersPage(page: Int): ApiResult<Page<LecturerDto>> =
+        apiCall {
+            val res = api.lecturers(q = null, page = page, limit = ADMIN_LIST_PAGE_SIZE)
+            Page(res.items ?: emptyList(), res.hasMore ?: false)
+        }
 
     suspend fun createLecturer(req: CreateLecturerReq): ApiResult<LecturerDto?> =
         apiCall { api.createLecturer(req).lecturer }

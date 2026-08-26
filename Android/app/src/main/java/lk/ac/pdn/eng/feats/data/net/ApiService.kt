@@ -31,6 +31,10 @@ interface ApiService {
     @GET("api/me")
     suspend fun me(): MeDto
 
+    /** Public: checked on every launch to decide whether an update is mandatory. */
+    @GET("api/app-version")
+    suspend fun appVersion(): AppVersionDto
+
     @POST("api/logout")
     suspend fun logout(): SimpleSuccess
 
@@ -58,11 +62,16 @@ interface ApiService {
     suspend fun releaseSeedToken(@Query("sessionId") sessionId: String): SimpleSuccess
 
     // ── Admin / staff: courses ───────────────────────────────────────────────────────
+    /** Omitting `limit` returns every matching course (small installations); paged otherwise. */
     @GET("api/admin/courses")
-    suspend fun adminCourses(): CoursesRes
+    suspend fun adminCourses(
+        @Query("page") page: Int? = null,
+        @Query("limit") limit: Int? = null,
+        @Query("lecturerId") lecturerId: String? = null,
+    ): CoursesRes
 
     @POST("api/admin/courses")
-    suspend fun createCourse(@Body body: CreateCourseReq): CourseRes
+    suspend fun createCourse(@Body body: CreateCourseReq): CreateCourseRes
 
     @PATCH("api/admin/courses/{courseId}/assign-lecturer")
     suspend fun assignLecturer(
@@ -70,8 +79,12 @@ interface ApiService {
         @Body body: AssignLecturerReq,
     ): CourseRes
 
-    @DELETE("api/admin/courses/{courseId}")
-    suspend fun deleteCourse(@Path("courseId") courseId: String): SimpleSuccess
+    /** Additive-only: an existing owner (or admin) adds ONE co-owner. */
+    @PATCH("api/admin/courses/{courseId}/add-lecturer")
+    suspend fun addLecturer(
+        @Path("courseId") courseId: String,
+        @Body body: AddLecturerReq,
+    ): CourseRes
 
     @PATCH("api/admin/courses/{courseId}/disable")
     suspend fun disableCourse(@Path("courseId") courseId: String): SimpleSuccess
@@ -89,8 +102,12 @@ interface ApiService {
     suspend fun attendanceMatrix(@Path("courseId") courseId: String): AttendanceMatrixRes
 
     // ── Admin / staff: sessions ──────────────────────────────────────────────────────
+    /** Omitting `limit` returns every matching session (small installations); paged otherwise. */
     @GET("api/admin/sessions")
-    suspend fun allSessions(): StaffSessionsRes
+    suspend fun allSessions(
+        @Query("page") page: Int? = null,
+        @Query("limit") limit: Int? = null,
+    ): StaffSessionsRes
 
     @GET("api/admin/sessions/running")
     suspend fun runningSessions(): RunningSessionsRes
@@ -159,8 +176,13 @@ interface ApiService {
     suspend fun deleteGeofence(@Path("id") id: String): SimpleSuccess
 
     // ── Admin: lecturers ─────────────────────────────────────────────────────────────
+    /** Omitting `limit` returns every matching lecturer (small installations); paged otherwise. */
     @GET("api/admin/lecturers")
-    suspend fun lecturers(@Query("q") q: String? = null): LecturersRes
+    suspend fun lecturers(
+        @Query("q") q: String? = null,
+        @Query("page") page: Int? = null,
+        @Query("limit") limit: Int? = null,
+    ): LecturersRes
 
     @POST("api/admin/lecturers")
     suspend fun createLecturer(@Body body: CreateLecturerReq): LecturerRes

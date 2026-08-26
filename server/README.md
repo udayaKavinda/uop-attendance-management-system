@@ -5,11 +5,16 @@ authoritative server reference for the implemented system.
 
 ## What the server does
 
-- Google Credential Manager ID-token sign-in with nonce replay protection.
+- Google Credential Manager ID-token sign-in with nonce replay protection, gated to an
+  admin-configured email domain for brand-new student accounts (existing accounts and
+  lecturers/admins provisioned by an admin are never subject to it).
 - Browser Google OAuth fallback with a single-use native exchange code.
 - Mongo-backed authenticated sessions, role checks, CSRF protection, CORS, Helmet, and
   endpoint rate limits.
-- Staff course/session administration with lecturer ownership enforcement.
+- A public app-version check the client uses to enforce an admin-set minimum Android
+  `versionCode`, blocking outdated installs with a mandatory update prompt.
+- Staff course/session administration with lecturer ownership enforcement; any existing
+  owner (not just an admin) may add a co-owner to their own course.
 - One verification model for every session: Bluetooth and GPS together, with a
   lecturer-read code as the escalation path and a review queue behind it.
 - Peer BLE seeding with rotating tokens, bounded leases, and decoy windows.
@@ -102,8 +107,12 @@ Times are strictly validated as zero-padded 24-hour `HH:mm` values.
 
 ### Course
 
-`code`, `name`, `batch`, one-to-five lecturer owners, and `active`. Unique on
-`{ code, batch }`.
+`code` (capital letters and numbers only), `name`, `batch` (`E` followed by two digits,
+e.g. `E23`), one or more lecturer owners (no upper limit), and `active`. Unique on
+`{ code, batch }` — creating a course accepts multiple `batches` at once and makes one
+Course document per batch, all sharing the same owners. There is no separate hard delete:
+`DELETE`-equivalent behavior is the same as disabling (`active: false`), which hides the
+course rather than destroying its data; disabled courses sort after active ones in listings.
 
 ### LectureSession
 
@@ -142,7 +151,9 @@ pass upgrades an existing `under_review`/`rejected` row to `present`.
 - `ManualCode` stores the rotating/paused 8-digit lecturer code; it is never merged with
   the high-entropy BLE token pool. Every session has one.
 - `Settings` stores the Bluetooth kill switch, the two distance buffers, the
-  suspicious-band auto-pass switch, and the seeding parameters.
+  suspicious-band auto-pass switch, the seeding parameters, the student sign-in email
+  domain (`studentEmailDomain`, empty disables the check), and the minimum Android
+  `versionCode` (`minSupportedVersionCode`, `0` disables the check).
 
 ## API reference
 
@@ -161,6 +172,7 @@ All JSON mutation requests require `X-Requested-With: fetch`. `student`, `staff`
 | GET | `/api/me` | authenticated | current account and role |
 | POST | `/api/logout` | authenticated | destroy session |
 | GET | `/api/healthz` | public | process/database health |
+| GET | `/api/app-version` | public | `{ minSupportedVersionCode }` — client blocks below this |
 | GET | `/privacy` | public | current privacy policy |
 | GET | `/delete` | public | account deletion instructions |
 
@@ -187,11 +199,11 @@ Base path: `/api/admin/courses`.
 
 | Method/path | Access | Purpose |
 |---|---|---|
-| `GET /` | staff | owned courses; admins see all |
-| `POST /` | staff | create a course |
-| `PATCH /:courseId/assign-lecturer` | admin | set one-to-five owners |
-| `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course |
-| `DELETE /:courseId` | owner/admin | delete course and associated data |
+| `GET /?page=&limit=&lecturerId=` | staff | owned courses; admins see all, or one lecturer's with `lecturerId`. Omitting `limit` returns everything; passing it pages (`{ items, total, page, limit, hasMore }`) |
+| `POST /` | staff | create a course — `batches: string[]` creates one Course document per batch |
+| `PATCH /:courseId/assign-lecturer` | admin | wholesale reassignment — set any number of owners (add or remove) |
+| `PATCH /:courseId/add-lecturer` | owner/admin | additive-only: add ONE co-owner, never removes one |
+| `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course — this is also what "delete" means; no destructive delete exists |
 | `POST /:courseId/sessions` | owner/admin | atomically create schedule, buildings (≥1, required), and code rotation |
 | `GET /:courseId/attendance-matrix` | owner/admin | per-student `present` / `under_review` / absent matrix |
 
@@ -201,7 +213,7 @@ Base path: `/api/admin/sessions` (owner/admin session guard applies).
 
 | Method/path | Purpose |
 |---|---|
-| `GET /` | list accessible sessions |
+| `GET /?page=&limit=` | list accessible sessions, soonest/currently-running first. Omitting `limit` returns everything; passing it pages (`{ items, total, page, limit, hasMore }`) |
 | `GET /running` | running session broadcast reconciliation |
 | `PATCH /:id/activate` / `deactivate` | change active state |
 | `DELETE /:id` | soft-delete and revoke secrets |
@@ -217,10 +229,10 @@ Base path: `/api/admin/sessions` (owner/admin session guard applies).
 | Method/path | Access | Purpose |
 |---|---|---|
 | `GET /api/admin/settings` | staff | current policies |
-| `PATCH /api/admin/settings` | admin | BLE kill switch, distance buffers, auto-pass switch, seeding |
+| `PATCH /api/admin/settings` | admin | BLE kill switch, distance buffers, auto-pass switch, seeding, student email domain, minimum app version |
 | `GET /api/admin/geofences` | staff | active selectable buildings |
 | `POST/PATCH/DELETE /api/admin/geofences/:id?` | admin | building polygon management |
-| `GET/POST/DELETE /api/admin/lecturers/:id?` | admin | lecturer directory |
+| `GET/POST/DELETE /api/admin/lecturers/:id?` | admin | lecturer directory — `GET ?q=&page=&limit=`; `DELETE` hides (soft-deletes) rather than destroying |
 
 ## Background jobs and caches
 

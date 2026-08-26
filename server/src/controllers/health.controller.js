@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const settingsService = require('../services/settings.service');
 
 function healthz(req, res) {
   const connected = mongoose.connection?.readyState === 1;
@@ -11,4 +12,10 @@ function healthz(req, res) {
   });
 }
 
-module.exports = { healthz };
+/** Public: the Android app checks this on launch to decide whether to force an update. */
+async function appVersion(req, res) {
+  const settings = await settingsService.getSettings();
+  res.json({ minSupportedVersionCode: settings.minSupportedVersionCode || 0 });
+}
+
+module.exports = { healthz, appVersion };

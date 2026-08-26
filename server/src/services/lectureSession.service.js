@@ -103,11 +103,59 @@ async function deactivateSession(sessionItem) {
   return { ok: true, session: sessionItem };
 }
 
-async function listAllForStaff(auth) {
+/**
+ * Sort key for "soonest/currently-running first": a session running right now
+ * ranks at the very top (0); otherwise it's the epoch ms of its next
+ * occurrence's start time. One-time sessions use their fixed `occurrenceDate`
+ * directly instead of the weekly `nextOccurrenceDate` walk.
+ */
+function sessionSortRank(sessionItem, now = new Date()) {
+  const startMin = toMinutes(sessionItem.startTime);
+  const endMin = toMinutes(sessionItem.endTime);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const dateStr = sessionItem.recurring
+    ? nextOccurrenceDate(sessionItem.lectureDay, now, sessionItem.endTime)
+    : sessionItem.occurrenceDate;
+  if (!dateStr) return Number.MAX_SAFE_INTEGER;
+
+  const isToday = dateStr === nextOccurrenceDate(sessionItem.lectureDay, now, null) && startMin !== null;
+  if (isToday && startMin !== null && endMin !== null && nowMin >= startMin && nowMin <= endMin) {
+    return 0; // running right now
+  }
+
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const startOfDay = new Date(y, (m || 1) - 1, d || 1).getTime();
+  return startOfDay + (startMin || 0) * 60_000;
+}
+
+/**
+ * `pagination` omitted (or `hasLimit: false`) returns every matching session,
+ * sorted soonest-first, as before. The soonest-first order depends on the
+ * current time and each session's weekly schedule, which isn't expressible as
+ * a Mongo sort — so pagination here slices the already-sorted in-memory list
+ * rather than pushing skip/limit down to the query.
+ */
+async function listAllForStaff(auth, pagination) {
   const scope = await staffSessionMatch(auth.person, auth.isAdmin);
-  return LectureSession.find({ deleted: false, ...scope })
-    .populate('course', 'code name active batch lecturers')
-    .sort({ updatedAt: -1 });
+  const sessions = await LectureSession.find({ deleted: false, ...scope })
+    .populate('course', 'code name active batch lecturers');
+  const now = new Date();
+  const sorted = sessions
+    .map((s) => ({ s, rank: sessionSortRank(s, now) }))
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ s }) => s);
+
+  if (!pagination || !pagination.hasLimit) return sorted;
+
+  const { page, limit } = pagination;
+  const start = (page - 1) * limit;
+  return {
+    items: sorted.slice(start, start + limit),
+    total: sorted.length,
+    page,
+    limit,
+    hasMore: start + limit < sorted.length,
+  };
 }
 
 async function resolveCourseForSession(sessionItem) {

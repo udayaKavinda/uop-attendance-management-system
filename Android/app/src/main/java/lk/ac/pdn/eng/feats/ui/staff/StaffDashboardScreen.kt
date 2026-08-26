@@ -54,7 +54,6 @@ import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
@@ -190,17 +189,20 @@ fun StaffDashboardScreen(
 
 // ── Courses tab ───────────────────────────────────────────────────────────────────
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (String) -> Unit) {
     var code by remember { mutableStateOf("") }
-    var batch by remember { mutableStateOf("") }
+    var batchInput by remember { mutableStateOf("") }
+    var batches by remember { mutableStateOf(listOf<String>()) }
     var name by remember { mutableStateOf("") }
     var filterQuery by remember { mutableStateOf("") }
-    var confirmDelete by remember { mutableStateOf<CourseDto?>(null) }
     var ownersFor by remember { mutableStateOf<CourseDto?>(null) }
+    var addOwnerFor by remember { mutableStateOf<CourseDto?>(null) }
 
-    val visibleCourses = if (state.isAdmin) state.filteredCourses() else state.courses
+    // Server-scoped by selectedLecturerFilter for admins (see StaffViewModel.setLecturerFilter) —
+    // state.courses is already the right set, just re-sorted for archived-last display.
+    val visibleCourses = state.courses.sortedForDisplay()
     val canAddCourse = !state.isAdmin || state.selectedLecturerFilter != null
 
     LazyColumn(
@@ -254,9 +256,40 @@ private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (Str
                 Column(Modifier.padding(16.dp)) {
                     SectionHeader(Icons.Outlined.School, "Add course")
                     Spacer(Modifier.height(10.dp))
-                    AppTextField(code, { code = it }, "Course code", placeholder = "CS101")
+                    AppTextField(
+                        code,
+                        { code = sanitizeCourseCode(it) },
+                        "Course code",
+                        placeholder = "CS101",
+                    )
                     Spacer(Modifier.height(8.dp))
-                    AppTextField(batch, { batch = it }, "Batch", placeholder = "2024")
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(Modifier.weight(1f)) {
+                            AppTextField(
+                                batchInput,
+                                { batchInput = sanitizeBatchInput(it) },
+                                "Batch",
+                                placeholder = "E23",
+                            )
+                        }
+                        androidx.compose.material3.IconButton(
+                            onClick = {
+                                if (BATCH_RE.matches(batchInput) && batchInput !in batches) {
+                                    batches = batches + batchInput
+                                }
+                                batchInput = ""
+                            },
+                            enabled = BATCH_RE.matches(batchInput) && batchInput !in batches,
+                        ) { Icon(Icons.Outlined.AddCircleOutline, contentDescription = "Add batch", tint = Palette.Accent) }
+                    }
+                    if (batches.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            batches.forEach { b ->
+                                OwnerChip(label = b, onRemove = { batches = batches - b })
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(8.dp))
                     AppTextField(name, { name = it }, "Course name", placeholder = "Intro to Computing")
                     if (state.isAdmin && !canAddCourse) {
@@ -271,10 +304,10 @@ private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (Str
                     PrimaryButton(
                         text = "Add course",
                         onClick = {
-                            vm.createCourse(code, batch, name)
-                            code = ""; batch = ""; name = ""
+                            vm.createCourse(code, batches, name)
+                            code = ""; batchInput = ""; batches = emptyList(); name = ""
                         },
-                        enabled = canAddCourse,
+                        enabled = canAddCourse && batches.isNotEmpty(),
                     )
                 }
             }
@@ -297,24 +330,17 @@ private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (Str
                     course = course,
                     isAdmin = state.isAdmin,
                     onOpen = { course.id?.let(onOpenMatrix) },
-                    onEnableDisable = {
+                    onArchiveToggle = {
                         course.id?.let { if (course.active == false) vm.enableCourse(it) else vm.disableCourse(it) }
                     },
-                    onDelete = { confirmDelete = course },
                     onOwners = { ownersFor = course },
+                    onAddOwner = { addOwnerFor = course },
                 )
             }
+            if (state.coursesHasMore) {
+                item { LoadMoreRow(loading = state.coursesLoadingMore, onClick = vm::loadMoreCourses) }
+            }
         }
-    }
-
-    confirmDelete?.let { course ->
-        ConfirmDialog(
-            title = "Delete course?",
-            message = "Delete ${course.code} (${course.batch}) and all its sessions? This cannot be undone.",
-            confirmLabel = "Delete",
-            onConfirm = { course.id?.let(vm::deleteCourse); confirmDelete = null },
-            onDismiss = { confirmDelete = null },
-        )
     }
 
     ownersFor?.let { course ->
@@ -325,22 +351,48 @@ private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (Str
             onDismiss = { ownersFor = null },
         )
     }
+
+    addOwnerFor?.let { course ->
+        AddOwnerDialog(
+            course = course,
+            vm = vm,
+            onSave = { lecturerId -> course.id?.let { vm.addLecturer(it, lecturerId) } },
+            onDismiss = { addOwnerFor = null },
+        )
+    }
 }
+
+/** Course code: capital letters and numbers only, typed lowercase becomes capital. */
+private fun sanitizeCourseCode(input: String): String =
+    input.uppercase().filter { it.isLetterOrDigit() }
+
+private val BATCH_RE = Regex("^E\\d{2}$")
+
+/** Batch: forces a leading E followed by up to two digits, e.g. "e23" -> "E23". */
+private fun sanitizeBatchInput(input: String): String {
+    val upper = input.uppercase().filter { it.isLetterOrDigit() }
+    val digits = upper.filter { it.isDigit() }.take(2)
+    return if (upper.isEmpty()) "" else "E$digits"
+}
+
+// Sorted so archived (disabled) courses fall to the bottom, active ones stay code/batch ordered.
+private fun List<CourseDto>.sortedForDisplay(): List<CourseDto> =
+    sortedWith(compareBy({ it.active == false }, { it.code.orEmpty() }, { it.batch.orEmpty() }))
 
 @Composable
 private fun CourseCard(
     course: CourseDto,
     isAdmin: Boolean,
     onOpen: () -> Unit,
-    onEnableDisable: () -> Unit,
-    onDelete: () -> Unit,
+    onArchiveToggle: () -> Unit,
     onOwners: () -> Unit,
+    onAddOwner: () -> Unit,
 ) {
-    val disabled = course.active == false
+    val archived = course.active == false
     AppCard(
         Modifier.fillMaxWidth(),
         shape = AppShapes.Panel,
-        border = if (disabled) Palette.Border else Palette.EnabledBorder,
+        border = if (archived) Palette.Border else Palette.EnabledBorder,
     ) {
         Column(Modifier.padding(14.dp)) {
             Column(
@@ -356,7 +408,7 @@ private fun CourseCard(
                         fontSize = 15.sp,
                         modifier = Modifier.weight(1f),
                     )
-                    if (disabled) StatusBadge("Disabled", PillTone.Warning)
+                    if (archived) StatusBadge("Archived", PillTone.Warning)
                 }
                 Text(course.name ?: "", color = Palette.Muted, fontSize = 14.sp)
                 val owners = course.lecturers?.mapNotNull { it.name ?: it.email }?.joinToString(", ").orEmpty()
@@ -369,13 +421,14 @@ private fun CourseCard(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (isAdmin) {
                     PillButton("Owners", onClick = onOwners, tone = PillTone.Accent)
+                } else {
+                    PillButton("Add owner", onClick = onAddOwner, tone = PillTone.Accent)
                 }
                 PillButton(
-                    if (disabled) "Enable" else "Disable",
-                    onClick = onEnableDisable,
-                    tone = if (disabled) PillTone.Success else PillTone.Warning,
+                    if (archived) "Unarchive" else "Archive",
+                    onClick = onArchiveToggle,
+                    tone = if (archived) PillTone.Success else PillTone.Warning,
                 )
-                PillButton("Delete", onClick = onDelete, tone = PillTone.Danger)
             }
         }
     }
@@ -782,6 +835,13 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
         }
     }
 
+    // "Activate" doubles as "start broadcast": once vm.activate() confirms the
+    // session is running, it emits here and this runs the same permission
+    // preflight a dedicated broadcast button used to trigger directly.
+    LaunchedEffect(Unit) {
+        vm.broadcastReady.collect { sessionId -> requestBroadcast(sessionId) }
+    }
+
     val filtered = state.sessions.filter {
         val hay = "${it.course?.code} ${it.lectureDay} ${it.startTime} ${it.endTime} ${if (it.recurring == true) "recurring" else "one-time"}"
         hay.contains(query.trim(), ignoreCase = true)
@@ -827,7 +887,6 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                     pendingReviews = state.reviewsFor(session.id),
                     onActivate = { session.id?.let { if (session.active == true) vm.deactivate(it) else vm.activate(it) } },
                     onDelete = { confirmDelete = session },
-                    onStartBroadcast = { session.id?.let(::requestBroadcast) },
                     onStopBroadcast = { session.id?.let(vm::stopBroadcast) },
                     onLoadManualCode = { session.id?.let(vm::loadManualCode) },
                     onPauseManualCode = { session.id?.let(vm::pauseManualCode) },
@@ -837,6 +896,9 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                         session.id?.let { vm.reviewSubmission(it, attendanceId, approve) }
                     },
                 )
+            }
+            if (state.sessionsHasMore && query.isBlank()) {
+                item { LoadMoreRow(loading = state.sessionsLoadingMore, onClick = vm::loadMoreSessions) }
             }
         }
     }
@@ -969,7 +1031,71 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
                 }
             }
         }
+
+        item {
+            SettingsSection(
+                icon = Icons.Outlined.Person,
+                title = "Student sign-in",
+                subtitle = "New self-registering students must sign in with this email domain. " +
+                    "Existing accounts and staff you've added directly are never affected.",
+            ) {
+                StudentEmailDomainField(
+                    domain = settings.studentEmailDomain.orEmpty(),
+                    onSave = vm::setStudentEmailDomain,
+                )
+            }
+        }
+
+        item {
+            SettingsSection(
+                icon = Icons.Outlined.AddCircleOutline,
+                title = "App version",
+                subtitle = "Devices below this Android versionCode are blocked with a mandatory update screen. 0 disables the check.",
+            ) {
+                MinVersionField(
+                    versionCode = settings.minSupportedVersionCode ?: 0,
+                    onSave = vm::setMinSupportedVersionCode,
+                )
+            }
+        }
     }
+}
+
+@Composable
+private fun StudentEmailDomainField(domain: String, onSave: (String) -> Unit) {
+    var text by remember(domain) { mutableStateOf(domain) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        AppTextField(
+            text,
+            { text = it.trim().lowercase() },
+            "Domain (blank disables)",
+            placeholder = "eng.pdn.ac.lk",
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Spacer(Modifier.height(6.dp))
+    PillButton("Save domain", onClick = { onSave(text) }, tone = PillTone.Accent)
+}
+
+@Composable
+private fun MinVersionField(versionCode: Int, onSave: (Int) -> Unit) {
+    var text by remember(versionCode) { mutableStateOf(versionCode.toString()) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        AppTextField(
+            text,
+            { text = it.filter(Char::isDigit) },
+            "Minimum versionCode",
+            placeholder = "0",
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Spacer(Modifier.height(6.dp))
+    PillButton(
+        "Save minimum version",
+        onClick = { onSave(text.toIntOrNull() ?: 0) },
+        tone = PillTone.Accent,
+    )
 }
 
 /** Plain-language restatement of the three distance outcomes, in the admin's own numbers. */
@@ -1134,7 +1260,6 @@ private fun SessionCard(
     pendingReviews: List<PendingReviewDto>,
     onActivate: () -> Unit,
     onDelete: () -> Unit,
-    onStartBroadcast: () -> Unit,
     onStopBroadcast: () -> Unit,
     onLoadManualCode: () -> Unit,
     onPauseManualCode: () -> Unit,
@@ -1224,7 +1349,6 @@ private fun SessionCard(
                         icon = if (session.recurring == true) Icons.Outlined.Repeat else Icons.Outlined.CalendarMonth,
                         text = if (session.recurring == true) "Weekly" else "One-time",
                     )
-                    SessionMetaChip(Icons.Outlined.Sensors, if (bleEnabled) "Bluetooth + GPS" else "GPS only")
                     buildingLabel?.let { SessionMetaChip(Icons.Outlined.LocationOn, it) }
                 }
             }
@@ -1264,18 +1388,14 @@ private fun SessionCard(
                         )
                     }
                 }
-                running && bleEnabled -> SessionActionButton(
-                    text = "Start attendance broadcast",
-                    icon = Icons.Outlined.Sensors,
-                    tone = SessionActionTone.Primary,
-                    onClick = onStartBroadcast,
-                    modifier = Modifier.fillMaxWidth(),
+                running && bleEnabled -> SessionNotice(
+                    "This session is running but not broadcasting. Deactivate and Activate again to restart it.",
                 )
                 running -> SessionNotice(
                     "Bluetooth is switched off system-wide. GPS is still verifying students for this session.",
                 )
-                active -> SessionNotice("Attendance controls appear during the scheduled session window.")
-                else -> SessionNotice("This session is inactive. Activate it to make it available.")
+                active -> SessionNotice("Activating this session also starts its broadcast once the scheduled window begins.")
+                else -> SessionNotice("This session is inactive. Activate it to start verifying attendance and broadcasting.")
             }
 
             // Every session has a code, so this is unconditional now — but the live
@@ -1661,6 +1781,9 @@ private fun LecturersTab(state: StaffState, vm: StaffViewModel) {
                     }
                 }
             }
+            if (state.lecturersHasMore) {
+                item { LoadMoreRow(loading = state.lecturersLoadingMore, onClick = vm::loadMoreLecturers) }
+            }
         }
     }
 
@@ -1752,7 +1875,7 @@ private fun OwnersDialog(
 
     fun addOwner(lect: LecturerDto) {
         val id = lect.id ?: return
-        if (id in selectedIds || selectedIds.size >= 5) return
+        if (id in selectedIds) return
         selectedIds = selectedIds + id
         selectedLecturers = selectedLecturers + lect
         searchQuery = ""
@@ -1765,7 +1888,7 @@ private fun OwnersDialog(
         text = {
             Column(Modifier.fillMaxWidth()) {
                 Text(
-                    "Assign 1–5 lecturers (${selectedIds.size}/5)",
+                    "Assign at least 1 lecturer (${selectedIds.size} selected)",
                     color = Palette.Muted,
                     fontSize = 13.sp,
                 )
@@ -1799,11 +1922,65 @@ private fun OwnersDialog(
         confirmButton = {
             TextButton(
                 onClick = { onSave(selectedIds.toList()) },
-                enabled = selectedIds.size in 1..5,
+                enabled = selectedIds.isNotEmpty(),
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** Lecturer-side (or admin) additive-only co-owner add — cannot remove an existing owner. */
+@Composable
+private fun AddOwnerDialog(
+    course: CourseDto,
+    vm: StaffViewModel,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val state by vm.state.collectAsState()
+    val existingIds = course.lecturers?.mapNotNull { it.id }?.toSet() ?: emptySet()
+    var searchQuery by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add owner — ${course.code}") },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    "Search for a lecturer to add as a co-owner of this course.",
+                    color = Palette.Muted,
+                    fontSize = 13.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                LecturerSearchField(
+                    query = searchQuery,
+                    onQueryChange = {
+                        searchQuery = it
+                        vm.searchLecturers(it)
+                    },
+                    results = state.lecturerSearchResults,
+                    loading = state.lecturerSearchLoading,
+                    onSelect = { lect -> lect.id?.let(onSave) },
+                    placeholder = "Search lecturer to add…",
+                    excludeIds = existingIds,
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+/** Manual pagination trigger shown at the bottom of a long admin list. */
+@Composable
+private fun LoadMoreRow(loading: Boolean, onClick: () -> Unit) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+        if (loading) {
+            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Palette.Accent)
+        } else {
+            PillButton("Load more", onClick = onClick, tone = PillTone.Accent)
+        }
+    }
 }
 
 @Composable
@@ -1992,7 +2169,7 @@ private fun StaffTopBar(role: String, email: String, onLogout: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text("Attendance administration", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = Palette.Ink)
             Text(
-                "University of Peradeniya · ${if (role == "admin") "Administrator" else "Lecturer"}",
+                if (role == "admin") "Administrator" else "Lecturer",
                 color = Palette.Muted, fontSize = 12.sp,
             )
         }

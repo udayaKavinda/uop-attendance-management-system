@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import lk.ac.pdn.eng.feats.BuildConfig
 import lk.ac.pdn.eng.feats.data.net.ApiResult
 import lk.ac.pdn.eng.feats.data.net.SessionEvents
 import lk.ac.pdn.eng.feats.data.prefs.CachedUser
@@ -38,12 +39,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _authError = MutableStateFlow<String?>(null)
     val authError: StateFlow<String?> = _authError.asStateFlow()
 
+    /** True once the server reports a minSupportedVersionCode above this build's. Never clears itself. */
+    private val _updateRequired = MutableStateFlow(false)
+    val updateRequired: StateFlow<Boolean> = _updateRequired.asStateFlow()
+
     init {
         // Any 401 anywhere drops us to the login screen.
         viewModelScope.launch {
             SessionEvents.unauthorized.collect { forceLoggedOut() }
         }
+        checkAppVersion()
         hydrate()
+    }
+
+    /** Public endpoint, checked before login state matters — an outdated app is blocked either way. */
+    private fun checkAppVersion() {
+        viewModelScope.launch {
+            when (val res = repo.appVersion()) {
+                is ApiResult.Success -> {
+                    if (BuildConfig.VERSION_CODE < res.data) _updateRequired.value = true
+                }
+                is ApiResult.Error -> Unit // offline/unreachable: don't block on a check we couldn't run
+            }
+        }
     }
 
     /** Re-checks the server session and updates [session]. */

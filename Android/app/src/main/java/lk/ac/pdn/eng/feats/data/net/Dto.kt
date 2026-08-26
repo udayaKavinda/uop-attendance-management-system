@@ -42,7 +42,13 @@ data class LecturerDto(
     val deleted: Boolean? = null,
 )
 
-data class LecturersRes(val items: List<LecturerDto>? = null)
+/** `hasMore`/`total`/`page` are present only when the request sent `limit` (paged mode). */
+data class LecturersRes(
+    val items: List<LecturerDto>? = null,
+    val total: Int? = null,
+    val page: Int? = null,
+    val hasMore: Boolean? = null,
+)
 
 data class LecturerRes(val success: Boolean? = null, val lecturer: LecturerDto? = null)
 
@@ -80,19 +86,31 @@ data class CourseRefDto(
     val active: Boolean? = null,
 )
 
-data class CoursesRes(val items: List<CourseDto>? = null)
+/** `hasMore`/`total`/`page` are present only when the request sent `limit` (paged mode). */
+data class CoursesRes(
+    val items: List<CourseDto>? = null,
+    val total: Int? = null,
+    val page: Int? = null,
+    val hasMore: Boolean? = null,
+)
 data class RunningCoursesRes(val items: List<RunningCourseDto>)
 
 data class CourseRes(val success: Boolean? = null, val course: CourseDto? = null)
 
+/** One Course document is created per batch; `courses` is present on both success and the partial-failure case. */
+data class CreateCourseRes(val success: Boolean? = null, val courses: List<CourseDto>? = null)
+
 data class CreateCourseReq(
     val name: String,
     val code: String,
-    val batch: String,
+    val batches: List<String>,
     val lecturerIds: List<String>? = null,
 )
 
 data class AssignLecturerReq(val lecturerIds: List<String>)
+
+/** Body for PATCH .../courses/:id/add-lecturer — additive-only co-owner add. */
+data class AddLecturerReq(val lecturerId: String)
 
 // ── Sessions ───────────────────────────────────────────────────────────────────
 
@@ -132,7 +150,13 @@ data class StaffSessionDto(
     val manualCodeRotationSeconds: Int? = null,
 )
 
-data class StaffSessionsRes(val items: List<StaffSessionDto>? = null)
+/** `hasMore`/`total`/`page` are present only when the request sent `limit` (paged mode). */
+data class StaffSessionsRes(
+    val items: List<StaffSessionDto>? = null,
+    val total: Int? = null,
+    val page: Int? = null,
+    val hasMore: Boolean? = null,
+)
 
 data class SessionRes(val success: Boolean? = null, val session: SessionDto? = null)
 
@@ -212,6 +236,10 @@ data class SettingsDto(
     val seedRate: Int? = null,
     /** Real-seeder AND decoy window duration, ms — identical for both by design. */
     val seedWindowMs: Long? = null,
+    /** Email domain new self-registering students must match; empty disables the check. */
+    val studentEmailDomain: String? = null,
+    /** Android versionCode an installed app must meet or exceed; 0 disables the check. */
+    val minSupportedVersionCode: Int? = null,
 )
 
 /** Body for PATCH /api/admin/settings — every field independently optional. */
@@ -222,7 +250,12 @@ data class SettingsReq(
     val suspiciousBandAutoPass: Boolean? = null,
     val seedRate: Int? = null,
     val seedWindowMs: Long? = null,
+    val studentEmailDomain: String? = null,
+    val minSupportedVersionCode: Int? = null,
 )
+
+/** Response of the public GET /api/app-version — checked on every app launch. */
+data class AppVersionDto(val minSupportedVersionCode: Int? = null)
 
 // ── Lecturer review queue ─────────────────────────────────────────────────────────
 

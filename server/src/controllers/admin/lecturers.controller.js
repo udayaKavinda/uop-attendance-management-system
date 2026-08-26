@@ -1,9 +1,12 @@
 const lecturerService = require('../../services/lecturer.service');
 const { validateLecturerCreateBody } = require('../../validators/lecturer.validator');
+const { parsePagination } = require('../../utils/pagination');
 
 async function list(req, res) {
-  const items = await lecturerService.listLecturers(req.query.q);
-  return res.json({ items });
+  const pagination = parsePagination(req.query);
+  const result = await lecturerService.listLecturers(req.query.q, pagination);
+  if (Array.isArray(result)) return res.json({ items: result });
+  return res.json(result);
 }
 
 async function create(req, res) {

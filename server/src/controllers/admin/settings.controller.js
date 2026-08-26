@@ -9,6 +9,8 @@ function shape(settings) {
     suspiciousBandAutoPass: settings.suspiciousBandAutoPass !== false,
     seedRate: settings.seedRate,
     seedWindowMs: settings.seedWindowMs,
+    studentEmailDomain: settings.studentEmailDomain || '',
+    minSupportedVersionCode: settings.minSupportedVersionCode || 0,
   };
 }
 
