@@ -337,9 +337,12 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Debounced lecturer lookup for the Courses filter and Owners dialog. */
+    /**
+     * Debounced lecturer lookup — used by the admin Courses-tab filter/Owners dialog AND by
+     * a plain lecturer adding a co-owner to their own course (AddOwnerDialog), so this must
+     * not be admin-gated.
+     */
     fun searchLecturers(query: String) {
-        if (!_state.value.isAdmin) return
         lecturerSearchJob?.cancel()
         val q = query.trim()
         if (q.length < 2) {

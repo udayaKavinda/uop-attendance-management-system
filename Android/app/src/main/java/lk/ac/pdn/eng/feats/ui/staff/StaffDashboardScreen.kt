@@ -41,6 +41,8 @@ import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.MyLocation
@@ -103,6 +105,8 @@ import lk.ac.pdn.eng.feats.ble.BroadcastState
 import androidx.compose.material3.Switch
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import lk.ac.pdn.eng.feats.data.net.CourseDto
 import lk.ac.pdn.eng.feats.data.net.GeofenceDto
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
@@ -194,8 +198,9 @@ fun StaffDashboardScreen(
 @Composable
 private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (String) -> Unit) {
     var code by remember { mutableStateOf("") }
-    var batchInput by remember { mutableStateOf("") }
-    var batches by remember { mutableStateOf(listOf<String>()) }
+    var batchFieldValue by remember { mutableStateOf(TextFieldValue("")) }
+    val batches = parseBatches(batchFieldValue.text)
+    val batchInputIncomplete = hasIncompleteBatch(batchFieldValue.text)
     var name by remember { mutableStateOf("") }
     var filterQuery by remember { mutableStateOf("") }
     var ownersFor by remember { mutableStateOf<CourseDto?>(null) }
@@ -264,32 +269,18 @@ private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (Str
                         placeholder = "CS101",
                     )
                     Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(Modifier.weight(1f)) {
-                            AppTextField(
-                                batchInput,
-                                { batchInput = sanitizeBatchInput(it) },
-                                "Batch",
-                                placeholder = "E23",
-                            )
-                        }
-                        androidx.compose.material3.IconButton(
-                            onClick = {
-                                if (BATCH_RE.matches(batchInput) && batchInput !in batches) {
-                                    batches = batches + batchInput
-                                }
-                                batchInput = ""
-                            },
-                            enabled = BATCH_RE.matches(batchInput) && batchInput !in batches,
-                        ) { Icon(Icons.Outlined.AddCircleOutline, contentDescription = "Add batch", tint = Palette.Accent) }
-                    }
-                    if (batches.isNotEmpty()) {
-                        Spacer(Modifier.height(6.dp))
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            batches.forEach { b ->
-                                OwnerChip(label = b, onRemove = { batches = batches - b })
-                            }
-                        }
+                    BatchInputField(
+                        value = batchFieldValue,
+                        onValueChange = { batchFieldValue = it },
+                        placeholder = "E23 , E24",
+                    )
+                    if (batchInputIncomplete) {
+                        Text(
+                            "Finish or remove the incomplete batch — each one needs two digits.",
+                            color = Palette.WarnText,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
                     }
                     Spacer(Modifier.height(8.dp))
                     AppTextField(name, { name = it }, "Course name", placeholder = "Intro to Computing")
@@ -306,9 +297,9 @@ private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (Str
                         text = "Add course",
                         onClick = {
                             vm.createCourse(code, batches, name)
-                            code = ""; batchInput = ""; batches = emptyList(); name = ""
+                            code = ""; batchFieldValue = TextFieldValue(""); name = ""
                         },
-                        enabled = canAddCourse && batches.isNotEmpty(),
+                        enabled = canAddCourse && batches.isNotEmpty() && !batchInputIncomplete,
                     )
                 }
             }
@@ -369,11 +360,85 @@ private fun sanitizeCourseCode(input: String): String =
 
 private val BATCH_RE = Regex("^E\\d{2}$")
 
-/** Batch: forces a leading E followed by up to two digits, e.g. "e23" -> "E23". */
-private fun sanitizeBatchInput(input: String): String {
-    val upper = input.uppercase().filter { it.isLetterOrDigit() }
-    val digits = upper.filter { it.isDigit() }.take(2)
-    return if (upper.isEmpty()) "" else "E$digits"
+/**
+ * Continuous multi-batch entry, re-derived from the whole field on every keystroke.
+ * A group starts on a comma/space, on a second `E` after digits (an explicit new group
+ * even with no delimiter), or once the current group already has 2 digits and another
+ * digit arrives (auto-chunking plain continuous digits, e.g. "2324" -> "E23 , E24"). `E`
+ * is genuinely typable — a bare "E" with no digits yet still renders as "E" rather than
+ * vanishing — but it's never required: a group that never got one still renders with the
+ * auto-inserted prefix. Being a pure function of the current text (not an incremental
+ * commit-and-clear), backspace/editing just re-derives from the shorter/changed text.
+ */
+private fun formatBatchStream(raw: String): String {
+    val groups = mutableListOf<String>()
+    var digits = StringBuilder()
+    var groupStarted = false
+
+    fun flushGroup() {
+        if (groupStarted) groups.add(digits.toString())
+        digits = StringBuilder()
+        groupStarted = false
+    }
+
+    for (ch in raw.uppercase()) {
+        when {
+            ch == ',' || ch == ' ' -> flushGroup()
+            ch == 'E' -> {
+                if (groupStarted && digits.isNotEmpty()) flushGroup()
+                groupStarted = true
+            }
+            ch.isDigit() -> {
+                if (digits.length >= 2) flushGroup()
+                groupStarted = true
+                digits.append(ch)
+            }
+            else -> Unit
+        }
+    }
+    flushGroup()
+
+    return groups.joinToString(" , ") { "E$it" }
+}
+
+/** Parses the field's text into the complete + valid `EXX` batches for submission. */
+private fun parseBatches(fieldText: String): List<String> =
+    fieldText.split(",").map { it.trim() }.filter { BATCH_RE.matches(it) }.distinct()
+
+/**
+ * True if any comma-separated group is non-empty but not a complete `EXX` batch (e.g. a
+ * trailing "E2" with only one digit) — [parseBatches] silently drops exactly these, which
+ * would otherwise let a course get created missing a batch the user thought they'd typed.
+ */
+private fun hasIncompleteBatch(fieldText: String): Boolean =
+    fieldText.split(",").map { it.trim() }.any { it.isNotEmpty() && !BATCH_RE.matches(it) }
+
+@Composable
+private fun BatchInputField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    placeholder: String,
+) {
+    Column {
+        Text("Batch", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 6.dp))
+        OutlinedTextField(
+            value = value,
+            onValueChange = { new ->
+                val formatted = formatBatchStream(new.text)
+                onValueChange(TextFieldValue(formatted, selection = TextRange(formatted.length)))
+            },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            placeholder = { Text(placeholder, color = Palette.Muted) },
+            shape = AppShapes.Input,
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Palette.Card,
+                unfocusedContainerColor = Palette.Card,
+                focusedIndicatorColor = Palette.Accent,
+                unfocusedIndicatorColor = Palette.InputBorder,
+            ),
+        )
+    }
 }
 
 // Sorted so archived (disabled) courses fall to the bottom, active ones stay code/batch ordered.
@@ -453,6 +518,7 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
     // together. Buildings are what the lecturer chooses instead, and they are
     // mandatory — GPS has nothing to measure against without a polygon.
     var selectedBuildingIds by remember { mutableStateOf(setOf<String>()) }
+    var showAdvanced by remember { mutableStateOf(false) }
 
     // The lecturer's code exists for every session; the only choice is rotation.
     var codeRotates by remember { mutableStateOf(false) }
@@ -565,28 +631,42 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
                 androidx.compose.material3.HorizontalDivider(color = Palette.Border)
                 Spacer(Modifier.height(14.dp))
 
-                Text("Attendance code", style = MaterialTheme.typography.labelLarge)
-                Text(
-                    "Every session gets an 8-digit code you can read out when a student's phone can't verify itself. Rotating it limits how far a shared code travels.",
-                    color = Palette.Muted,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = codeRotates, onCheckedChange = { codeRotates = it })
-                    Text("Rotate automatically", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    if (codeRotates) {
-                        AppTextField(
-                            codeSeconds,
-                            { codeSeconds = it.filter(Char::isDigit) },
-                            "",
-                            placeholder = "60",
-                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
-                            modifier = Modifier.width(90.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("sec", color = Palette.Muted, fontSize = 12.sp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().clickable { showAdvanced = !showAdvanced },
+                ) {
+                    Text("Advanced settings", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                    Icon(
+                        if (showAdvanced) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                        contentDescription = if (showAdvanced) "Collapse" else "Expand",
+                        tint = Palette.Muted,
+                    )
+                }
+                if (showAdvanced) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("Attendance code", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        "Every session gets an 8-digit code you can read out when a student's phone can't verify itself. Rotating it limits how far a shared code travels.",
+                        color = Palette.Muted,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = codeRotates, onCheckedChange = { codeRotates = it })
+                        Text("Rotate automatically", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        if (codeRotates) {
+                            AppTextField(
+                                codeSeconds,
+                                { codeSeconds = it.filter(Char::isDigit) },
+                                "",
+                                placeholder = "60",
+                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                                modifier = Modifier.width(90.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text("sec", color = Palette.Muted, fontSize = 12.sp)
+                        }
                     }
                 }
 
@@ -1458,6 +1538,7 @@ private fun SessionCard(
             // value only exists inside the scheduled window.
             ManualCodeSection(
                 status = manualCode,
+                collecting = collecting,
                 onLoad = onLoadManualCode,
                 onPause = onPauseManualCode,
                 onResume = onResumeManualCode,
@@ -1615,16 +1696,19 @@ private fun SessionActionButton(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ManualCodeSection(
     status: ManualCodeStatusDto?,
+    /** Reloads the moment a session enters Collecting, instead of waiting for whatever
+     *  unrelated recomposition happens to come next — see the call site for why this
+     *  couldn't just key on Unit. */
+    collecting: Boolean,
     onLoad: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onRegenerate: () -> Unit,
 ) {
-    LaunchedEffect(Unit) { onLoad() }
+    LaunchedEffect(collecting) { onLoad() }
 
     Column(
         Modifier
@@ -1657,49 +1741,44 @@ private fun ManualCodeSection(
         }
         val code = status.code ?: return@Column
 
-        Column(
+        Row(
             Modifier
                 .fillMaxWidth()
                 .background(Palette.Card, RoundedCornerShape(11.dp))
                 .border(1.dp, Palette.Border, RoundedCornerShape(11.dp))
                 .padding(horizontal = 13.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                code.chunked(4).joinToString("  "),
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 24.sp,
-                letterSpacing = 3.sp,
-                color = Palette.AccentDark,
-            )
-            val statusText = when {
-                status.paused == true -> "Rotation paused"
-                status.rotationMode == "interval" && status.rotatesIn != null -> "Next rotation in ${status.rotatesIn}s"
-                else -> "Current attendance code"
-            }
-            Text(
-                statusText,
-                color = if (status.paused == true) Palette.WarnText else Palette.Muted,
-                fontSize = 11.sp,
-            )
-        }
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(top = 9.dp),
-        ) {
-            if (status.rotationMode == "interval") {
-                SessionActionButton(
-                    text = if (status.paused == true) "Resume rotation" else "Pause rotation",
-                    icon = if (status.paused == true) Icons.Outlined.PlayCircleOutline else Icons.Outlined.PauseCircleOutline,
-                    tone = if (status.paused == true) SessionActionTone.Success else SessionActionTone.Neutral,
-                    onClick = if (status.paused == true) onResume else onPause,
+            Column(Modifier.weight(1f)) {
+                Text(
+                    code.chunked(4).joinToString("  "),
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 24.sp,
+                    letterSpacing = 3.sp,
+                    color = Palette.AccentDark,
+                )
+                val statusText = when {
+                    status.paused == true -> "Rotation paused"
+                    status.rotationMode == "interval" && status.rotatesIn != null -> "Next rotation in ${status.rotatesIn}s"
+                    else -> "Current attendance code"
+                }
+                Text(
+                    statusText,
+                    color = if (status.paused == true) Palette.WarnText else Palette.Muted,
+                    fontSize = 11.sp,
                 )
             }
+            IconButton(onClick = onRegenerate) {
+                Icon(Icons.Outlined.Repeat, contentDescription = "New code", tint = Palette.AccentDark)
+            }
+        }
+        if (status.rotationMode == "interval") {
+            Spacer(Modifier.height(9.dp))
             SessionActionButton(
-                text = "New code",
-                icon = Icons.Outlined.Repeat,
-                tone = SessionActionTone.Neutral,
-                onClick = onRegenerate,
+                text = if (status.paused == true) "Resume rotation" else "Pause rotation",
+                icon = if (status.paused == true) Icons.Outlined.PlayCircleOutline else Icons.Outlined.PauseCircleOutline,
+                tone = if (status.paused == true) SessionActionTone.Success else SessionActionTone.Neutral,
+                onClick = if (status.paused == true) onResume else onPause,
             )
         }
     }

@@ -452,28 +452,27 @@ private fun CourseSearchDropdown(
         enabled = enabled,
     )
 
-    val matches = if (query.isBlank()) {
-        courses
-    } else {
-        courses.filter { "${it.code} ${it.name} ${it.batch}".contains(query, ignoreCase = true) }
-    }
-
-    Spacer(Modifier.height(8.dp))
-    if (matches.isEmpty()) {
-        Text(
-            if (query.isBlank()) "No lectures are running right now." else "No running lecture matches \"$query\".",
-            color = Palette.Muted,
-            fontSize = 12.sp,
-        )
-    } else {
-        matches.take(20).forEach { course ->
-            CourseRow(
-                course = course,
-                selected = false,
-                enabled = enabled,
-                onClick = { onSelect(course.id); query = "" },
+    // A true dropdown: nothing shows until the student actually searches, rather than
+    // dumping the whole running-courses list under the field at rest.
+    if (query.isNotBlank()) {
+        val matches = courses.filter { "${it.code} ${it.name} ${it.batch}".contains(query, ignoreCase = true) }
+        Spacer(Modifier.height(8.dp))
+        if (matches.isEmpty()) {
+            Text(
+                "No running lecture matches \"$query\".",
+                color = Palette.Muted,
+                fontSize = 12.sp,
             )
-            Spacer(Modifier.height(8.dp))
+        } else {
+            matches.take(20).forEach { course ->
+                CourseRow(
+                    course = course,
+                    selected = false,
+                    enabled = enabled,
+                    onClick = { onSelect(course.id); query = "" },
+                )
+                Spacer(Modifier.height(8.dp))
+            }
         }
     }
 }
