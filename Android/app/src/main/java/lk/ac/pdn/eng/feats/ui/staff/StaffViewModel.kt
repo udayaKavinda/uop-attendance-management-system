@@ -641,10 +641,25 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /**
+     * Applies a settings write, keeping the geofence-logic option list if the
+     * response happens not to carry one. The server sends it on every settings
+     * response, so this is belt-and-braces — but the settings endpoint is only
+     * read once per dashboard (see [loadGlobalSettings], called from `init`), so
+     * a response that dropped the list would blank both dropdowns until the
+     * screen was recreated, with no way to notice from here.
+     */
     private fun patchSettings(req: SettingsReq, success: String) {
         viewModelScope.launch {
             when (val res = repo.updateSettings(req)) {
-                is ApiResult.Success -> { _state.value = _state.value.copy(settings = res.data); setFlash(success) }
+                is ApiResult.Success -> {
+                    val merged = res.data.copy(
+                        geofenceLogicOptions = res.data.geofenceLogicOptions
+                            ?: _state.value.settings?.geofenceLogicOptions,
+                    )
+                    _state.value = _state.value.copy(settings = merged)
+                    setFlash(success)
+                }
                 is ApiResult.Error -> setError(res.message)
             }
         }

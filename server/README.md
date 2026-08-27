@@ -320,7 +320,7 @@ becomes visible to staff is the Excel export under `/api/admin/courses`.
 npm test -- --runInBand
 ```
 
-250 tests across 17 suites, covering authentication, route access, BLE rotation and
+251 tests across 17 suites, covering authentication, route access, BLE rotation and
 broadcasting (including the previous-token grace vs. the broadcaster poll interval),
 distance banding, the accuracy ceiling and accuracy-unknown normalisation, outlier
 trimming, the code-escalation outcomes for every band, flag-reason rendering,

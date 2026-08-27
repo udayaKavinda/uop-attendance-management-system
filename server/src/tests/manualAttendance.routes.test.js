@@ -223,6 +223,40 @@ describe('GET/PATCH /api/admin/settings', () => {
     });
   });
 
+  /**
+   * Regression: the option list used to be appended to the GET handler only, so
+   * every PATCH replied without it. The client replaces its cached settings
+   * wholesale and re-reads this endpoint just once per dashboard, so a single
+   * write emptied both geofence-logic dropdowns until the screen was recreated —
+   * and since choosing a strategy is itself a PATCH, picking one option destroyed
+   * the menu. Every settings response must carry the list.
+   */
+  test('every settings response carries the geofence-logic option list, writes included', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const expectOptions = (body) => {
+      expect(Array.isArray(body.geofenceLogicOptions)).toBe(true);
+      expect(body.geofenceLogicOptions.length).toBeGreaterThan(1);
+      body.geofenceLogicOptions.forEach((o) => {
+        expect(o).toMatchObject({
+          id: expect.any(String), label: expect.any(String), description: expect.any(String),
+        });
+      });
+      // The currently-selected ids must be resolvable against the list, or the
+      // dropdown cannot render its own selection.
+      const ids = body.geofenceLogicOptions.map((o) => o.id);
+      expect(ids).toContain(body.nearBufferLogic);
+      expect(ids).toContain(body.farBufferLogic);
+    };
+
+    expectOptions((await request(app).get('/api/admin/settings').set(authHeader(admin))).body);
+    // A write of the logic itself — the case that used to break the picker.
+    expectOptions((await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ nearBufferLogic: 'majority_points_within' })).body);
+    // ...and a write of something entirely unrelated.
+    expectOptions((await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ bleEnabled: false })).body);
+  });
+
   test('rejects an unrecognized buffer-logic strategy id', async () => {
     const admin = makePerson({ role: 'admin' });
     const res = await request(app).patch('/api/admin/settings').set(headers(admin))

@@ -1047,9 +1047,12 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
                 val optionPairs = options.map { (it.id ?: "") to (it.label ?: it.id.orEmpty()) }
                 val nearSelected = options.firstOrNull { it.id == settings.nearBufferLogic }
                 val farSelected = options.firstOrNull { it.id == settings.farBufferLogic }
+                // Fall back to the saved id, never to a hardcoded strategy name: if the
+                // option list ever fails to arrive, an unresolvable id must look wrong
+                // rather than silently claim the default strategy is selected.
                 LabeledDropdown(
                     label = "Near-buffer logic",
-                    selectedText = nearSelected?.label ?: "Accuracy-weighted centroid",
+                    selectedText = nearSelected?.label ?: settings.nearBufferLogic.orEmpty(),
                     placeholder = "Select…",
                     options = optionPairs,
                     onSelect = vm::setNearBufferLogic,
@@ -1060,7 +1063,7 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
                 Spacer(Modifier.height(12.dp))
                 LabeledDropdown(
                     label = "Far-buffer logic",
-                    selectedText = farSelected?.label ?: "Accuracy-weighted centroid",
+                    selectedText = farSelected?.label ?: settings.farBufferLogic.orEmpty(),
                     placeholder = "Select…",
                     options = optionPairs,
                     onSelect = vm::setFarBufferLogic,
