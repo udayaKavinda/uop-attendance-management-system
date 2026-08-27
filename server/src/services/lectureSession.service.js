@@ -10,7 +10,7 @@ const {
 } = require('../validators/session.validator');
 const { staffSessionMatch } = require('./auth.service');
 const { localYmd } = require('../utils/date');
-const { toMinutes, nextOccurrenceDate } = require('../utils/schedule');
+const { DAY_INDEX, toMinutes, nextOccurrenceDate } = require('../utils/schedule');
 const {
   BROADCAST_WINDOW_ERROR,
   invalidateActiveSessionCache,
@@ -126,15 +126,27 @@ function sessionSortRank(sessionItem, now = new Date()) {
   const startMin = toMinutes(sessionItem.startTime);
   const endMin = toMinutes(sessionItem.endTime);
   const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  // Whether the session's own day is today — NOT "does nextOccurrenceDate return the
+  // same string with and without an endTime hint", which was the previous check. That
+  // comparison only ever disagrees in the one case where today's occurrence already
+  // ended (endTime rolls it a week forward); for every OTHER day of the week it always
+  // agrees, so it evaluated to true for literally any session whose time-of-day window
+  // happened to overlap the current clock time, regardless of which weekday it was
+  // actually configured for — a Thursday-only session was ranking as "running now" on
+  // a Friday whenever the wall-clock time fell inside its start/end range.
+  const isToday = sessionItem.recurring
+    ? sessionItem.lectureDay === DAY_INDEX[now.getDay()]
+    : sessionItem.occurrenceDate === localYmd(now);
+
+  if (isToday && startMin !== null && endMin !== null && nowMin >= startMin && nowMin <= endMin) {
+    return 0; // running right now
+  }
+
   const dateStr = sessionItem.recurring
     ? nextOccurrenceDate(sessionItem.lectureDay, now, sessionItem.endTime)
     : sessionItem.occurrenceDate;
   if (!dateStr) return Number.MAX_SAFE_INTEGER;
-
-  const isToday = dateStr === nextOccurrenceDate(sessionItem.lectureDay, now, null) && startMin !== null;
-  if (isToday && startMin !== null && endMin !== null && nowMin >= startMin && nowMin <= endMin) {
-    return 0; // running right now
-  }
 
   const [y, m, d] = dateStr.split('-').map(Number);
   const startOfDay = new Date(y, (m || 1) - 1, d || 1).getTime();
