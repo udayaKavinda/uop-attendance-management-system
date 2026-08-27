@@ -110,15 +110,27 @@ async function upsertAttendance({
   }
 }
 
-/** Human-readable reason stored on a flagged record and shown as the export cell's comment. */
+/**
+ * Human-readable reason stored on a flagged record and shown as the export cell's
+ * comment.
+ *
+ * A `far` verdict can legitimately carry a null/non-finite distance — e.g. every
+ * building polygon on the session turned out to be malformed, so nothing could be
+ * measured against. Say so rather than formatting it: the old code rendered that
+ * case as "0m", which read as "standing at the building" — the exact opposite of
+ * what happened — and could also emit "Infinitym"/"NaNm".
+ */
 function reasonForFlag(band, distanceM) {
-  if (band === 'far') {
-    const label = Number.isFinite(distanceM) && distanceM >= 1000
-      ? `${(distanceM / 1000).toFixed(1)}km`
-      : `${Math.round(distanceM ?? 0)}m`;
-    return `GPS location is ${label} from the nearest session building.`;
+  if (band !== 'far') {
+    return 'No usable GPS fix (denied, no signal, or too inaccurate to verify).';
   }
-  return 'No usable GPS fix (denied, no signal, or too inaccurate to verify).';
+  if (!Number.isFinite(distanceM)) {
+    return 'GPS put this student outside the allowed range, but the exact distance could not be measured.';
+  }
+  const label = distanceM >= 1000
+    ? `${(distanceM / 1000).toFixed(1)}km`
+    : `${Math.round(distanceM)}m`;
+  return `GPS location is ${label} from the nearest session building.`;
 }
 
 /**
@@ -169,9 +181,12 @@ async function recordBluetoothAttendance(studentPk, courseId, token, canAdvertis
  * the server re-bands the accumulated centroid on each one.
  *
  * Everything short of a pass returns the same `collecting: true` the client sees
- * while genuinely still gathering fixes. That is deliberate: the client is never
- * told which band it reached, so a modified app cannot learn how far out it is,
- * and the suspicious/far distinction stays server-side until a code is submitted.
+ * while genuinely still gathering fixes, and — deliberately — writes nothing to
+ * `Attendance` at all. `suspicious`/`far`/`unknown` only ever become a visible
+ * record (present or flagged) if the student actually submits the lecturer's
+ * code; a raw GPS attempt that never passes leaves no trace, same as a student
+ * who never checked in at all. See recordHelpCodeAttendance for where
+ * `far`/`unknown` gets written as `flagged`.
  */
 async function recordGpsFixAttendance(studentPk, courseId, fix) {
   const resolved = await resolveActiveSessionForCourse(courseId);
@@ -187,18 +202,10 @@ async function recordGpsFixAttendance(studentPk, courseId, fix) {
   const geofences = await geofenceService.findByIds(session.buildings);
   if (geofences.length === 0) {
     // Buildings are mandatory at creation, so this means every one was later
-    // deleted or deactivated. Fail closed and flag it — a code submission
-    // can't rescue this since there's nothing left to check it against.
+    // deleted or deactivated. Fail closed (unknown) so a later code submission
+    // can't be judged against a building that no longer exists — but only the
+    // code submission itself writes anything.
     attemptVerdict.record(studentKey, sessionKey, { band: 'unknown' });
-    await upsertAttendance({
-      studentPk,
-      course,
-      session,
-      method: 'gps',
-      status: 'flagged',
-      band: 'unknown',
-      reason: 'No active building configured for this session.',
-    });
     return { ok: true, collecting: true };
   }
 
@@ -214,28 +221,9 @@ async function recordGpsFixAttendance(studentPk, courseId, fix) {
     distanceM: verdict.distanceM,
   });
 
-  if (verdict.band === 'far' || verdict.band === 'unknown') {
-    // Not a pass, but not silent either: a flagged record makes this attempt
-    // visible in the attendance export even if the student never falls back
-    // to the lecturer's code. Later fixes in the same window keep refreshing
-    // it with the latest evidence (see upsertAttendance).
-    await upsertAttendance({
-      studentPk,
-      course,
-      session,
-      method: 'gps',
-      status: 'flagged',
-      band: verdict.band,
-      centroid: centroidDoc(verdict.centroid, verdict.distanceM),
-      reason: reasonForFlag(verdict.band, verdict.distanceM),
-    });
-    return { ok: true, collecting: true };
-  }
-
   if (!gpsFixService.isPassBand(verdict.band)) {
-    // `suspicious`: not a pass on GPS alone, and not flagged either — a correct
-    // code is still a live option and always grants presence from there (see
-    // recordHelpCodeAttendance), so this stays silent until the window ends.
+    // `suspicious`/`far`/`unknown`: not a pass on GPS alone. Stays silent —
+    // only a correct code turns this into a visible record, present or flagged.
     return { ok: true, collecting: true };
   }
 
@@ -275,11 +263,8 @@ async function recordHelpCodeAttendance(studentPk, courseId, code) {
   const studentKey = String(studentPk);
   const sessionKey = String(session._id);
 
-  const attempt = await manualCode.verifyAttempt(studentKey, session, code);
-  if (attempt.lockedOut) {
-    return { ok: false, status: 429, error: 'Too many incorrect attempts. Try again in a couple of minutes.' };
-  }
-  if (!attempt.ok) {
+  const valid = await manualCode.verifyCode(session, code);
+  if (!valid) {
     return { ok: false, status: 400, error: 'Incorrect code. Ask your lecturer to read it out again.' };
   }
 

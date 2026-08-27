@@ -225,7 +225,7 @@ describe('POST /api/attendance — GPS band decisions', () => {
     expect(Attendance.create).not.toHaveBeenCalled();
   });
 
-  test('a far-band student is still told only "collecting" over the wire, but gets flagged server-side', async () => {
+  test('a far-band student is indistinguishable from a suspicious one over the wire, and nothing is recorded', async () => {
     const student = makePerson();
     const session = makeSession({ buildings: [addBuilding()] });
     const course = makeCourse();
@@ -234,30 +234,10 @@ describe('POST /api/attendance — GPS band decisions', () => {
 
     const last = await streamFixes(student, course._id, FAR);
     expect(last.body).toEqual({ status: 'collecting' });
-    expect(Attendance.create).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'gps', status: 'flagged', band: 'far' }),
-    );
-  });
-
-  test('a flagged record keeps refreshing with the latest fix rather than freezing on the first', async () => {
-    const student = makePerson();
-    const session = makeSession({ buildings: [addBuilding()] });
-    const course = makeCourse();
-    Course.findById.mockResolvedValue(course);
-    LectureSession.find.mockResolvedValue([session]);
-
-    const existing = {
-      _id: makeId(), status: 'flagged', band: 'far', save: jest.fn().mockResolvedValue(undefined),
-    };
-    Attendance.findOne.mockResolvedValue(existing);
-
-    await streamFixes(student, course._id, FAR);
-    expect(existing.save).toHaveBeenCalled();
-    expect(existing.status).toBe('flagged');
     expect(Attendance.create).not.toHaveBeenCalled();
   });
 
-  test('does not accept a centroid built only from very inaccurate fixes, and flags it as unknown', async () => {
+  test('does not accept a centroid built only from very inaccurate fixes, and records nothing', async () => {
     const student = makePerson();
     const session = makeSession({ buildings: [addBuilding()] });
     const course = makeCourse();
@@ -266,12 +246,10 @@ describe('POST /api/attendance — GPS band decisions', () => {
 
     const last = await streamFixes(student, course._id, { ...INSIDE, accuracy: 300 });
     expect(last.body).toEqual({ status: 'collecting' });
-    expect(Attendance.create).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'gps', status: 'flagged', band: 'unknown' }),
-    );
+    expect(Attendance.create).not.toHaveBeenCalled();
   });
 
-  test('flags as unknown, with a reason, when every referenced building has been deactivated', async () => {
+  test('keeps collecting and records nothing when every referenced building has been deactivated', async () => {
     const student = makePerson();
     const geofenceId = makeId();
     mockGeofenceStore.push({
@@ -285,9 +263,7 @@ describe('POST /api/attendance — GPS band decisions', () => {
       .send({ courseId: course._id, fix: INSIDE });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('collecting');
-    expect(Attendance.create).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'gps', status: 'flagged', band: 'unknown', reason: expect.any(String) }),
-    );
+    expect(Attendance.create).not.toHaveBeenCalled();
   });
 });
 
@@ -426,6 +402,36 @@ describe('POST /api/attendance — "get help" lecturer code', () => {
     expect(Attendance.create).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'flagged', band: 'far', reason: expect.any(String) }),
     );
+    // The reason is the only thing a lecturer ever reads about this record, so it
+    // has to state a real distance — never "0m"/"NaNm"/"Infinitym".
+    const { reason } = Attendance.create.mock.calls.at(-1)[0];
+    expect(reason).toMatch(/^GPS location is \d+(\.\d)?(m|km) from the nearest session building\.$/);
+    expect(reason).not.toMatch(/\b0m\b|NaN|Infinity/);
+  });
+
+  test('a far verdict whose distance could not be measured says so instead of claiming 0m', async () => {
+    const student = makePerson();
+    // Every building on the session has a malformed (<3 vertex) polygon, so no
+    // distance can be computed: the reason must not render that as "0m".
+    const geofenceId = makeId();
+    mockGeofenceStore.push({
+      _id: geofenceId, polygon: [[79.8, 6.9], [79.801, 6.9]], active: true, deleted: false,
+    });
+    mockManualCodeDoc = {
+      code: '11112222', prevCode: null, generatedAt: Date.now(), paused: false,
+    };
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([makeSession({ buildings: [geofenceId] })]);
+
+    await streamFixes(student, course._id, INSIDE);
+    const res = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, code: '11112222' });
+
+    expect(res.body.status).toBe('flagged');
+    const { reason } = Attendance.create.mock.calls.at(-1)[0];
+    expect(reason).not.toMatch(/0m|NaN|Infinity/);
+    expect(reason).toMatch(/could not be measured/);
   });
 
   test('a correct code with no GPS evidence at all is flagged as unknown, never a pass', async () => {

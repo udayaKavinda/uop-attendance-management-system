@@ -18,9 +18,13 @@ or React client.
   method to choose. The running-course payload carries identity only.
 - On failure: **Try again** (another window) or **Get help**, which asks for the
   lecturer's 8-digit code.
-- Lands on exactly one outcome: present, or not confirmed (there's no queue — the
-  lecturer never approves or rejects anything; a not-confirmed attempt is simply visible,
-  flagged, in the lecturer's attendance export).
+- Lands on exactly one of two outcomes, and only once one is actually reached: present
+  (automatic BLE/GPS pass, or a correct code), or not confirmed (a correct code submitted
+  from `far`/`unknown`). There's no queue — the lecturer never approves or rejects
+  anything; a not-confirmed attempt is simply visible, flagged, in the lecturer's
+  attendance export. A student who lets the window time out without ever trying **Get
+  help** reaches neither outcome and leaves no attendance record at all, same as one who
+  never opened the app.
 - After acceptance, a capable/authorized device may receive a real or decoy peer-seeding
   window with indistinguishable UI.
 
@@ -72,7 +76,13 @@ One flow, both radios, 90 seconds:
 2. Ask the server whether a broadcast is even live (`/api/bluetooth-target`). If not, the
    whole window goes to GPS rather than splitting attention.
 3. Run the available paths concurrently: scan for the rotating token, and stream
-   high-accuracy fixes submitting each one.
+   high-accuracy fixes submitting each one. **Both paths keep going for the whole
+   window** — the BLE scan submits every distinct token it hears, not just the first.
+   That matters because the scan filter matches the fixed UOP beacon prefix rather than
+   this session, so in a building running two lectures at once the first token heard is
+   often the other room's and is rejected; giving up on it would drop the student to
+   GPS-only for the rest of the attempt. A token is retried only if the request never
+   reached the server — a real rejection is final for that token.
 4. **First success ends the window** — a student in the front row is not made to wait.
 5. Anything other than `accepted` is treated as "keep trying", including the server's
    deliberately ambiguous `collecting`. The client is never told its distance band.

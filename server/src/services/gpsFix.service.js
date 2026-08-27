@@ -18,6 +18,24 @@ const MIN_FIXES = 4;
  */
 const ACCURACY_CEILING_M = 75;
 
+/**
+ * Android's `Location.getAccuracy()` returns 0.0 when `hasAccuracy()` is false,
+ * i.e. 0 means "no accuracy information", NOT "perfect fix". Treat it (and any
+ * other non-positive/garbage value) as this pessimistic default everywhere, so
+ * weighting and best-fix selection agree. They did not before: the weighting
+ * used `Number(accuracy) || 50` (which quietly mapped 0 → 50) while best-fix
+ * selection compared the raw value, so an accuracy-unknown fix was
+ * simultaneously the least-trusted for the centroid and "the most precise fix
+ * we have" for the `best_accuracy_fix` strategy.
+ */
+const UNKNOWN_ACCURACY_M = 50;
+
+function normalizedAccuracy(fix) {
+  const raw = Number(fix?.accuracy);
+  if (!Number.isFinite(raw) || raw <= 0) return UNKNOWN_ACCURACY_M;
+  return Math.max(1, raw);
+}
+
 function fixKey(studentId, sessionId) {
   return `${studentId}:${sessionId}`;
 }
@@ -43,6 +61,14 @@ function clearFixes(studentId, sessionId) {
  * Step 1: require >= 4 fixes, then drop fixes whose distance from the median
  * location exceeds ~2x the median distance (with a floor so a tight, low-noise
  * cluster doesn't over-trim on tiny jitter).
+ *
+ * Returns null both when there aren't enough fixes yet AND when trimming leaves
+ * fewer than MIN_FIXES trustworthy ones — in either case the honest answer is
+ * "no verdict yet, keep collecting", and the client streams for the full 90 s so
+ * more fixes are coming. This previously fell back to returning the *untrimmed*
+ * list instead, which meant the trimmer identified an outlier and then handed it
+ * straight back: a student with 3 perfect in-room fixes plus one glitch (i.e.
+ * exactly MIN_FIXES) banded as `far`, measured at 86 km from the building.
  */
 function removeOutliersByMedianDistance(fixes) {
   if (fixes.length < MIN_FIXES) return null;
@@ -62,7 +88,7 @@ function removeOutliersByMedianDistance(fixes) {
   const threshold = Math.max(15, medianDist * 2);
 
   const survivors = fixes.filter((_, idx) => distances[idx] <= threshold);
-  return survivors.length >= MIN_FIXES ? survivors : fixes;
+  return survivors.length >= MIN_FIXES ? survivors : null;
 }
 
 /** Step 2: average survivors weighted by 1/accuracy² so precise fixes dominate. */
@@ -72,7 +98,7 @@ function accuracyWeightedCentroid(fixes) {
   let sumLng = 0;
   let bestAccuracy = Infinity;
   for (const f of fixes) {
-    const accuracy = Math.max(1, Number(f.accuracy) || 50);
+    const accuracy = normalizedAccuracy(f);
     const weight = 1 / (accuracy * accuracy);
     sumWeight += weight;
     sumLat += f.lat * weight;
@@ -129,7 +155,11 @@ function evaluateFix(studentId, sessionId, fix, geofences, buffers) {
   const polygons = geofences.map((g) => g.polygon);
   const fixDistances = survivors.map((f) => distanceToNearestGeofenceMeters(f.lat, f.lng, polygons));
   const centroidDistanceM = distanceToNearestGeofenceMeters(centroid.lat, centroid.lng, polygons);
-  const bestAccuracyFix = survivors.reduce((best, f) => (f.accuracy < best.accuracy ? f : best));
+  // normalizedAccuracy, not the raw field: an accuracy-unknown (0) fix must not
+  // win "most precise" and then dominate the whole verdict under best_accuracy_fix.
+  const bestAccuracyFix = survivors.reduce(
+    (best, f) => (normalizedAccuracy(f) < normalizedAccuracy(best) ? f : best),
+  );
   const bestAccuracyFixDistanceM = distanceToNearestGeofenceMeters(
     bestAccuracyFix.lat, bestAccuracyFix.lng, polygons,
   );

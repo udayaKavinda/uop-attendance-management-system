@@ -9,7 +9,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -210,14 +209,39 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
             is ApiResult.Error -> false
         }
 
+    /**
+     * Scans and submits for the whole window rather than taking a single token,
+     * because a rejected token is routine and is NOT a reason to abandon Bluetooth
+     * for the rest of the attempt:
+     *
+     *  - the scan filter matches the fixed UOP beacon prefix, not this session, so
+     *    in a building running two lectures at once the first token heard is very
+     *    often the other room's and is rejected outright;
+     *  - a phone that joined an already-running broadcast briefly advertises the
+     *    previous token after a rotation (see GRACE_MS in bluetoothCode.service.js).
+     *
+     * This used to take `.first()` and submit exactly once, so either case silently
+     * downgraded the student to GPS-only for the remaining ~90 seconds.
+     *
+     * `attempted` collapses the scanner's repeated emissions of the same beacon
+     * (several per second) down to one submission per distinct token.
+     */
     private suspend fun bluetoothPath(courseId: String, canAdvertise: Boolean) {
-        val token = try {
-            scanner.tokenFlow().first()
+        val attempted = mutableSetOf<String>()
+        try {
+            scanner.tokenFlow()
+                .takeWhile { !_state.value.settled }
+                .collect { token ->
+                    if (!attempted.add(token)) return@collect
+                    // A transport failure says nothing about this token, so allow a
+                    // later retry; a real server verdict is final for that token.
+                    if (!submit(courseId, token = token, canAdvertise = canAdvertise)) {
+                        attempted.remove(token)
+                    }
+                }
         } catch (e: BleUnavailableException) {
-            return // GPS carries the rest of the window on its own
+            // Radio unusable: GPS carries the rest of the window on its own.
         }
-        if (_state.value.settled) return
-        submit(courseId, token = token, canAdvertise = canAdvertise)
     }
 
     private suspend fun gpsPath(courseId: String, canAdvertise: Boolean) {
@@ -240,17 +264,22 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
      * Anything other than "accepted" is treated as "keep trying" — including the
      * server's deliberately ambiguous "collecting". Transport errors are ignored
      * for the same reason: the window, not any single request, decides.
+     *
+     * @return whether the server actually answered. False means the request never
+     *   reached it (no HTTP status), so the caller may retry the same evidence;
+     *   true means this submission got a real verdict and should not be repeated.
      */
     private suspend fun submit(
         courseId: String,
         token: String? = null,
         fix: GpsFixDto? = null,
         canAdvertise: Boolean,
-    ) {
+    ): Boolean {
         val res = repo.recordAttendance(courseId, token = token, fix = fix, canAdvertise = canAdvertise)
         if (res is ApiResult.Success && res.data.status == "accepted") {
             onAccepted(res.data.seeding)
         }
+        return res is ApiResult.Success || (res as? ApiResult.Error)?.code != null
     }
 
     private fun onAccepted(seeding: SeedingDto?) {

@@ -23,8 +23,8 @@ whoever later reads the attendance export, not queued for anyone to act on.
   repository, so the server does not infer membership from course batch or email format.
 - GPS verification is foreground and permission-based; the app does not continuously
   track students.
-- In-memory nonce, code-attempt, GPS-fix, and attempt-verdict state assumes one server
-  process. A shared store is required before horizontal scaling.
+- In-memory nonce, GPS-fix, and attempt-verdict state assumes one server process. A
+  shared store is required before horizontal scaling.
 
 ## Decision table
 
@@ -82,7 +82,19 @@ stronger claim — and the far band's strategy only runs if near didn't already 
 Every strategy shares the same upstream pipeline: the outlier-trimming pass
 (`removeOutliersByMedianDistance`) and the `ACCURACY_CEILING_M` gate run first regardless
 of which strategy is selected, so a strategy only ever sees fixes that already cleared
-those two filters.
+those two filters. If trimming leaves fewer than `MIN_FIXES` trustworthy fixes, the
+attempt reports "not ready" and waits for more rather than banding on data it has already
+judged unreliable.
+
+`all_points_within` is a genuine footgun with real GPS: one stray reading out of ~30 fails
+the whole attempt, so a student who never left the room can still be flagged. It is offered
+for small, very tight geofences only, and its description in the admin dropdown says so.
+
+Accuracy is normalised once (`normalizedAccuracy`) before either weighting or best-fix
+selection. Android's `Location.getAccuracy()` returns `0.0` when `hasAccuracy()` is false,
+so `0` means "unknown", never "perfect" — it is treated as a pessimistic 50 m in both
+places. Without that, an accuracy-unknown fix was simultaneously the least-trusted input
+to the centroid and "the most precise fix we have" for `best_accuracy_fix`.
 
 ## Verdict retention
 
@@ -147,8 +159,8 @@ A session has no verification field. What the lecturer chooses is:
 ## Flagged records
 
 There is no lecturer review queue and no approve/reject action anywhere in the app. A
-`far`/`unknown` attempt is written as `status: 'flagged'` directly — it is neither
-present nor silently absent, just a record with a `reason` string
+`far`/`unknown` **code submission** is written as `status: 'flagged'` directly — it is
+neither present nor silently absent, just a record with a `reason` string
 (`services/attendance.service.js`'s `reasonForFlag`) explaining why: a distance
 ("GPS location is 2.1km from the nearest session building.") for `far`, or a fixed
 message for `unknown` (no usable fix, or every session building was deleted/deactivated
@@ -158,11 +170,10 @@ mid-lecture). The only place this becomes visible is the Excel attendance export
 the reason attached as a cell comment. The on-screen matrix and the JSON API expose
 `status` only, same as `present`.
 
-Critically, this record now gets written even when the student never falls back to the
-lecturer's code at all — every GPS-evaluated `far`/`unknown` verdict is persisted the
-moment it's reached, not just ones that reach the help-code path. Previously a student
-whose GPS never passed and who never typed a code left **no record whatsoever**; now
-their attempt is visible (flagged) in the export either way.
+**Raw GPS fixes never write anything for `suspicious`/`far`/`unknown`** — only an actual
+"get help" code submission does. A student whose GPS never passes and who never types a
+code leaves **no record at all**, exactly like a student who never checked in; nothing is
+visible in the export for an attempt that was never escalated to the code.
 
 ## What stays server-internal
 
@@ -176,8 +187,19 @@ on-screen matrix or the JSON API.
 
 - The 50–100m suspicious band always auto-passes on a correct code now — a student in the
   canteen who has the code from a group chat passes silently. Mitigations in place are
-  the audit fields, the per-(student, session) attempt cap (5 tries / 5 min, then a
-  2-minute lockout), and code rotation.
+  the audit fields and code rotation; there is deliberately no per-student guess cap or
+  lockout on the code endpoint (removed — see below).
 - BLE range is extended deliberately by seeding, so "BLE == in the room" is approximate.
   Restricting seeding to primary-verified students bounds the chain to one hop.
-- All four in-memory stores block horizontal scaling.
+- All in-memory stores block horizontal scaling.
+
+## No guess cap on the "get help" code
+
+Wrong-code submissions are rejected every time with the same plain 400, with no
+per-(student, session) attempt limit and no lockout window — an earlier version of this
+service capped it at 5 tries / 5 minutes before a 2-minute lockout
+(`manualCode.service.js`'s `verifyAttempt`), but that has been removed entirely; only
+`verifyCode` remains, a pure code check with no attempt state. Brute-forcing an 8-digit
+code (100 million possibilities) inside a session's schedule window remains the practical
+mitigation, alongside code rotation and the general endpoint rate limiter shared by the
+rest of the API.

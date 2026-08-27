@@ -67,7 +67,11 @@ second window runs Bluetooth and GPS together, and the server bands the result:
 ¹ "Flagged" is not a queue — it's an `Attendance` row with `status: 'flagged'` and a
 `reason`, visible only in the Excel attendance export (red fill + cell comment). Nobody
 approves or rejects it. `suspicious` always passes on a correct code now — there is no
-admin switch for it, unlike `far`/`unknown` which never pass.
+admin switch for it, unlike `far`/`unknown` which never pass. Crucially, `suspicious`,
+`far`, and `unknown` all require the student to actually submit the "get help" code to
+produce **any** `Attendance` record at all — raw GPS fixes alone never write one for
+these three bands, so a student who never falls back to the code leaves no trace, exactly
+like one who never checked in.
 
 "Within the near/far buffer" is deliberately not just a fixed distance check — each band
 independently runs a selectable strategy (`Settings.nearBufferLogic`/`farBufferLogic`)
@@ -88,6 +92,11 @@ depends on it.
 
 - Android streams one precise fix at a time for up to 90 seconds.
 - Outliers are dropped against the median; survivors are averaged weighted by 1/accuracy².
+  If trimming leaves fewer than 4 trustworthy fixes the attempt reports "not ready" and
+  waits for more, rather than banding on fixes it has already judged unreliable.
+- A reported accuracy of `0` means "unknown" (Android returns it when `hasAccuracy()` is
+  false), not "perfect", and is normalised to a pessimistic 50 m for both centroid
+  weighting and best-fix selection.
 - If no contributing fix beat 75 m accuracy the attempt bands `unknown` rather than being
   trusted — a ±200 m "fix" near a building must not pass as `near`.
 - Intermediate fixes live only in memory for the attempt. Accepted attendance stores the
@@ -97,7 +106,11 @@ depends on it.
 
 ### Bluetooth and peer seeding
 
-- Primary and seeder tokens rotate every 15 seconds with a 2-second previous-token grace.
+- Primary and seeder tokens rotate every 15 seconds with an 8-second previous-token grace.
+  The grace must exceed the broadcaster's 5-second poll interval: rotation is lazy (it
+  happens on the first poll that finds the token stale, and only that caller gets the new
+  value), so with several devices broadcasting one session every other device keeps
+  advertising the old token until its own next poll.
 - Broadcast state is live only while its staff heartbeat is fresh and its session is in
   the configured window.
 - Seeder selection uses capability reported by Android. Seeder leases are checked during
@@ -187,12 +200,12 @@ GPS and code records may additionally store
 these except `status` (and `reason`, in the Excel export only) are audit-only and never
 leave the server. The unique index `{ student, session, attendanceDate }` makes every
 path idempotent; a genuine automatic pass upgrades an existing `flagged` row to
-`present`, and a fresh `flagged` verdict overwrites an existing `flagged` one so the
-stored reason/distance reflects the latest evidence gathered in the window rather than
-freezing on the first fix that happened to flag. A GPS-only `far`/`unknown` verdict is
-written as `flagged` the moment it's reached — not only when the student falls back to
-the lecturer's code — so an attempt that never passes is still visible in the export
-even if the student never asked for help.
+`present`, and a fresh `flagged` verdict from a repeat code submission overwrites an
+existing `flagged` one so the stored reason/distance reflects the latest evidence rather
+than freezing on the first submission. **Raw GPS fixes never write anything to
+`Attendance` for `suspicious`/`far`/`unknown`** — only an actual "get help" code
+submission does (see `recordHelpCodeAttendance`); a student who never falls back to the
+code leaves no record at all, same as a student who never checked in.
 
 ### BleToken / ManualCode / Settings
 
@@ -297,8 +310,8 @@ becomes visible to staff is the Excel export under `/api/admin/courses`.
 - Expired seed-token cleanup (verification independently checks leases).
 - Expired attempt-verdict sweep (10-minute TTL).
 - Short active-session cache invalidated on relevant staff mutations.
-- OAuth exchange/nonces, code guess limiting, GPS attempt fixes, and attempt verdicts are
-  in-memory and therefore assume a single Node process; use a shared store before
+- OAuth exchange/nonces, GPS attempt fixes, and attempt verdicts are in-memory and
+  therefore assume a single Node process; use a shared store before
   horizontal scaling.
 
 ## Testing
@@ -307,9 +320,11 @@ becomes visible to staff is the Excel export under `/api/admin/courses`.
 npm test -- --runInBand
 ```
 
-247 tests across 17 suites, covering authentication, route access, BLE rotation and
-broadcasting, distance banding and the accuracy ceiling, the code-escalation outcomes for
-every band, the geofence-logic strategy registry, the flagged-record Excel export,
+250 tests across 17 suites, covering authentication, route access, BLE rotation and
+broadcasting (including the previous-token grace vs. the broadcaster poll interval),
+distance banding, the accuracy ceiling and accuracy-unknown normalisation, outlier
+trimming, the code-escalation outcomes for every band, flag-reason rendering,
+the geofence-logic strategy registry, the flagged-record Excel export,
 running-course DTO contracts, strict schedules/one-time dates, GPS geometry and fix
 filtering, active geofences, seeder eligibility, pages, and unified attendance. Keep
 Android and server contract tests aligned whenever a response changes.

@@ -138,6 +138,27 @@ describe('bluetoothCode', () => {
       expect((await bluetoothCode.verifyToken('session1', 'oldtoken123456789')).ok).toBe(false);
     });
 
+    /**
+     * Regression: rotation is lazy, so only the device whose poll triggers it gets
+     * the new token — every other device broadcasting the same session (the "Join"
+     * action) keeps advertising the old one until its own next ~5s poll. With the
+     * old 2s grace that left a ~3s window per 15s cycle where a joined phone
+     * advertised a token this service rejected (measured up to 20% of wall-clock
+     * time). The grace must therefore cover a full broadcaster poll interval.
+     */
+    it('accepts the previous token for at least one full broadcaster poll interval', async () => {
+      const BROADCASTER_POLL_MS = 5000;
+      expect(GRACE_MS).toBeGreaterThan(BROADCASTER_POLL_MS);
+      expect(GRACE_MS).toBeLessThan(ROTATION_MS);
+
+      mockModel.find.mockResolvedValue([{
+        token: 'newtoken123456789',
+        prevToken: 'oldtoken123456789',
+        generatedAt: Date.now() - BROADCASTER_POLL_MS,
+      }]);
+      expect((await bluetoothCode.verifyToken('session1', 'oldtoken123456789')).ok).toBe(true);
+    });
+
     it('is case-insensitive', async () => {
       mockModel.find.mockResolvedValue([
         { token: 'abcdef1234567890', prevToken: null, generatedAt: Date.now() },

@@ -54,6 +54,41 @@ describe('gpsFix', () => {
     it('returns null when there are fewer than 4 fixes', () => {
       expect(gpsFix.removeOutliersByMedianDistance([fix(1, 1), fix(1, 1)])).toBeNull();
     });
+
+    // Regression: this used to fall back to returning the UNTRIMMED list, handing
+    // back the very outlier it had just identified. A student with 3 perfect
+    // in-room fixes plus one glitch then banded `far` (measured 86 km out).
+    it('reports "not ready" rather than the untrimmed set when trimming leaves too few', () => {
+      const fixes = [
+        fix(6.9000, 79.8000), fix(6.9000, 79.8000), fix(6.9000, 79.8000),
+        fix(10.0000, 79.8000), // one wild glitch, at exactly MIN_FIXES total
+      ];
+      expect(gpsFix.removeOutliersByMedianDistance(fixes)).toBeNull();
+    });
+  });
+
+  describe('accuracy normalisation', () => {
+    // Android returns 0.0 from getAccuracy() when hasAccuracy() is false, so 0
+    // means "unknown", never "perfect".
+    it('treats accuracy 0 as unknown (pessimistic), not as the most precise fix', () => {
+      expect(gpsFix.accuracyWeightedCentroid([fix(0, 0, 0)]).bestAccuracy).toBe(50);
+      expect(gpsFix.accuracyWeightedCentroid([fix(0, 0, 0), fix(0, 0, 12)]).bestAccuracy).toBe(12);
+    });
+
+    it('does not let an accuracy-unknown fix win best_accuracy_fix', () => {
+      const square = [[79.8000, 6.9000], [79.8010, 6.9000], [79.8010, 6.9010], [79.8000, 6.9010]];
+      const buffers = { ...BUFFERS, nearBufferLogic: 'best_accuracy_fix', farBufferLogic: 'best_accuracy_fix' };
+      const key = `student-${Date.now()}-acc0`;
+      let result;
+      // Three genuinely precise fixes dead centre, plus one accuracy-unknown fix 6 km away.
+      const inRoom = [6.9005, 79.8005];
+      for (let i = 0; i < 4; i += 1) {
+        result = gpsFix.evaluateFix(key, 'session1', fix(inRoom[0], inRoom[1], 3), [{ polygon: square }], buffers);
+      }
+      result = gpsFix.evaluateFix(key, 'session1', fix(6.85, 79.8005, 0), [{ polygon: square }], buffers);
+      expect(result.band).toBe('inside');
+      gpsFix.clearFixes(key, 'session1');
+    });
   });
 
   describe('accuracyWeightedCentroid', () => {

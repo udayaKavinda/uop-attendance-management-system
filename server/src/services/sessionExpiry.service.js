@@ -40,6 +40,7 @@ async function closeStaleBroadcasts(now = Date.now()) {
   const cutoff = new Date(now - BROADCAST_STALE_MS);
   const stale = await LectureSession.find({
     broadcasting: true,
+    deleted: false,
     $or: [{ lastBroadcastSeenAt: null }, { lastBroadcastSeenAt: { $lt: cutoff } }],
   });
   for (const s of stale) {
@@ -63,13 +64,26 @@ async function closeOutOfWindowBroadcasts(now = new Date()) {
  * because the code is standing config for every session (not a per-lecture on/off
  * like broadcasting), so a recurring session's code would otherwise sit valid
  * indefinitely between occurrences.
+ *
+ * Driven off the sessions that actually hold a code (typically the handful running
+ * today), not off every session in the database: the previous version loaded every
+ * non-deleted session each tick and issued a delete for each out-of-window one —
+ * i.e. nearly all of them, once a minute, forever.
  */
 async function closeOutOfWindowManualCodes(now = new Date()) {
-  const sessions = await LectureSession.find({ deleted: false });
+  const sessionIds = await manualCode.sessionIdsWithCode();
+  if (sessionIds.length === 0) return;
+  const sessions = await LectureSession.find({ _id: { $in: sessionIds } });
   for (const s of sessions) {
     if (!isWithinScheduleWindow(s, now)) {
       await manualCode.removeCode(s);
     }
+  }
+  // A code whose session row is gone entirely (hard-deleted out of band) would
+  // never match above, so drop those by id too rather than leaking them.
+  const found = new Set(sessions.map((s) => String(s._id)));
+  for (const id of sessionIds) {
+    if (!found.has(String(id))) await manualCode.removeCode({ _id: id });
   }
 }
 

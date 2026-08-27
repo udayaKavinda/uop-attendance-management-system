@@ -186,32 +186,18 @@ describe('manualCode', () => {
     });
   });
 
-  describe('verifyAttempt (per-student, per-session guess limiting)', () => {
-    it('locks out after 5 wrong attempts and clears on success', async () => {
+  describe('verifyCode (no attempt cap or lockout)', () => {
+    it('keeps rejecting a wrong code no matter how many times it is retried', async () => {
       mockModel.findOne.mockResolvedValue({ code: '11112222', prevCode: null, generatedAt: Date.now(), paused: false });
-      const session = makeSession({ _id: `lockout-session-${Date.now()}` });
+      const session = makeSession({ _id: `no-lockout-session-${Date.now()}` });
 
-      for (let i = 0; i < 5; i += 1) {
+      for (let i = 0; i < 8; i += 1) {
         // eslint-disable-next-line no-await-in-loop
-        const attempt = await manualCode.verifyAttempt('student1', session, '00000000');
-        expect(attempt.ok).toBe(false);
+        expect(await manualCode.verifyCode(session, '00000000')).toBe(false);
       }
 
-      const lockedAttempt = await manualCode.verifyAttempt('student1', session, '11112222');
-      expect(lockedAttempt.lockedOut).toBe(true);
-    });
-
-    it('a different student on the same session is unaffected by another student’s lockout', async () => {
-      mockModel.findOne.mockResolvedValue({ code: '11112222', prevCode: null, generatedAt: Date.now(), paused: false });
-      const session = makeSession({ _id: `shared-session-${Date.now()}` });
-
-      for (let i = 0; i < 5; i += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        await manualCode.verifyAttempt('studentA', session, '00000000');
-      }
-
-      const otherStudent = await manualCode.verifyAttempt('studentB', session, '11112222');
-      expect(otherStudent.ok).toBe(true);
+      // The correct code still works afterwards — nothing was ever locked out.
+      expect(await manualCode.verifyCode(session, '11112222')).toBe(true);
     });
   });
 });

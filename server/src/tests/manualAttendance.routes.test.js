@@ -408,7 +408,7 @@ describe('POST /api/attendance — code submission', () => {
     expect(Attendance.create).not.toHaveBeenCalled();
   });
 
-  test('rejects a wrong code repeatedly and locks the student out after 5 attempts', async () => {
+  test('rejects a wrong code every time — no attempt cap or lockout', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const student = makePerson({ role: 'student' });
     const session = makeSession();
@@ -417,7 +417,7 @@ describe('POST /api/attendance — code submission', () => {
     await request(app).get(`/api/admin/sessions/${session._id}/manual-code`).set(authHeader(lecturer));
     LectureSession.find.mockResolvedValue([session]);
 
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 8; i += 1) {
       // eslint-disable-next-line no-await-in-loop
       const res = await request(app)
         .post('/api/attendance')
@@ -425,12 +425,6 @@ describe('POST /api/attendance — code submission', () => {
         .send({ courseId: course._id, code: '00000000' });
       expect(res.status).toBe(400);
     }
-
-    const lockedRes = await request(app)
-      .post('/api/attendance')
-      .set(headers(student))
-      .send({ courseId: course._id, code: '00000000' });
-    expect(lockedRes.status).toBe(429);
   });
 });
 

@@ -23,7 +23,9 @@ which asks for the 8-digit code the lecturer reads out. How far away they were d
 what the code does: near the building (including the suspicious band, which always
 passes on a correct code) it marks them present; beyond the far buffer, it's written as a
 `flagged` record with a reason instead — there is no lecturer review queue and nobody
-approves or rejects anything.
+approves or rejects anything. A student whose GPS/Bluetooth never resolved and who never
+submits the code leaves **no record at all**, same as one who never checked in — only
+`inside`/`near` (auto-pass) and an actual code submission ever write an attendance row.
 
 Two supporting mechanisms:
 

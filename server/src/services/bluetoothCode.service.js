@@ -8,7 +8,25 @@ function getModel() {
 }
 
 const ROTATION_MS = 15000;
-const GRACE_MS = 2000; // accept previous token for 2 s after rotation
+/**
+ * How long the PREVIOUS token stays acceptable after a rotation.
+ *
+ * Must exceed the broadcaster's poll interval (5 s), because rotation is lazy:
+ * it happens on the first poll that finds the token older than ROTATION_MS, and
+ * only that caller gets the new value back. With several devices broadcasting
+ * the same session (the "Join" action) every other device keeps advertising the
+ * old token until its own next poll — up to a full poll interval later. A 2 s
+ * grace left a ~3 s window per 15 s cycle in which a joined phone advertised a
+ * token this service would reject, so a student who happened to hear only that
+ * phone was turned away (measured: up to 20% of wall-clock time, depending on
+ * when the second device joined).
+ *
+ * 8 s = 5 s poll + 3 s margin for network latency and timer drift. The cost is
+ * that a captured token stays replayable ~6 s longer, which is acceptable: the
+ * token only ever proves room presence, and it still dies well inside the
+ * rotation period.
+ */
+const GRACE_MS = 8000;
 
 // ── Primary token (lecturer broadcast) ──────────────────────────────────────────
 

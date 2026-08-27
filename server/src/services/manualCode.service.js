@@ -133,6 +133,16 @@ async function removeCode(sessionItem) {
   await getModel().deleteOne({ session: key });
 }
 
+/**
+ * Session ids that currently hold a stored code. The out-of-window sweep is
+ * driven off this (small) set rather than off every session in the database:
+ * only a session that actually has a code has anything to clean up.
+ */
+async function sessionIdsWithCode() {
+  const docs = await getModel().find({}, 'session');
+  return docs.map((d) => d.session);
+}
+
 /** Changing the interval mid-session rotates immediately, with the usual grace window. */
 async function setRotation(sessionItem, { rotationMode, rotationSeconds }) {
   sessionItem.manualCodeRotationMode = rotationMode;
@@ -179,65 +189,6 @@ async function verifyCode(sessionItem, submitted) {
   return false;
 }
 
-// ── Per-(student, session) guess limiting ───────────────────────────────────
-// In-memory Map, single-process only — same scaling caveat as the OAuth exchange-
-// code store and the sign-in nonce store (move to Redis to scale out).
-
-const ATTEMPT_LIMIT = 5;
-const ATTEMPT_WINDOW_MS = 5 * 60 * 1000;
-const LOCKOUT_MS = 2 * 60 * 1000;
-const attemptStore = new Map();
-
-function attemptKey(studentId, sessionId) {
-  return `${studentId}:${sessionId}`;
-}
-
-function isLockedOut(studentId, sessionId) {
-  const rec = attemptStore.get(attemptKey(studentId, sessionId));
-  return Boolean(rec?.lockedUntil && Date.now() < rec.lockedUntil);
-}
-
-function recordFailedAttempt(studentId, sessionId) {
-  const key = attemptKey(studentId, sessionId);
-  const now = Date.now();
-  let rec = attemptStore.get(key);
-  if (!rec || now - rec.firstAt > ATTEMPT_WINDOW_MS) {
-    rec = { count: 0, firstAt: now, lockedUntil: 0 };
-  }
-  rec.count += 1;
-  if (rec.count >= ATTEMPT_LIMIT) rec.lockedUntil = now + LOCKOUT_MS;
-  attemptStore.set(key, rec);
-}
-
-function clearAttempts(studentId, sessionId) {
-  attemptStore.delete(attemptKey(studentId, sessionId));
-}
-
-const attemptSweep = setInterval(() => {
-  const now = Date.now();
-  for (const [key, rec] of attemptStore) {
-    const expired = now - rec.firstAt > ATTEMPT_WINDOW_MS;
-    const unlocked = !rec.lockedUntil || now > rec.lockedUntil;
-    if (expired && unlocked) attemptStore.delete(key);
-  }
-}, 5 * 60 * 1000);
-if (typeof attemptSweep.unref === 'function') attemptSweep.unref();
-
-/** Combines the attempt cap with code verification; clears the cap on success. */
-async function verifyAttempt(studentId, sessionItem, submitted) {
-  const sessionKey = String(sessionItem._id);
-  if (isLockedOut(studentId, sessionKey)) {
-    return { ok: false, lockedOut: true };
-  }
-  const valid = await verifyCode(sessionItem, submitted);
-  if (!valid) {
-    recordFailedAttempt(studentId, sessionKey);
-    return { ok: false, lockedOut: false };
-  }
-  clearAttempts(studentId, sessionKey);
-  return { ok: true, lockedOut: false };
-}
-
 module.exports = {
   MIN_ROTATION_SECONDS,
   MAX_ROTATION_SECONDS,
@@ -246,10 +197,10 @@ module.exports = {
   getOrRotateCode,
   getStatus,
   removeCode,
+  sessionIdsWithCode,
   setRotation,
   pause,
   resume,
   regenerate,
   verifyCode,
-  verifyAttempt,
 };

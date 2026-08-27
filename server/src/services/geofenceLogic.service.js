@@ -48,7 +48,12 @@ const STRATEGIES = [
   {
     id: 'all_points_within',
     label: 'All points within geofence',
-    description: 'Strictest option — every collected fix must land inside the buffer.',
+    // Deliberately blunt: with real GPS drift a single stray reading out of ~30
+    // fails the whole attempt, so a student who never left the room can still be
+    // flagged. Measured: 3 fixes dead inside the polygon plus one 166 m drift
+    // bands as `far`. Offered for small, very tight geofences only.
+    description: 'Strictest option — every collected fix must land inside the buffer. '
+      + 'One stray GPS reading fails the whole attempt, so most rooms should not use this.',
     evaluate(metrics) {
       const distanceM = Math.max(...metrics.fixDistances);
       return { withinBuffer: undefined, distanceM };
