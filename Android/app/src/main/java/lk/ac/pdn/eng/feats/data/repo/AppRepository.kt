@@ -20,8 +20,6 @@ import lk.ac.pdn.eng.feats.data.net.ManualCodeConfigReq
 import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
 import lk.ac.pdn.eng.feats.data.net.MeDto
 import lk.ac.pdn.eng.feats.data.net.Page
-import lk.ac.pdn.eng.feats.data.net.PendingReviewDto
-import lk.ac.pdn.eng.feats.data.net.ReviewDecisionReq
 import lk.ac.pdn.eng.feats.data.net.RunningSessionDto
 import lk.ac.pdn.eng.feats.data.net.RunningCourseDto
 import lk.ac.pdn.eng.feats.data.net.SeedTokenDto
@@ -122,19 +120,6 @@ class AppRepository(private val api: ApiService) {
     suspend fun setManualCode(sessionId: String, body: ManualCodeConfigReq): ApiResult<ManualCodeStatusDto> =
         apiCall { api.setManualCode(sessionId, body) }
 
-    // ── Lecturer review queue ────────────────────────────────────────────────────────
-    suspend fun pendingReviews(sessionId: String): ApiResult<List<PendingReviewDto>> =
-        apiCall { api.pendingReviews(sessionId).items ?: emptyList() }
-
-    suspend fun reviewSubmission(sessionId: String, attendanceId: String, approve: Boolean): ApiResult<Unit> =
-        apiCall {
-            api.reviewSubmission(
-                sessionId,
-                attendanceId,
-                ReviewDecisionReq(if (approve) "approve" else "reject"),
-            )
-            Unit
-        }
 
     // ── Settings (admin) ──────────────────────────────────────────────────────────────
     suspend fun settings(): ApiResult<SettingsDto> = apiCall { api.settings() }
@@ -198,6 +183,10 @@ class AppRepository(private val api: ApiService) {
 
     suspend fun matrix(courseId: String): ApiResult<AttendanceMatrixRes> =
         apiCall { api.attendanceMatrix(courseId) }
+
+    /** Raw .xlsx bytes; the caller writes them to a cache file to share/open. */
+    suspend fun attendanceMatrixXlsx(courseId: String): ApiResult<ByteArray> =
+        apiCall { api.attendanceMatrixXlsx(courseId).bytes() }
 
     suspend fun deleteLecturer(id: String): ApiResult<Unit> =
         apiCall { api.deleteLecturer(id); Unit }

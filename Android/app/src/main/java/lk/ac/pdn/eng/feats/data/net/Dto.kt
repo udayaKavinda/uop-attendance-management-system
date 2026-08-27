@@ -226,16 +226,27 @@ data class ManualCodeConfigReq(
     val regenerate: Boolean? = null,
 )
 
+/** One selectable option for `nearBufferLogic`/`farBufferLogic`, described by the server. */
+data class GeofenceLogicOptionDto(
+    val id: String? = null,
+    val label: String? = null,
+    val description: String? = null,
+)
+
 /** Global settings singleton. Readable by any staff; only admins may write. */
 data class SettingsDto(
     /** The one kill switch: off stops broadcasts, scanning and seeding. GPS has no equivalent. */
     val bleEnabled: Boolean? = null,
-    /** Auto-pass radius, meters from the building polygon. */
+    /** Near-band threshold, meters from the building polygon. */
     val nearBufferM: Int? = null,
-    /** Outer radius, meters. Beyond it, a correct code only reaches lecturer review. */
+    /** Far-band threshold, meters. Beyond it (per the far-band logic) an attempt is flagged. */
     val farBufferM: Int? = null,
-    /** Whether a correct code between the two radii passes outright or goes to review. */
-    val suspiciousBandAutoPass: Boolean? = null,
+    /** Strategy id deciding "within nearBufferM" — see [geofenceLogicOptions]. */
+    val nearBufferLogic: String? = null,
+    /** Strategy id deciding "within farBufferM" — see [geofenceLogicOptions]. */
+    val farBufferLogic: String? = null,
+    /** The fixed set of selectable strategies, sent alongside the settings values. */
+    val geofenceLogicOptions: List<GeofenceLogicOptionDto>? = null,
     /** Target concurrent BLE seeder count; 0 disables peer seeding. */
     val seedRate: Int? = null,
     /** Real-seeder AND decoy window duration, ms — identical for both by design. */
@@ -251,7 +262,8 @@ data class SettingsReq(
     val bleEnabled: Boolean? = null,
     val nearBufferM: Int? = null,
     val farBufferM: Int? = null,
-    val suspiciousBandAutoPass: Boolean? = null,
+    val nearBufferLogic: String? = null,
+    val farBufferLogic: String? = null,
     val seedRate: Int? = null,
     val seedWindowMs: Long? = null,
     val studentEmailDomain: String? = null,
@@ -260,25 +272,6 @@ data class SettingsReq(
 
 /** Response of the public GET /api/app-version — checked on every app launch. */
 data class AppVersionDto(val minSupportedVersionCode: Int? = null)
-
-// ── Lecturer review queue ─────────────────────────────────────────────────────────
-
-/**
- * One student awaiting a decision. Deliberately carries no distance evidence —
- * the lecturer judges "do I recognise this person as being in my class", not a
- * band they have no way to sanity-check.
- */
-data class PendingReviewDto(
-    @param:Json(name = "_id") val id: String,
-    val name: String? = null,
-    val email: String? = null,
-    val submittedAt: String? = null,
-)
-
-data class PendingReviewsRes(val items: List<PendingReviewDto>? = null)
-
-/** Body for PATCH .../sessions/:id/reviews/:attendanceId. */
-data class ReviewDecisionReq(val decision: String) // "approve" | "reject"
 
 // ── Geofences (admin building polygons) ─────────────────────────────────────────
 
@@ -301,7 +294,7 @@ data class GeofenceUpdateReq(
 
 // ── Attendance (student) ────────────────────────────────────────────────────────
 
-/** "present" | "under_review" | "rejected" | "none". */
+/** "present" | "flagged" | "none". */
 data class AttendanceStatusDto(
     val status: String? = null,
 )
@@ -332,12 +325,13 @@ data class SeedingDto(
 
 /**
  * `status` is one of:
- *   "collecting"   — no verdict yet. Deliberately covers both "still gathering
- *                    fixes" and "gathered enough, but not in a passing band", so
- *                    the client can never learn its own distance band.
- *   "accepted"     — recorded present.
- *   "under_review" — code accepted from outside the trusted bands; awaiting the lecturer.
- *   "rejected"     — the lecturer declined an earlier submission.
+ *   "collecting" — no verdict yet. Deliberately covers both "still gathering
+ *                  fixes" and "gathered enough, but not in a passing band", so
+ *                  the client can never learn its own distance band.
+ *   "accepted"   — recorded present.
+ *   "flagged"    — code accepted from outside the trusted bands (far/unknown).
+ *                  Not a pending state — nobody reviews it, it's just visible in
+ *                  the lecturer's attendance export.
  */
 data class UnifiedAttendanceRes(
     val status: String? = null,
@@ -363,8 +357,9 @@ data class MatrixRowDto(
     val displayId: String? = null,
     val email: String? = null,
     /**
-     * Session id -> "present" | "under_review" | "rejected". A missing key means
-     * absent. Verification provenance (method, band, centroid) stays server-side.
+     * Session id -> "present" | "flagged". A missing key means absent.
+     * Verification provenance (method, band, centroid, reason) stays server-side
+     * except inside the Excel export's cell comments.
      */
     val attendance: Map<String, String>? = null,
 )

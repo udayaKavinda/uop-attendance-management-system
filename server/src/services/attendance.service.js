@@ -54,15 +54,17 @@ function centroidDoc(centroid, distanceM) {
 }
 
 /**
- * Idempotent write for every acceptance path.
+ * Idempotent write for every acceptance (and flag) path.
  *
- * A genuine automatic pass always overwrites a non-present record: a student who
- * was sent to review, or even rejected, and then actually walks into the room
- * must be able to fix it themselves. Nothing else overwrites — resubmitting the
- * code while already under review is a no-op, not a new pending row.
+ * A genuine automatic pass always overwrites a flagged record: a student who
+ * was flagged and then actually walks into the room must be able to fix it
+ * themselves. A flagged verdict overwrites an existing flagged one too, so the
+ * stored reason/distance reflects the freshest evidence across the 90s window
+ * rather than freezing on the first fix that happened to flag. Nothing
+ * downgrades an existing `present` record.
  */
 async function upsertAttendance({
-  studentPk, course, session, method, status, band, centroid, seedRelayed = false,
+  studentPk, course, session, method, status, band, centroid, seedRelayed = false, reason = null,
 }) {
   const attendanceDate = localYmd();
   const doc = {
@@ -78,15 +80,20 @@ async function upsertAttendance({
     status,
     band,
     seedRelayed,
+    reason,
     ...(centroid ? { centroid } : {}),
   };
 
   const existing = await Attendance.findOne({ student: studentPk, session: session._id, attendanceDate });
   if (existing) {
-    if (existing.status !== 'present' && status === 'present') {
-      Object.assign(existing, doc, { reviewedAt: null, reviewedBy: null });
+    const upgrading = existing.status !== 'present' && status === 'present';
+    const refreshingFlag = existing.status === 'flagged' && status === 'flagged';
+    if (upgrading || refreshingFlag) {
+      Object.assign(existing, doc);
       await existing.save();
-      return { ok: true, attendance: existing, duplicate: false, upgraded: true };
+      return {
+        ok: true, attendance: existing, duplicate: !upgrading, upgraded: upgrading,
+      };
     }
     return { ok: true, attendance: existing, duplicate: true };
   }
@@ -101,6 +108,17 @@ async function upsertAttendance({
     }
     throw err;
   }
+}
+
+/** Human-readable reason stored on a flagged record and shown as the export cell's comment. */
+function reasonForFlag(band, distanceM) {
+  if (band === 'far') {
+    const label = Number.isFinite(distanceM) && distanceM >= 1000
+      ? `${(distanceM / 1000).toFixed(1)}km`
+      : `${Math.round(distanceM ?? 0)}m`;
+    return `GPS location is ${label} from the nearest session building.`;
+  }
+  return 'No usable GPS fix (denied, no signal, or too inaccurate to verify).';
 }
 
 /**
@@ -169,9 +187,18 @@ async function recordGpsFixAttendance(studentPk, courseId, fix) {
   const geofences = await geofenceService.findByIds(session.buildings);
   if (geofences.length === 0) {
     // Buildings are mandatory at creation, so this means every one was later
-    // deleted or deactivated. Fail closed: record `unknown` so a later code
-    // submission routes to review rather than silently passing.
+    // deleted or deactivated. Fail closed and flag it — a code submission
+    // can't rescue this since there's nothing left to check it against.
     attemptVerdict.record(studentKey, sessionKey, { band: 'unknown' });
+    await upsertAttendance({
+      studentPk,
+      course,
+      session,
+      method: 'gps',
+      status: 'flagged',
+      band: 'unknown',
+      reason: 'No active building configured for this session.',
+    });
     return { ok: true, collecting: true };
   }
 
@@ -187,7 +214,28 @@ async function recordGpsFixAttendance(studentPk, courseId, fix) {
     distanceM: verdict.distanceM,
   });
 
+  if (verdict.band === 'far' || verdict.band === 'unknown') {
+    // Not a pass, but not silent either: a flagged record makes this attempt
+    // visible in the attendance export even if the student never falls back
+    // to the lecturer's code. Later fixes in the same window keep refreshing
+    // it with the latest evidence (see upsertAttendance).
+    await upsertAttendance({
+      studentPk,
+      course,
+      session,
+      method: 'gps',
+      status: 'flagged',
+      band: verdict.band,
+      centroid: centroidDoc(verdict.centroid, verdict.distanceM),
+      reason: reasonForFlag(verdict.band, verdict.distanceM),
+    });
+    return { ok: true, collecting: true };
+  }
+
   if (!gpsFixService.isPassBand(verdict.band)) {
+    // `suspicious`: not a pass on GPS alone, and not flagged either — a correct
+    // code is still a live option and always grants presence from there (see
+    // recordHelpCodeAttendance), so this stays silent until the window ends.
     return { ok: true, collecting: true };
   }
 
@@ -212,8 +260,9 @@ async function recordGpsFixAttendance(studentPk, courseId, fix) {
  * "Get help" path: the lecturer's code, submitted after the automatic attempt
  * failed. What it grants depends on how far out the student's last GPS verdict
  * put them — a correct code is proof the lecturer is nearby and willing to
- * vouch, not proof of location, so it never converts a far/unknown attempt into
- * a silent pass.
+ * vouch, not proof of location, so it never turns a far/unknown attempt into a
+ * silent pass. `inside`/`near`/`suspicious` all auto-pass on a correct code;
+ * `far`/`unknown` are flagged instead, with a reason for the export cell.
  */
 async function recordHelpCodeAttendance(studentPk, courseId, code) {
   const resolved = await resolveActiveSessionForCourse(courseId);
@@ -234,23 +283,23 @@ async function recordHelpCodeAttendance(studentPk, courseId, code) {
     return { ok: false, status: 400, error: 'Incorrect code. Ask your lecturer to read it out again.' };
   }
 
-  const settings = await settingsService.getSettings();
   const stored = attemptVerdict.get(studentKey, sessionKey);
   // No stored verdict means the attempt never produced a usable fix at all
   // (location denied, no provider, no lock). Treat that as unknown, never a pass.
   const band = stored?.band || 'unknown';
-
-  const passes = gpsFixService.isPassBand(band)
-    || (band === 'suspicious' && settings.suspiciousBandAutoPass !== false);
+  // Unlike raw GPS (gpsFixService.isPassBand), a correct code also grants
+  // `suspicious` — that's the whole point of the code step for that band.
+  const passes = band === 'inside' || band === 'near' || band === 'suspicious';
 
   const result = await upsertAttendance({
     studentPk,
     course,
     session,
     method: 'code_override',
-    status: passes ? 'present' : 'under_review',
+    status: passes ? 'present' : 'flagged',
     band,
     centroid: centroidDoc(stored?.centroid, stored?.distanceM),
+    reason: passes ? null : reasonForFlag(band, stored?.distanceM),
   });
 
   if (passes) {
@@ -273,7 +322,13 @@ async function recordAttendance(studentPk, courseId, {
   return recordHelpCodeAttendance(studentPk, courseId, code);
 }
 
-async function getAttendanceMatrix(course) {
+/**
+ * Shared data gathering for both the on-screen JSON matrix and the Excel
+ * export: every attendance doc for the course, and its sessions sorted by
+ * earliest occurrence (falling back to weekly schedule order for sessions with
+ * no attendance yet).
+ */
+async function getAttendanceMatrixRaw(course) {
   const sessionIds = await Attendance.distinct('session', { course: course._id });
   const attendanceDocs = await Attendance.find({ course: course._id, session: { $in: sessionIds } })
     .populate('student', 'studentId email');
@@ -300,6 +355,11 @@ async function getAttendanceMatrix(course) {
     if (taN !== tbN) return (taN ?? -1) - (tbN ?? -1);
     return String(a._id).localeCompare(String(b._id));
   });
+  return { sessions, attendanceDocs, sessionMinDate };
+}
+
+async function getAttendanceMatrix(course) {
+  const { sessions, attendanceDocs, sessionMinDate } = await getAttendanceMatrixRaw(course);
   const rowsMap = new Map();
   attendanceDocs.forEach((doc) => {
     const sid = String(doc.student?._id || '');
@@ -363,4 +423,5 @@ module.exports = {
   getSeedToken,
   releaseSeedToken,
   getAttendanceMatrix,
+  getAttendanceMatrixRaw,
 };

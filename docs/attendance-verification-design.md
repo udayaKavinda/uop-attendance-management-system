@@ -7,11 +7,15 @@ Status: implemented. This document describes the system as built, not a proposal
 Every lecture session verifies attendance the same way. There is no per-session policy
 to choose. When a student checks in, their phone spends up to 90 seconds listening for
 the lecturer's Bluetooth beacon *and* streaming GPS fixes at the same time; either one
-can pass them, and the first to succeed ends the window. If neither does, they are
-offered **Try again** (another 90 seconds) or **Get help**, which asks for the 8-digit
-code the lecturer reads out. What that code grants depends on how far from the building
-the student's GPS put them — close enough and it passes them outright, too far and it
-only queues them for the lecturer's review.
+can pass them, and the first to succeed ends the window. If Bluetooth is off, the app
+fires the system "turn on Bluetooth?" prompt (both on the first attempt and every
+**Try again**) and gives the radio a brief moment to actually come on before the window
+starts — GPS runs regardless of what the student picks, so the prompt never blocks or
+delays it. If neither radio produces a pass, the student is offered **Try again**
+(another 90 seconds) or **Get help**, which asks for the 8-digit code the lecturer reads
+out. What that code grants depends on how far from the building the student's GPS put
+them — close enough and it passes them outright, too far and the attempt is flagged for
+whoever later reads the attendance export, not queued for anyone to act on.
 
 ## Explicit product boundaries
 
@@ -30,14 +34,17 @@ admin-configurable (defaults shown).
 | Evidence gathered in the window | Result | Student sees |
 |---|---|---|
 | Valid BLE token received | **Present** | Attendance recorded |
-| GPS centroid inside the polygon | **Present** | Attendance recorded |
-| GPS centroid within `nearBufferM` (50m) | **Present** | Attendance recorded |
-| GPS centroid within `farBufferM` (100m) | Suspicious | Try again / Get help → correct code → **Present**¹ |
-| GPS centroid beyond `farBufferM` | Far | Try again / Get help → correct code → **Under review** |
-| No usable GPS fix at all | Unknown | Try again / Get help → correct code → **Under review** |
+| Within `nearBufferM` (50m) per the near-buffer logic | **Present** | Attendance recorded |
+| Within `farBufferM` (100m) per the far-buffer logic | Suspicious | Try again / Get help → correct code → **Present** |
+| Outside `farBufferM` per the far-buffer logic | Far | Try again / Get help → correct code → **Flagged**¹ |
+| No usable GPS fix at all | Unknown | Try again / Get help → correct code → **Flagged**¹ |
 
-¹ Only while `suspiciousBandAutoPass` is on (the default). Turning it off routes this
-band to review as well.
+¹ `suspicious` always auto-passes on a correct code now — there is no admin switch for
+it. `far`/`unknown` never do; the attempt is written as a `flagged` attendance record
+with a reason, visible only in the Excel export (see "Flagged records" below).
+
+"Within `nearBufferM`" is deliberately not just "distance ≤ 50m" — see "Selectable
+geofence logic" below for what decides it.
 
 ## Why the client is never told its band
 
@@ -55,6 +62,28 @@ than being trusted — a ±200m "fix" sitting 40m from the building must not sil
 as `near`. `unknown` routes to review, never to a pass. The same band applies when a
 student produced no fix at all (location denied, no provider, no lock).
 
+## Selectable geofence logic
+
+`nearBufferM`/`farBufferM` are thresholds; what "within the buffer" *means* against
+those thresholds is a separately selectable strategy per band
+(`Settings.nearBufferLogic`/`farBufferLogic`), implemented in
+`services/geofenceLogic.service.js`. The near band is always evaluated first — it's the
+stronger claim — and the far band's strategy only runs if near didn't already pass.
+
+| Strategy id | What it checks |
+|---|---|
+| `accuracy_weighted_centroid` (default) | Distance from the accuracy-weighted average of all surviving fixes. |
+| `any_point_within` | Passes if the single closest fix lands inside the buffer. |
+| `majority_points_within` | Passes if more than half the surviving fixes land inside the buffer. |
+| `all_points_within` | Passes only if every surviving fix lands inside the buffer. |
+| `median_distance` | The middle distance across all fixes — robust to one outlier fix either way. |
+| `best_accuracy_fix` | Only the single most-precise fix's distance is checked; the rest are ignored. |
+
+Every strategy shares the same upstream pipeline: the outlier-trimming pass
+(`removeOutliersByMedianDistance`) and the `ACCURACY_CEILING_M` gate run first regardless
+of which strategy is selected, so a strategy only ever sees fixes that already cleared
+those two filters.
+
 ## Verdict retention
 
 The band from the automatic attempt has to outlive the attempt itself: the GPS fix
@@ -68,10 +97,12 @@ itself, this is in-memory and single-process.
 
 ## Upgrades
 
-A genuine automatic pass always overwrites a non-present record. A student who was sent
-to review — or even rejected — and then actually walks into the room can fix it
-themselves by checking in again. Nothing else overwrites: resubmitting the code while
-already under review is a no-op, not a second pending row.
+A genuine automatic pass always overwrites a `flagged` record — a student who was
+flagged and then actually walks into the room can fix it themselves by checking in
+again. A fresh `flagged` verdict also overwrites an existing `flagged` one, so the stored
+reason/distance reflects the latest evidence gathered in the window rather than freezing
+on the first fix that happened to flag. Nothing ever downgrades an existing `present`
+record.
 
 ## Peer seeding
 
@@ -93,9 +124,10 @@ heard a token.
 | Setting | Default | Effect |
 |---|---|---|
 | `bleEnabled` | true | The one kill switch. Off stops lecturer broadcasts, student scanning, and seeding. GPS has no equivalent — every session depends on it. |
-| `nearBufferM` | 50 | Auto-pass radius, meters. |
-| `farBufferM` | 100 | Outer radius, meters. Must be ≥ `nearBufferM`. |
-| `suspiciousBandAutoPass` | true | Whether a correct code between the radii passes outright or goes to review. |
+| `nearBufferM` | 50 | Near-band threshold, meters. |
+| `farBufferM` | 100 | Far-band threshold, meters. Must be ≥ `nearBufferM`. |
+| `nearBufferLogic` | `accuracy_weighted_centroid` | Strategy deciding "within `nearBufferM`" — see "Selectable geofence logic". |
+| `farBufferLogic` | `accuracy_weighted_centroid` | Strategy deciding "within `farBufferM`" — see "Selectable geofence logic". |
 | `seedRate` | 0 | Target concurrent seeders; 0 disables seeding. |
 | `seedWindowMs` | 60000 | Seeder **and** decoy window length. |
 
@@ -108,35 +140,44 @@ compromise, not a precision claim.
 A session has no verification field. What the lecturer chooses is:
 
 - **Buildings** — mandatory, at least one. Without a polygon GPS has nothing to measure
-  against and every student would land in the review queue.
+  against and every student would be flagged as `unknown` instead of passing.
 - **Code rotation** — whether the 8-digit code rotates on an interval, and how fast.
   The code itself always exists; there is no enable switch.
 
-## Lecturer review
+## Flagged records
 
-`under_review` submissions appear in the session card while the lecture is running, with
-**Mark present** / **Reject** per student. The queue shows identity and submission time
-and deliberately **not** the distance band or method: the question being asked is "was
-this person actually in my lecture", which the lecturer can answer from the room. A
-distance readout would only invite rubber-stamping a number they cannot check.
+There is no lecturer review queue and no approve/reject action anywhere in the app. A
+`far`/`unknown` attempt is written as `status: 'flagged'` directly — it is neither
+present nor silently absent, just a record with a `reason` string
+(`services/attendance.service.js`'s `reasonForFlag`) explaining why: a distance
+("GPS location is 2.1km from the nearest session building.") for `far`, or a fixed
+message for `unknown` (no usable fix, or every session building was deleted/deactivated
+mid-lecture). The only place this becomes visible is the Excel attendance export
+(`GET /admin/courses/:courseId/attendance-matrix.xlsx`,
+`services/attendanceExport.service.js`): a flagged cell renders 'F' on a red fill with
+the reason attached as a cell comment. The on-screen matrix and the JSON API expose
+`status` only, same as `present`.
 
-Rejection sets `status: 'rejected'` rather than deleting the row, so the decision is
-auditable and a student cannot retry the code to get a fresh pending record.
+Critically, this record now gets written even when the student never falls back to the
+lecturer's code at all — every GPS-evaluated `far`/`unknown` verdict is persisted the
+moment it's reached, not just ones that reach the help-code path. Previously a student
+whose GPS never passed and who never typed a code left **no record whatsoever**; now
+their attempt is visible (flagged) in the export either way.
 
 ## What stays server-internal
 
 `method`, `band`, `seedRelayed`, and `centroid` are audit fields. They never appear in
-the attendance matrix, the CSV export, or any student-facing payload. The matrix exposes
-`status` only (`present` / `under_review` / `rejected`), because the lecturer has to act
-on it.
+the on-screen attendance matrix, the JSON API, or any student-facing payload. The matrix
+exposes `status` only (`present` / `flagged`). `reason` is the one exception: it exists
+specifically to be shown, but only inside the Excel export's cell comments — never in the
+on-screen matrix or the JSON API.
 
 ## Known limits
 
-- The 50–100m band with `suspiciousBandAutoPass` on is the main abuse surface: a student
-  in the canteen who has the code from a group chat passes silently. Mitigations in place
-  are the audit fields, the per-(student, session) attempt cap (5 tries / 5 min, then a
-  2-minute lockout), and code rotation. The switch exists so this can be tightened after
-  observing real use.
+- The 50–100m suspicious band always auto-passes on a correct code now — a student in the
+  canteen who has the code from a group chat passes silently. Mitigations in place are
+  the audit fields, the per-(student, session) attempt cap (5 tries / 5 min, then a
+  2-minute lockout), and code rotation.
 - BLE range is extended deliberately by seeding, so "BLE == in the room" is approximate.
   Restricting seeding to primary-verified students bounds the chain to one hop.
 - All four in-memory stores block horizontal scaling.

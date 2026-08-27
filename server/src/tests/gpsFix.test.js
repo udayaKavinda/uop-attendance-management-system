@@ -1,4 +1,5 @@
 const gpsFix = require('../services/gpsFix.service');
+const geofenceLogic = require('../services/geofenceLogic.service');
 
 function fix(lat, lng, accuracy = 10) {
   return { lat, lng, accuracy };
@@ -72,18 +73,42 @@ describe('gpsFix', () => {
     });
   });
 
-  describe('classifyDistance', () => {
-    it('sorts distances into the four bands', () => {
-      expect(gpsFix.classifyDistance(0, BUFFERS)).toBe('inside');
-      expect(gpsFix.classifyDistance(30, BUFFERS)).toBe('near');
-      expect(gpsFix.classifyDistance(50, BUFFERS)).toBe('near');
-      expect(gpsFix.classifyDistance(51, BUFFERS)).toBe('suspicious');
-      expect(gpsFix.classifyDistance(100, BUFFERS)).toBe('suspicious');
-      expect(gpsFix.classifyDistance(101, BUFFERS)).toBe('far');
+  describe('geofenceLogic strategies (band decisions delegate to these)', () => {
+    it('accuracy_weighted_centroid passes iff the centroid distance is within the buffer', () => {
+      const metrics = { fixDistances: [10, 90], centroidDistanceM: 45, bestAccuracyFixDistanceM: 10 };
+      expect(geofenceLogic.evaluate('accuracy_weighted_centroid', metrics, 50)).toMatchObject({
+        withinBuffer: true, distanceM: 45,
+      });
+      expect(geofenceLogic.evaluate('accuracy_weighted_centroid', metrics, 40).withinBuffer).toBe(false);
     });
 
-    it('treats a non-finite distance as unknown rather than far', () => {
-      expect(gpsFix.classifyDistance(Infinity, BUFFERS)).toBe('unknown');
+    it('any_point_within passes if the single closest fix is within the buffer', () => {
+      const metrics = { fixDistances: [10, 90], centroidDistanceM: 45, bestAccuracyFixDistanceM: 10 };
+      expect(geofenceLogic.evaluate('any_point_within', metrics, 50)).toMatchObject({
+        withinBuffer: true, distanceM: 10,
+      });
+    });
+
+    it('all_points_within requires every fix inside the buffer', () => {
+      const metrics = { fixDistances: [10, 90], centroidDistanceM: 45, bestAccuracyFixDistanceM: 10 };
+      expect(geofenceLogic.evaluate('all_points_within', metrics, 50)).toMatchObject({
+        withinBuffer: false, distanceM: 90,
+      });
+      expect(geofenceLogic.evaluate('all_points_within', metrics, 100).withinBuffer).toBe(true);
+    });
+
+    it('majority_points_within needs more than half the fixes inside the buffer', () => {
+      const metrics = { fixDistances: [10, 20, 90], centroidDistanceM: 40, bestAccuracyFixDistanceM: 10 };
+      expect(geofenceLogic.evaluate('majority_points_within', metrics, 50).withinBuffer).toBe(true);
+      const worse = { fixDistances: [60, 70, 10], centroidDistanceM: 40, bestAccuracyFixDistanceM: 10 };
+      expect(geofenceLogic.evaluate('majority_points_within', worse, 50).withinBuffer).toBe(false);
+    });
+
+    it('falls back to the default strategy for an unrecognized id', () => {
+      const metrics = { fixDistances: [10], centroidDistanceM: 45, bestAccuracyFixDistanceM: 10 };
+      expect(geofenceLogic.evaluate('not_a_real_strategy', metrics, 50)).toEqual(
+        geofenceLogic.evaluate(geofenceLogic.DEFAULT_STRATEGY_ID, metrics, 50),
+      );
     });
   });
 

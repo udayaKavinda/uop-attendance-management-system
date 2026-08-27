@@ -36,7 +36,8 @@ function resetSettings() {
     bleEnabled: true,
     nearBufferM: 50,
     farBufferM: 100,
-    suspiciousBandAutoPass: true,
+    nearBufferLogic: 'accuracy_weighted_centroid',
+    farBufferLogic: 'accuracy_weighted_centroid',
     seedRate: 0,
     seedWindowMs: 60000,
   });
@@ -163,7 +164,9 @@ describe('GET/PATCH /api/admin/settings', () => {
       bleEnabled: expect.any(Boolean),
       nearBufferM: expect.any(Number),
       farBufferM: expect.any(Number),
-      suspiciousBandAutoPass: expect.any(Boolean),
+      nearBufferLogic: expect.any(String),
+      farBufferLogic: expect.any(String),
+      geofenceLogicOptions: expect.any(Array),
       seedRate: expect.any(Number),
       seedWindowMs: expect.any(Number),
     });
@@ -210,11 +213,21 @@ describe('GET/PATCH /api/admin/settings', () => {
     expect(res.status).toBe(400);
   });
 
-  test('admin can turn off the suspicious-band auto pass', async () => {
+  test('admin can select the near/far buffer logic independently', async () => {
     const admin = makePerson({ role: 'admin' });
     const res = await request(app).patch('/api/admin/settings').set(headers(admin))
-      .send({ suspiciousBandAutoPass: false });
-    expect(res.body.suspiciousBandAutoPass).toBe(false);
+      .send({ nearBufferLogic: 'any_point_within', farBufferLogic: 'all_points_within' });
+    expect(res.body).toMatchObject({
+      nearBufferLogic: 'any_point_within',
+      farBufferLogic: 'all_points_within',
+    });
+  });
+
+  test('rejects an unrecognized buffer-logic strategy id', async () => {
+    const admin = makePerson({ role: 'admin' });
+    const res = await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ nearBufferLogic: 'made_up_strategy' });
+    expect(res.status).toBe(400);
   });
 });
 
@@ -356,7 +369,7 @@ describe('POST /api/attendance — code submission', () => {
     expect(res.status).toBe(400);
   });
 
-  test('a correct code with no location evidence lands in review and is idempotent', async () => {
+  test('a correct code with no location evidence is flagged, and refreshes rather than duplicating', async () => {
     const lecturer = makePerson({ role: 'lecturer' });
     const student = makePerson({ role: 'student' });
     const session = makeSession();
@@ -375,19 +388,23 @@ describe('POST /api/attendance — code submission', () => {
       .set(headers(student))
       .send({ courseId: course._id, code });
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('under_review');
+    expect(res.body.status).toBe('flagged');
     expect(Attendance.create).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'code_override', status: 'under_review' }),
+      expect.objectContaining({ method: 'code_override', status: 'flagged' }),
     );
 
-    // Resubmitting does not queue a second pending row.
+    // Resubmitting refreshes the existing flagged row rather than creating a second one.
     Attendance.create.mockClear();
-    Attendance.findOne.mockResolvedValue({ _id: 'existing-att', status: 'under_review' });
+    const existing = {
+      _id: 'existing-att', status: 'flagged', save: jest.fn().mockResolvedValue(undefined),
+    };
+    Attendance.findOne.mockResolvedValue(existing);
     const repeat = await request(app)
       .post('/api/attendance')
       .set(headers(student))
       .send({ courseId: course._id, code });
-    expect(repeat.body).toMatchObject({ status: 'under_review', duplicate: true });
+    expect(repeat.body).toMatchObject({ status: 'flagged', duplicate: true });
+    expect(existing.save).toHaveBeenCalled();
     expect(Attendance.create).not.toHaveBeenCalled();
   });
 
@@ -417,124 +434,8 @@ describe('POST /api/attendance — code submission', () => {
   });
 });
 
-// ─── Lecturer review queue ───────────────────────────────────────────────────
-
-describe('GET/PATCH /api/admin/sessions/:id/reviews', () => {
-  function pendingQueue(docs) {
-    Attendance.find.mockReturnValue({
-      populate: jest.fn().mockReturnValue({ sort: jest.fn().mockResolvedValue(docs) }),
-    });
-  }
-
-  test('401 when not authenticated', async () => {
-    const res = await request(app).get(`/api/admin/sessions/${makeId()}/reviews`);
-    expect(res.status).toBe(401);
-  });
-
-  test('403 when the lecturer does not own the session', async () => {
-    const lecturer = makePerson({ role: 'lecturer' });
-    const session = makeSession();
-    LectureSession.findOne.mockResolvedValue(session);
-    Course.findById.mockResolvedValue(makeCourse({ lecturers: [] }));
-    const res = await request(app).get(`/api/admin/sessions/${session._id}/reviews`).set(authHeader(lecturer));
-    expect(res.status).toBe(403);
-  });
-
-  test('lists pending submissions with the student identity but no distance evidence', async () => {
-    const lecturer = makePerson({ role: 'lecturer' });
-    const session = makeSession();
-    ownSession(lecturer, session);
-    const submittedAt = new Date();
-    pendingQueue([{
-      _id: 'att-1',
-      timestamp: submittedAt,
-      band: 'far',
-      method: 'code_override',
-      student: { name: 'Nimal', email: 'nimal@uop.lk', studentId: 'E123' },
-    }]);
-
-    const res = await request(app).get(`/api/admin/sessions/${session._id}/reviews`).set(authHeader(lecturer));
-    expect(res.status).toBe(200);
-    expect(res.body.items).toHaveLength(1);
-    expect(res.body.items[0]).toMatchObject({ _id: 'att-1', name: 'Nimal', email: 'nimal@uop.lk' });
-    expect(res.body.items[0].band).toBeUndefined();
-    expect(res.body.items[0].method).toBeUndefined();
-  });
-
-  test('approving a submission marks it present and stamps the reviewer', async () => {
-    const lecturer = makePerson({ role: 'lecturer' });
-    const session = makeSession();
-    ownSession(lecturer, session);
-    const doc = {
-      _id: 'att-1', session: session._id, status: 'under_review', save: jest.fn().mockResolvedValue(undefined),
-    };
-    Attendance.findOne.mockResolvedValue(doc);
-
-    const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/reviews/att-1`)
-      .set(headers(lecturer))
-      .send({ decision: 'approve' });
-
-    expect(res.status).toBe(200);
-    expect(doc.status).toBe('present');
-    expect(doc.reviewedBy).toEqual(lecturer._id);
-    expect(doc.reviewedAt).toBeInstanceOf(Date);
-    expect(doc.save).toHaveBeenCalled();
-  });
-
-  test('rejecting a submission marks it rejected rather than deleting it', async () => {
-    const lecturer = makePerson({ role: 'lecturer' });
-    const session = makeSession();
-    ownSession(lecturer, session);
-    const doc = {
-      _id: 'att-1', session: session._id, status: 'under_review', save: jest.fn().mockResolvedValue(undefined),
-    };
-    Attendance.findOne.mockResolvedValue(doc);
-
-    const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/reviews/att-1`)
-      .set(headers(lecturer))
-      .send({ decision: 'reject' });
-
-    expect(res.status).toBe(200);
-    expect(doc.status).toBe('rejected');
-  });
-
-  test('rejects an unrecognized decision', async () => {
-    const lecturer = makePerson({ role: 'lecturer' });
-    const session = makeSession();
-    ownSession(lecturer, session);
-
-    const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/reviews/att-1`)
-      .set(headers(lecturer))
-      .send({ decision: 'maybe' });
-    expect(res.status).toBe(400);
-  });
-
-  test('404 when the submission does not belong to this session', async () => {
-    const lecturer = makePerson({ role: 'lecturer' });
-    const session = makeSession();
-    ownSession(lecturer, session);
-    Attendance.findOne.mockResolvedValue(null);
-
-    const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/reviews/att-1`)
-      .set(headers(lecturer))
-      .send({ decision: 'approve' });
-    expect(res.status).toBe(404);
-  });
-
-  test('409 when the submission was already decided', async () => {
-    const lecturer = makePerson({ role: 'lecturer' });
-    const session = makeSession();
-    ownSession(lecturer, session);
-    Attendance.findOne.mockResolvedValue({ _id: 'att-1', status: 'present', save: jest.fn() });
-
-    const res = await request(app)
-      .patch(`/api/admin/sessions/${session._id}/reviews/att-1`)
-      .set(headers(lecturer))
-      .send({ decision: 'approve' });
-    expect(res.status).toBe(409);
-  });
-});
+// Note: there is no lecturer review queue anymore — a far/unknown code
+// submission is written as a `flagged` Attendance record directly (see the
+// "get help" describe block above) and surfaces only in the Excel export
+// (server/src/tests/attendanceExport.service.test.js), never through an
+// approve/reject endpoint.

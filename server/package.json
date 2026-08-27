@@ -28,6 +28,7 @@
     "cors": "^2.8.5",
     "express-rate-limit": "^7.0.0",
     "dotenv": "^16.0.0",
+    "exceljs": "^4.4.0",
     "google-auth-library": "^9.14.1"
   }
 }

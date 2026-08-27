@@ -31,7 +31,7 @@ import lk.ac.pdn.eng.feats.ui.container
 enum class CheckInPhase { Idle, Preparing, Checking, Seeding }
 
 /** The server's verdict, as far as the student is allowed to know it. */
-enum class Outcome { None, Present, UnderReview, Rejected }
+enum class Outcome { None, Present, Flagged }
 
 data class CheckInState(
     val courses: List<RunningCourseDto> = emptyList(),
@@ -144,10 +144,15 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
         windowJob = viewModelScope.launch { runWindow(courseId) }
     }
 
-    /** "Try again" is simply another full window. */
+    /**
+     * "Try again" is simply another full window — but the caller must still run
+     * the screen's `begin()` gate first (permission + Bluetooth-off prompt) rather
+     * than calling [startCheckIn] here directly, so a student who never reacted to
+     * (or dismissed) the enable-Bluetooth prompt on the first attempt gets asked
+     * again on every retry instead of silently running GPS-only forever.
+     */
     fun tryAgain() {
         _state.update { it.copy(needsHelp = false, error = null) }
-        startCheckIn()
     }
 
     private suspend fun runWindow(courseId: String) = coroutineScope {
@@ -401,8 +406,7 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
 
         private fun outcomeOf(status: String?): Outcome = when (status) {
             "present", "accepted" -> Outcome.Present
-            "under_review" -> Outcome.UnderReview
-            "rejected" -> Outcome.Rejected
+            "flagged" -> Outcome.Flagged
             else -> Outcome.None
         }
 

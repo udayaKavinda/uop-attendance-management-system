@@ -17,11 +17,18 @@ authoritative server reference for the implemented system.
   owner (not just an admin) may add and remove co-owners on their own course, same as an
   admin can on any course.
 - One verification model for every session: Bluetooth and GPS together, with a
-  lecturer-read code as the escalation path and a review queue behind it.
+  lecturer-read code as the escalation path. There is no lecturer review queue — a
+  `far`/`unknown` code submission is written as a `flagged` record directly, visible only
+  in the Excel attendance export.
+- Selectable GPS geofence logic: the near and far distance bands each independently pick
+  a strategy (accuracy-weighted centroid, any/majority/all points within the buffer,
+  median distance, or best-accuracy-fix-only) for deciding "is this student within the
+  buffer" — see `services/geofenceLogic.service.js`.
 - Peer BLE seeding with rotating tokens, bounded leases, and decoy windows.
 - Active-building geofence administration and system policy settings.
 - Attendance records preserve verification provenance internally; matrices report
-  present / under-review / absent only.
+  present / flagged / absent only. The downloadable Excel export additionally red-fills
+  and comments flagged cells with a plain-language reason.
 
 Students see campus-wide sessions that are running now. There is no enrolment data model
 in this repository; do not describe these as membership-filtered “their courses.”
@@ -52,13 +59,22 @@ second window runs Bluetooth and GPS together, and the server bands the result:
 | Evidence | Band | Result |
 |---|---|---|
 | valid live BLE token | `inside` | present |
-| GPS centroid inside the building polygon | `inside` | present |
-| GPS centroid within `nearBufferM` | `near` | present |
-| GPS centroid within `farBufferM` | `suspicious` | correct code → present¹ |
-| GPS centroid beyond `farBufferM` | `far` | correct code → under review |
-| no usable fix / accuracy above the ceiling | `unknown` | correct code → under review |
+| within the near buffer (near-buffer logic) | `inside`/`near` | present |
+| within the far buffer (far-buffer logic), not the near one | `suspicious` | correct code → present |
+| outside the far buffer | `far` | correct code → flagged¹ |
+| no usable fix / accuracy above the ceiling | `unknown` | correct code → flagged¹ |
 
-¹ While `Settings.suspiciousBandAutoPass` is on (default). Off routes it to review too.
+¹ "Flagged" is not a queue — it's an `Attendance` row with `status: 'flagged'` and a
+`reason`, visible only in the Excel attendance export (red fill + cell comment). Nobody
+approves or rejects it. `suspicious` always passes on a correct code now — there is no
+admin switch for it, unlike `far`/`unknown` which never pass.
+
+"Within the near/far buffer" is deliberately not just a fixed distance check — each band
+independently runs a selectable strategy (`Settings.nearBufferLogic`/`farBufferLogic`)
+against `nearBufferM`/`farBufferM`. See `services/geofenceLogic.service.js`'s
+`STRATEGIES` for the full list (accuracy-weighted centroid, any/majority/all points
+within, median distance, best-accuracy-fix-only) — near is always evaluated first, and
+far only runs if near didn't already pass.
 
 The client is never told its band: `status: "collecting"` covers both "still gathering
 fixes" and "gathered enough but not passing", so a modified app cannot learn how far out
@@ -160,16 +176,23 @@ Student/course/session references, stable course/lecture labels, local attendanc
 timestamp, and:
 
 ```text
-status = present | under_review | rejected     ← the only field the lecturer sees
+status = present | flagged                     ← the only field the lecturer sees
 method = bluetooth | gps | code_override       ← server-internal
 band   = inside | near | suspicious | far | unknown   ← server-internal
+reason = human-readable string, `flagged` only ← surfaced only in the Excel export
 ```
 
 GPS and code records may additionally store
 `{ centroid: { lat, lng, fixCount, distanceM } }`, plus `seedRelayed` for BLE. All of
-these except `status` are audit-only and never leave the server. The unique index
-`{ student, session, attendanceDate }` makes every path idempotent; a genuine automatic
-pass upgrades an existing `under_review`/`rejected` row to `present`.
+these except `status` (and `reason`, in the Excel export only) are audit-only and never
+leave the server. The unique index `{ student, session, attendanceDate }` makes every
+path idempotent; a genuine automatic pass upgrades an existing `flagged` row to
+`present`, and a fresh `flagged` verdict overwrites an existing `flagged` one so the
+stored reason/distance reflects the latest evidence gathered in the window rather than
+freezing on the first fix that happened to flag. A GPS-only `far`/`unknown` verdict is
+written as `flagged` the moment it's reached — not only when the student falls back to
+the lecturer's code — so an attempt that never passes is still visible in the export
+even if the student never asked for help.
 
 ### BleToken / ManualCode / Settings
 
@@ -178,7 +201,9 @@ pass upgrades an existing `under_review`/`rejected` row to `present`.
 - `ManualCode` stores the rotating/paused 8-digit lecturer code; it is never merged with
   the high-entropy BLE token pool. Every session has one.
 - `Settings` stores the Bluetooth kill switch, the two distance buffers, the
-  suspicious-band auto-pass switch, the seeding parameters, the student sign-in email
+  independently selectable near/far buffer-logic strategy ids (`nearBufferLogic`,
+  `farBufferLogic`, default `accuracy_weighted_centroid` — see
+  `services/geofenceLogic.service.js`), the seeding parameters, the student sign-in email
   domain (`studentEmailDomain`, empty disables the check), and the minimum Android
   `versionCode` (`minSupportedVersionCode`, `0` disables the check).
 
@@ -208,7 +233,7 @@ All JSON mutation requests require `X-Requested-With: fetch`. `student`, `staff`
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | GET | `/api/courses/running` | authenticated | running courses — identity only; the flow never branches |
-| GET | `/api/attendance-status?courseId=` | student | `{ status: present\|under_review\|rejected\|none }` |
+| GET | `/api/attendance-status?courseId=` | student | `{ status: present\|flagged\|none }` |
 | POST | `/api/attendance` | student | unified `{ courseId, token? | fix? | code?, canAdvertise }` |
 | GET | `/api/attendance/seed-token?sessionId=` | student | rotate/re-fetch owned live seed token |
 | DELETE | `/api/attendance/seed-token?sessionId=` | student | relinquish owned lease after radio failure |
@@ -216,9 +241,9 @@ All JSON mutation requests require `X-Requested-With: fetch`. `student`, `staff`
 
 Exactly one of `token`, `fix`, or `code` is accepted by `POST /api/attendance`. The
 response `status` is `collecting` (keep going — deliberately ambiguous between "not
-enough fixes yet" and "not in a passing band"), `accepted`, `under_review`, or
-`rejected`, plus optional `duplicate` and peer-seeding instructions. Attendance record
-details are never echoed to the student.
+enough fixes yet" and "not in a passing band"), `accepted`, or `flagged`, plus optional
+`duplicate` and peer-seeding instructions. Attendance record details (band, method,
+centroid, reason) are never echoed to the student.
 
 ### Courses and reports
 
@@ -231,7 +256,8 @@ Base path: `/api/admin/courses`.
 | `PATCH /:courseId/assign-lecturer` | owner/admin | wholesale reassignment — set any number of owners (add or remove); a lecturer may only do this on a course they already own |
 | `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course — this is also what "delete" means; no destructive delete exists |
 | `POST /:courseId/sessions` | owner/admin | atomically create schedule, buildings (≥1, required), and code rotation |
-| `GET /:courseId/attendance-matrix` | owner/admin | per-student `present` / `under_review` / absent matrix |
+| `GET /:courseId/attendance-matrix` | owner/admin | per-student `present` / `flagged` / absent matrix (JSON) |
+| `GET /:courseId/attendance-matrix.xlsx` | owner/admin | the same matrix as a downloadable Excel file — flagged cells are red-filled with the reason as a cell comment |
 
 ### Sessions
 
@@ -247,15 +273,17 @@ Base path: `/api/admin/sessions` (owner/admin session guard applies).
 | `GET /:id/broadcast` | staff token poll/heartbeat and live counts |
 | `GET /:id/manual-code` | current staff-only lecturer code/status |
 | `PATCH /:id/manual-code` | pause, resume, rotate, or regenerate (no enable flag) |
-| `GET /:id/reviews` | students awaiting a decision (identity only, no distance evidence) |
-| `PATCH /:id/reviews/:attendanceId` | `{ decision: approve\|reject }` |
+
+There is no reviews endpoint — a `far`/`unknown` code submission is written directly as a
+`flagged` `Attendance` record (see "Verification contract" above); the only place it
+becomes visible to staff is the Excel export under `/api/admin/courses`.
 
 ### Admin policy and directories
 
 | Method/path | Access | Purpose |
 |---|---|---|
 | `GET /api/admin/settings` | staff | current policies |
-| `PATCH /api/admin/settings` | admin | BLE kill switch, distance buffers, auto-pass switch, seeding, student email domain, minimum app version |
+| `PATCH /api/admin/settings` | admin | BLE kill switch, distance buffers, per-band geofence-logic strategy, seeding, student email domain, minimum app version |
 | `GET /api/admin/geofences` | staff | active selectable buildings |
 | `POST/PATCH/DELETE /api/admin/geofences/:id?` | admin | building polygon management |
 | `GET/POST/DELETE /api/admin/lecturers/:id?` | admin | lecturer directory — `GET ?q=&page=&limit=`; `DELETE` hides (soft-deletes) rather than destroying |
@@ -279,18 +307,24 @@ Base path: `/api/admin/sessions` (owner/admin session guard applies).
 npm test -- --runInBand
 ```
 
-249 tests across 16 suites, covering authentication, route access, BLE rotation and
+247 tests across 17 suites, covering authentication, route access, BLE rotation and
 broadcasting, distance banding and the accuracy ceiling, the code-escalation outcomes for
-every band, the lecturer review queue, running-course DTO contracts, strict
-schedules/one-time dates, GPS geometry and fix filtering, active geofences, seeder
-eligibility, pages, and unified attendance. Keep Android and server contract tests
-aligned whenever a response changes.
+every band, the geofence-logic strategy registry, the flagged-record Excel export,
+running-course DTO contracts, strict schedules/one-time dates, GPS geometry and fix
+filtering, active geofences, seeder eligibility, pages, and unified attendance. Keep
+Android and server contract tests aligned whenever a response changes.
 
 Not yet covered by a dedicated test: multi-batch course creation, the lecturer-owner path
 through `assign-lecturer` (as opposed to the admin path), pagination on the three admin
 list endpoints, the lecturer directory's staff-wide (not admin-only) access, the student
 email domain gate, the
 `minSupportedVersionCode` app-version check, the Collect/`activateSession` schedule-window
-gate, the recurring-session window-close sweep, and `isScheduledNow`/`getRunningSessionsForStaff`'s
-active-independent window check. Add contract tests for these before relying on CI to
-catch a regression there.
+gate, the recurring-session window-close sweep, `isScheduledNow`/`getRunningSessionsForStaff`'s
+active-independent window check, `sessionSortRank`'s "is this session's day today"
+check (a real regression here already shipped once — a wrong-weekday session tied for
+rank 0 whenever its time-of-day window happened to overlap the current clock time; fixed,
+but the fix has no regression test yet), and the `any_point_within`/`median_distance`/
+`best_accuracy_fix` geofence-logic strategies end-to-end through `POST /api/attendance`
+(they're unit-tested directly against `geofenceLogic.service.js`, but not exercised
+through a live GPS-band request the way `accuracy_weighted_centroid` is). Add contract
+tests for these before relying on CI to catch a regression there.

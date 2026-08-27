@@ -42,7 +42,8 @@ function resetSettings() {
     bleEnabled: true,
     nearBufferM: 50,
     farBufferM: 100,
-    suspiciousBandAutoPass: true,
+    nearBufferLogic: 'accuracy_weighted_centroid',
+    farBufferLogic: 'accuracy_weighted_centroid',
     seedRate: 0,
     seedWindowMs: 60000,
   });
@@ -224,7 +225,7 @@ describe('POST /api/attendance — GPS band decisions', () => {
     expect(Attendance.create).not.toHaveBeenCalled();
   });
 
-  test('a far-band student is indistinguishable from a suspicious one over the wire', async () => {
+  test('a far-band student is still told only "collecting" over the wire, but gets flagged server-side', async () => {
     const student = makePerson();
     const session = makeSession({ buildings: [addBuilding()] });
     const course = makeCourse();
@@ -233,10 +234,30 @@ describe('POST /api/attendance — GPS band decisions', () => {
 
     const last = await streamFixes(student, course._id, FAR);
     expect(last.body).toEqual({ status: 'collecting' });
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'gps', status: 'flagged', band: 'far' }),
+    );
+  });
+
+  test('a flagged record keeps refreshing with the latest fix rather than freezing on the first', async () => {
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const existing = {
+      _id: makeId(), status: 'flagged', band: 'far', save: jest.fn().mockResolvedValue(undefined),
+    };
+    Attendance.findOne.mockResolvedValue(existing);
+
+    await streamFixes(student, course._id, FAR);
+    expect(existing.save).toHaveBeenCalled();
+    expect(existing.status).toBe('flagged');
     expect(Attendance.create).not.toHaveBeenCalled();
   });
 
-  test('does not accept a centroid built only from very inaccurate fixes', async () => {
+  test('does not accept a centroid built only from very inaccurate fixes, and flags it as unknown', async () => {
     const student = makePerson();
     const session = makeSession({ buildings: [addBuilding()] });
     const course = makeCourse();
@@ -245,10 +266,12 @@ describe('POST /api/attendance — GPS band decisions', () => {
 
     const last = await streamFixes(student, course._id, { ...INSIDE, accuracy: 300 });
     expect(last.body).toEqual({ status: 'collecting' });
-    expect(Attendance.create).not.toHaveBeenCalled();
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'gps', status: 'flagged', band: 'unknown' }),
+    );
   });
 
-  test('keeps collecting when every referenced building has been deactivated', async () => {
+  test('flags as unknown, with a reason, when every referenced building has been deactivated', async () => {
     const student = makePerson();
     const geofenceId = makeId();
     mockGeofenceStore.push({
@@ -262,6 +285,9 @@ describe('POST /api/attendance — GPS band decisions', () => {
       .send({ courseId: course._id, fix: INSIDE });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('collecting');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'gps', status: 'flagged', band: 'unknown', reason: expect.any(String) }),
+    );
   });
 });
 
@@ -368,7 +394,7 @@ describe('POST /api/attendance — "get help" lecturer code', () => {
     expect(Attendance.create).not.toHaveBeenCalled();
   });
 
-  test('a correct code from the suspicious band passes outright by default', async () => {
+  test('a correct code from the suspicious band always passes outright — no admin toggle for it', async () => {
     const student = makePerson();
     const session = codeSession();
     const course = makeCourse();
@@ -385,25 +411,7 @@ describe('POST /api/attendance — "get help" lecturer code', () => {
     );
   });
 
-  test('the admin can send the suspicious band to review instead of passing it', async () => {
-    mockSettingsStore.suspiciousBandAutoPass = false;
-    const student = makePerson();
-    const session = codeSession();
-    const course = makeCourse();
-    Course.findById.mockResolvedValue(course);
-    LectureSession.find.mockResolvedValue([session]);
-
-    await streamFixes(student, course._id, SUSPICIOUS);
-    const res = await request(app).post('/api/attendance').set(headers(student))
-      .send({ courseId: course._id, code: '11112222' });
-
-    expect(res.body.status).toBe('under_review');
-    expect(Attendance.create).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'code_override', status: 'under_review', band: 'suspicious' }),
-    );
-  });
-
-  test('a correct code from beyond the far buffer only reaches lecturer review', async () => {
+  test('a correct code from beyond the far buffer is flagged, not passed — no queue to reach', async () => {
     const student = makePerson();
     const session = codeSession();
     const course = makeCourse();
@@ -414,13 +422,13 @@ describe('POST /api/attendance — "get help" lecturer code', () => {
     const res = await request(app).post('/api/attendance').set(headers(student))
       .send({ courseId: course._id, code: '11112222' });
 
-    expect(res.body.status).toBe('under_review');
+    expect(res.body.status).toBe('flagged');
     expect(Attendance.create).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'under_review', band: 'far' }),
+      expect.objectContaining({ status: 'flagged', band: 'far', reason: expect.any(String) }),
     );
   });
 
-  test('a correct code with no GPS evidence at all reaches review, never a pass', async () => {
+  test('a correct code with no GPS evidence at all is flagged as unknown, never a pass', async () => {
     const student = makePerson();
     const session = codeSession();
     const course = makeCourse();
@@ -430,9 +438,9 @@ describe('POST /api/attendance — "get help" lecturer code', () => {
     const res = await request(app).post('/api/attendance').set(headers(student))
       .send({ courseId: course._id, code: '11112222' });
 
-    expect(res.body.status).toBe('under_review');
+    expect(res.body.status).toBe('flagged');
     expect(Attendance.create).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'under_review', band: 'unknown' }),
+      expect.objectContaining({ status: 'flagged', band: 'unknown' }),
     );
   });
 
@@ -473,7 +481,7 @@ describe('POST /api/attendance — idempotency and upgrades', () => {
     expect(Attendance.create).not.toHaveBeenCalled();
   });
 
-  test('a genuine Bluetooth pass upgrades an existing under-review record', async () => {
+  test('a genuine Bluetooth pass upgrades an existing flagged record', async () => {
     const student = makePerson();
     const session = makeSession({ buildings: [addBuilding()], broadcasting: true, lastBroadcastSeenAt: new Date() });
     mockBleTokenStore[String(session._id)] = {
@@ -484,7 +492,7 @@ describe('POST /api/attendance — idempotency and upgrades', () => {
     LectureSession.find.mockResolvedValue([session]);
 
     const pending = {
-      _id: makeId(), status: 'under_review', save: jest.fn().mockResolvedValue(undefined),
+      _id: makeId(), status: 'flagged', save: jest.fn().mockResolvedValue(undefined),
     };
     Attendance.findOne.mockResolvedValue(pending);
 

@@ -9,12 +9,13 @@ const attendanceSchema = new mongoose.Schema({
   attendanceDate: { type: String, required: true, index: true },
   timestamp: { type: Date, default: Date.now },
   /**
-   * The only field the lecturer sees besides presence itself. `under_review` is a
-   * code-override submission from outside the trusted bands, awaiting a decision.
+   * The only field the lecturer sees besides presence itself. `flagged` is a
+   * `far`/`unknown` verdict — never a queue awaiting a decision, just a record
+   * with a `reason` for the attendance-export cell to point out.
    */
   status: {
     type: String,
-    enum: ['present', 'under_review', 'rejected'],
+    enum: ['present', 'flagged'],
     default: 'present',
     required: true,
     index: true,
@@ -36,8 +37,8 @@ const attendanceSchema = new mongoose.Schema({
     fixCount: { type: Number },
     distanceM: { type: Number },
   },
-  reviewedAt: { type: Date, default: null },
-  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Person', default: null },
+  /** `flagged` only: human-readable reason shown as the export cell's comment. */
+  reason: { type: String, default: null },
 });
 
 attendanceSchema.index({ student: 1, session: 1, attendanceDate: 1 }, { unique: true });

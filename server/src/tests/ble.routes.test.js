@@ -61,7 +61,8 @@ function resetSettings() {
     bleEnabled: true,
     nearBufferM: 50,
     farBufferM: 100,
-    suspiciousBandAutoPass: true,
+    nearBufferLogic: 'accuracy_weighted_centroid',
+    farBufferLogic: 'accuracy_weighted_centroid',
     seedRate: 0,
     seedWindowMs: 60000,
   });

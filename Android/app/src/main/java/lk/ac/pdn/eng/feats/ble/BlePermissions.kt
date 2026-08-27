@@ -27,6 +27,12 @@ object BlePermissions {
             "Location permission is required to scan for the classroom signal."
         }
 
+    /** True once the radio itself is on — ignores permissions and Location services. */
+    fun isBluetoothOn(context: Context): Boolean {
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+        return adapter?.isEnabled == true
+    }
+
     /**
      * On API 30 and below, BLE scan needs the system Location toggle on even when
      * [ACCESS_FINE_LOCATION] is granted. Not required on API 31+ (neverForLocation).

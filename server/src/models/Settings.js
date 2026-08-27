@@ -14,19 +14,20 @@ const settingsSchema = new mongoose.Schema({
 
   /**
    * Distance bands, in meters from the nearest active building polygon of the
-   * session. `near` is the auto-pass radius; between `near` and `far` a student is
-   * suspicious; beyond `far` they are treated as absent unless a lecturer reviews.
+   * session. `near` and `suspicious` both auto-pass; beyond `far` (or when the
+   * fix is too inaccurate to band at all) a student is flagged instead — see
+   * `geofenceLogic.service.js` for what "within a buffer" means for each band.
    */
   nearBufferM: { type: Number, default: 50, min: 0 },
   farBufferM: { type: Number, default: 100, min: 0 },
 
   /**
-   * What a correct lecturer code does for a student in the suspicious band.
-   * true  — passes them outright (fast, trusts the code).
-   * false — sends them to lecturer review like the far band (strict).
-   * The far/unknown bands always go to review regardless of this switch.
+   * Which strategy decides "is this student within the near/far buffer",
+   * independently selectable per band. See `geofenceLogic.service.js`'s
+   * `STRATEGIES` for the full list and what each one means.
    */
-  suspiciousBandAutoPass: { type: Boolean, default: true },
+  nearBufferLogic: { type: String, default: 'accuracy_weighted_centroid' },
+  farBufferLogic: { type: String, default: 'accuracy_weighted_centroid' },
 
   /** Target concurrent BLE seeder count. 0 disables peer seeding entirely. */
   seedRate: { type: Number, default: 0, min: 0 },

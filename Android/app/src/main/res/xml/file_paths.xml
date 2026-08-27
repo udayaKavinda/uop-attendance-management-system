@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backs the FileProvider used to share the downloaded attendance .xlsx export. -->
+<paths>
+    <cache-path name="exports" path="exports/" />
+</paths>

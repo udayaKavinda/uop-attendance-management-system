@@ -1,4 +1,5 @@
-const { haversineMeters, distanceToNearestGeofenceMeters } = require('../utils/geo');
+const { distanceToNearestGeofenceMeters, haversineMeters } = require('../utils/geo');
+const geofenceLogicService = require('./geofenceLogic.service');
 
 /**
  * Per-(student, session) GPS fix accumulator, transient — matches the design's
@@ -12,8 +13,8 @@ const MIN_FIXES = 4;
 /**
  * If not one contributing fix beat this accuracy, the centroid is too vague to
  * band honestly — a 200m-accurate "fix" sitting 40m from the building says
- * nothing. Such attempts resolve to `unknown`, which routes to lecturer review
- * rather than silently passing or silently failing.
+ * nothing. Such attempts resolve to `unknown`, which is flagged for the
+ * lecturer rather than silently passing or silently failing.
  */
 const ACCURACY_CEILING_M = 75;
 
@@ -90,19 +91,9 @@ function computeCentroid(studentId, sessionId) {
   return { ...centroid, fixCount: survivors.length };
 }
 
-/**
- * Sorts a distance into the design's four bands. `inside`/`near` are the
- * auto-pass bands; `suspicious` and `far` both send the student to the
- * try-again/get-help screen and differ only in what a correct code then does.
- */
-function classifyDistance(distanceM, { nearBufferM, farBufferM }) {
-  if (!Number.isFinite(distanceM)) return 'unknown';
-  if (distanceM === 0) return 'inside';
-  if (distanceM <= nearBufferM) return 'near';
-  if (distanceM <= farBufferM) return 'suspicious';
-  return 'far';
-}
-
+// Raw-GPS auto-pass only — `suspicious` deliberately never passes silently on
+// GPS alone, only via a correct code (see attendance.service.js's own check in
+// recordHelpCodeAttendance, which treats suspicious as passing there).
 const PASS_BANDS = new Set(['inside', 'near']);
 
 function isPassBand(band) {
@@ -116,26 +107,50 @@ function isPassBand(band) {
  * `ready: false` means "still collecting, no verdict yet". A ready verdict
  * carries a band but deliberately no pass/fail wording — the caller decides,
  * and the client is never told which band it landed in.
+ *
+ * The near and far bands are each decided by an independently selectable
+ * strategy (`buffers.nearBufferLogic`/`farBufferLogic`, see
+ * `geofenceLogic.service.js`) run against the same per-fix distance metrics —
+ * near is checked first since it's the stronger claim, then far only if near
+ * didn't already pass.
  */
 function evaluateFix(studentId, sessionId, fix, geofences, buffers) {
-  addFix(studentId, sessionId, fix);
-  const centroid = computeCentroid(studentId, sessionId);
-  if (!centroid) return { ready: false, band: null, centroid: null };
+  const fixes = addFix(studentId, sessionId, fix);
+  const survivors = removeOutliersByMedianDistance(fixes);
+  if (!survivors) return { ready: false, band: null, centroid: null };
 
+  const centroid = { ...accuracyWeightedCentroid(survivors), fixCount: survivors.length };
   if (centroid.bestAccuracy > ACCURACY_CEILING_M) {
-    return { ready: true, band: 'unknown', centroid, distanceM: null };
+    return {
+      ready: true, band: 'unknown', centroid, distanceM: null,
+    };
   }
 
-  const distanceM = distanceToNearestGeofenceMeters(
-    centroid.lat,
-    centroid.lng,
-    geofences.map((g) => g.polygon),
+  const polygons = geofences.map((g) => g.polygon);
+  const fixDistances = survivors.map((f) => distanceToNearestGeofenceMeters(f.lat, f.lng, polygons));
+  const centroidDistanceM = distanceToNearestGeofenceMeters(centroid.lat, centroid.lng, polygons);
+  const bestAccuracyFix = survivors.reduce((best, f) => (f.accuracy < best.accuracy ? f : best));
+  const bestAccuracyFixDistanceM = distanceToNearestGeofenceMeters(
+    bestAccuracyFix.lat, bestAccuracyFix.lng, polygons,
   );
+  const metrics = { fixDistances, centroidDistanceM, bestAccuracyFixDistanceM };
+
+  const near = geofenceLogicService.evaluate(buffers.nearBufferLogic, metrics, buffers.nearBufferM);
+  if (near.withinBuffer) {
+    return {
+      ready: true,
+      band: near.distanceM === 0 ? 'inside' : 'near',
+      centroid,
+      distanceM: near.distanceM,
+    };
+  }
+
+  const far = geofenceLogicService.evaluate(buffers.farBufferLogic, metrics, buffers.farBufferM);
   return {
     ready: true,
-    band: classifyDistance(distanceM, buffers),
+    band: far.withinBuffer ? 'suspicious' : 'far',
     centroid,
-    distanceM: Number.isFinite(distanceM) ? distanceM : null,
+    distanceM: far.distanceM,
   };
 }
 
@@ -148,7 +163,6 @@ module.exports = {
   removeOutliersByMedianDistance,
   accuracyWeightedCentroid,
   computeCentroid,
-  classifyDistance,
   isPassBand,
   evaluateFix,
 };

@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const courseService = require('../../services/course.service');
 const lectureSessionService = require('../../services/lectureSession.service');
 const attendanceService = require('../../services/attendance.service');
+const attendanceExportService = require('../../services/attendanceExport.service');
 const { validateCreateCourseBody } = require('../../validators/course.validator');
 const { parsePagination } = require('../../utils/pagination');
 
@@ -61,6 +62,16 @@ async function attendanceMatrix(req, res) {
   return res.json(data);
 }
 
+/** Downloadable Excel version — red/commented cells for flagged attempts. */
+async function attendanceMatrixXlsx(req, res) {
+  const workbook = await attendanceExportService.buildAttendanceWorkbook(req.course);
+  const filename = `${req.course.code}${req.course.batch ? `_${req.course.batch}` : ''}_attendance.xlsx`;
+  res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.set('Content-Disposition', `attachment; filename="${filename}"`);
+  await workbook.xlsx.write(res);
+  res.end();
+}
+
 module.exports = {
   list,
   create,
@@ -69,4 +80,5 @@ module.exports = {
   assignLecturer,
   createSession,
   attendanceMatrix,
+  attendanceMatrixXlsx,
 };

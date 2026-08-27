@@ -22,13 +22,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import lk.ac.pdn.eng.feats.ui.components.EmptyState
 import lk.ac.pdn.eng.feats.ui.components.ErrorBanner
 import lk.ac.pdn.eng.feats.ui.components.LoadingGate
@@ -45,6 +48,7 @@ fun AttendanceMatrixScreen(
 ) {
     val state by vm.state.collectAsState()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     LaunchedEffect(courseId) { vm.load(courseId) }
 
     val course = state.data?.course
@@ -68,14 +72,18 @@ fun AttendanceMatrixScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PillButton("← Dashboard", onClick = onBack, tone = PillTone.Neutral)
                 if (hasTable) {
-                    PillButton("Share CSV", tone = PillTone.Accent, onClick = {
-                        val csv = vm.toCsv()
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/csv"
-                            putExtra(Intent.EXTRA_SUBJECT, "Attendance ${course?.code ?: ""}")
-                            putExtra(Intent.EXTRA_TEXT, csv)
+                    PillButton("Share Excel", tone = PillTone.Accent, onClick = {
+                        scope.launch {
+                            val file = vm.downloadXlsx(courseId) ?: return@launch
+                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                putExtra(Intent.EXTRA_SUBJECT, "Attendance ${course?.code ?: ""}")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(Intent.createChooser(send, "Share attendance Excel"))
                         }
-                        context.startActivity(Intent.createChooser(send, "Share attendance CSV"))
                     })
                 }
             }
@@ -119,7 +127,7 @@ fun AttendanceMatrixScreen(
                                         ) {
                                             when (status) {
                                                 "present" -> StatusPill("P", Palette.SuccessBg2, Palette.SuccessText)
-                                                "under_review" -> StatusPill("?", Palette.WarnBg, Palette.WarnText)
+                                                "flagged" -> StatusPill("F", Palette.DangerBg, Palette.DangerText)
                                                 else -> Text("—", color = Palette.Muted, fontWeight = FontWeight.SemiBold)
                                             }
                                         }

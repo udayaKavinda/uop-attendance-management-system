@@ -10,24 +10,31 @@ one 90-second window in which **Bluetooth and GPS are tried together**, and the 
 succeed marks them present:
 
 - **Bluetooth** — a lecturer phone broadcasts a rotating BLE token. Hearing it is proof
-  of being in the room, and passes outright.
-- **GPS geofence** — the phone streams precise fixes; a stable centroid inside the
-  session's building polygon, or within the admin's pass distance of it, also passes.
+  of being in the room, and passes outright. If the student's Bluetooth is off, the app
+  fires the system "turn on Bluetooth?" prompt (on the first attempt and every **Try
+  again**) while GPS keeps running regardless of what they pick.
+- **GPS geofence** — the phone streams precise fixes; whether the result counts as
+  "within the near/far buffer" is decided by an admin-selectable strategy per band
+  (accuracy-weighted centroid by default, or any/majority/all points within the buffer,
+  median distance, or best-accuracy-fix-only) — see `services/geofenceLogic.service.js`.
 
 If neither succeeds, the student gets **Try again** (another window) or **Get help**,
 which asks for the 8-digit code the lecturer reads out. How far away they were decides
-what the code does: near the building it marks them present, further out it only queues
-them for the lecturer's **review**, where they are approved or rejected by name.
+what the code does: near the building (including the suspicious band, which always
+passes on a correct code) it marks them present; beyond the far buffer, it's written as a
+`flagged` record with a reason instead — there is no lecturer review queue and nobody
+approves or rejects anything.
 
 Two supporting mechanisms:
 
 - **Peer seeding** — a few students who heard the lecturer directly rebroadcast the token
   to extend range; they cannot tell whether they were really picked.
-- **Distance bands** — the pass and outer radii, and whether the outer band's code
-  passes or reviews, are admin settings.
+- **Distance bands** — the near/far radii and each band's geofence-logic strategy are
+  admin settings.
 
 Attendance records retain the method, band, and position internally for auditing. The
-matrix and CSV show only presence and "awaiting review".
+on-screen matrix shows only presence/flagged; the downloadable Excel export additionally
+red-fills a flagged cell and attaches the reason as a cell comment.
 
 ## Repository layout
 

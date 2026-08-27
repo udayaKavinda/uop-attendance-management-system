@@ -18,7 +18,9 @@ or React client.
   method to choose. The running-course payload carries identity only.
 - On failure: **Try again** (another window) or **Get help**, which asks for the
   lecturer's 8-digit code.
-- Lands on exactly one outcome: present, submitted for review, or not approved.
+- Lands on exactly one outcome: present, or not confirmed (there's no queue — the
+  lecturer never approves or rejects anything; a not-confirmed attempt is simply visible,
+  flagged, in the lecturer's attendance export).
 - After acceptance, a capable/authorized device may receive a real or decoy peer-seeding
   window with indistinguishable UI.
 
@@ -29,7 +31,7 @@ own, but on those courses the same **Owners** dialog admins use is available to 
 add and remove co-owners freely, same wholesale reassignment either role gets, just scoped
 to courses they already own. Lecturers create sessions (choosing buildings — mandatory —
 and code rotation), broadcast Bluetooth while a session runs, reveal/pause/regenerate the
-attendance code, decide the review queue, and open attendance reports. Neither dashboard
+attendance code, and open attendance reports (with the Excel export). Neither dashboard
 header shows a "University of Peradeniya" subtitle — that branding lives only on the sign-in
 screen.
 
@@ -38,8 +40,10 @@ screen.
 Tabs: **Courses**, **Create session**, **Sessions**, **Lecturers**, **Geofences**, and
 **Settings**. Admins additionally manage course owners (including removing one), the
 lecturer directory, building polygons, the Bluetooth kill switch, the two distance
-thresholds, whether the outer band auto-passes on a correct code, peer-seeding parameters,
-the student sign-in email domain, and the minimum app version that's allowed to run.
+thresholds, each band's independently selectable geofence logic (a dropdown per band —
+accuracy-weighted centroid, any/majority/all points within the buffer, median distance, or
+best-accuracy-fix-only), peer-seeding parameters, the student sign-in email domain, and
+the minimum app version that's allowed to run.
 
 ### Courses, sessions, and lecturers at scale
 
@@ -60,7 +64,11 @@ One flow, both radios, 90 seconds:
 
 1. Ask once for everything the window may need — BLE scan, precise location, and
    `BLUETOOTH_ADVERTISE` for seeding. Any subset may be denied; the window runs with
-   whatever is left.
+   whatever is left. If Bluetooth is off (and its runtime permission is granted), the
+   system "turn on Bluetooth?" dialog fires before the window starts, and briefly
+   (up to 1.5s) waits for the radio to actually report enabled before proceeding either
+   way — GPS is never blocked by this. This re-fires on every **Try again**, not just the
+   first attempt.
 2. Ask the server whether a broadcast is even live (`/api/bluetooth-target`). If not, the
    whole window goes to GPS rather than splitting attention.
 3. Run the available paths concurrently: scan for the rotating token, and stream
@@ -158,8 +166,14 @@ only.
 - Code rotation is sent atomically in the create-session request; there is no second
   best-effort setup request.
 - One-time sessions display and use the server's explicit occurrence date.
-- Attendance matrix cells and CSV use **P** for present and **?** for a submission still
-  awaiting the lecturer's decision. Verification provenance is never exposed.
+- The on-screen attendance matrix uses **P** for present and **F** for flagged (a
+  `far`/`unknown` verdict — not a pending state; nothing "reviews" it). The **Share
+  Excel** action downloads the same matrix as a real `.xlsx` file (via a
+  `FileProvider`-shared content Uri) with flagged cells red-filled and the reason
+  attached as a cell comment — a CSV string can't carry either, so this replaced the
+  earlier plain-text CSV share. Verification provenance (method, band, centroid) is never
+  exposed on-screen or in the JSON API; `reason` is the one exception, and only inside the
+  Excel export's comments.
 
 ## Authentication
 
@@ -228,10 +242,12 @@ Student: `/api/courses/running`, `/api/attendance-status`, `/api/attendance`,
 `/api/bluetooth-target`, and `/api/attendance/seed-token`.
 
 Staff/admin: `/api/admin/courses` (paged, plus `assign-lecturer` open to any owning
-lecturer, not just admins), course sessions and attendance matrix, `/api/admin/sessions`
-(paged) with broadcast, lecturer-code, and review-queue actions, `/api/admin/lecturers`
+lecturer, not just admins), course sessions, the JSON attendance matrix and its
+`.xlsx` export sibling, `/api/admin/sessions` (paged) with broadcast and lecturer-code
+actions (no review-queue endpoints — there is no queue), `/api/admin/lecturers`
 (paged, readable by any staff member for the Owners search — writes stay admin-only),
-`/api/admin/geofences`, and `/api/admin/settings`.
+`/api/admin/geofences`, and `/api/admin/settings` (now including `geofenceLogicOptions`,
+the fixed dropdown menu for the near/far buffer-logic settings).
 
 The server README is the authoritative request/response and access-control reference.
 

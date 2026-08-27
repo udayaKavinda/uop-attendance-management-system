@@ -39,6 +39,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +55,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import lk.ac.pdn.eng.feats.ble.BlePermissions
 import lk.ac.pdn.eng.feats.data.net.RunningCourseDto
 import lk.ac.pdn.eng.feats.ui.components.AppCard
@@ -91,30 +94,52 @@ fun LectureEntryScreen(
         onDispose { view.keepScreenOn = false }
     }
 
+    val coroutineScope = rememberCoroutineScope()
+
+    // `begin` and the two launchers below refer to each other (a launcher result
+    // re-runs `begin`, which may launch either one), so the initial reference is
+    // a lateinit var, assigned once every dependency exists.
+    lateinit var begin: () -> Unit
+
+    // Turning the radio on is asynchronous — this callback can fire slightly
+    // before `adapter.isEnabled` actually flips, which would otherwise waste the
+    // whole attempt on GPS alone even though the student just said yes. Give it
+    // up to 1.5s to catch up before starting the window either way.
     val enableBtLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
-    ) { vm.startCheckIn() }
+    ) {
+        coroutineScope.launch {
+            var waited = 0
+            while (waited < 15 && !BlePermissions.isBluetoothOn(context)) {
+                delay(100)
+                waited++
+            }
+            vm.startCheckIn()
+        }
+    }
 
     // Asked once, up front. Any subset can be denied: the window runs with
     // whatever is left, and falls through to the lecturer's code if nothing is.
+    // Re-runs begin() rather than starting directly, so a Bluetooth-off prompt
+    // still fires if that's the very next thing blocking the attempt.
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { vm.startCheckIn() }
+    ) { begin() }
 
-    fun begin() {
+    begin = {
         val needed = LectureEntryViewModel.requiredPermissions()
         if (!BlePermissions.hasAll(context, needed)) {
             permissionLauncher.launch(needed)
-            return
+        } else {
+            // Bluetooth being off is worth one tap to fix; everything else just
+            // degrades to GPS rather than blocking the attempt.
+            val blocker = BlePermissions.scanBlocker(context)
+            if (blocker != null && blocker.contains("turned off", ignoreCase = true)) {
+                enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            } else {
+                vm.startCheckIn()
+            }
         }
-        // Bluetooth being off is worth one tap to fix; everything else just
-        // degrades to GPS rather than blocking the attempt.
-        val blocker = BlePermissions.scanBlocker(context)
-        if (blocker != null && blocker.contains("turned off", ignoreCase = true)) {
-            enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-            return
-        }
-        vm.startCheckIn()
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -132,10 +157,9 @@ fun LectureEntryScreen(
                 Column(Modifier.padding(22.dp)) {
                     when {
                         state.outcome == Outcome.Present -> OutcomePresent(vm)
-                        state.outcome == Outcome.UnderReview -> OutcomeUnderReview(vm)
-                        state.outcome == Outcome.Rejected -> OutcomeRejected(vm)
+                        state.outcome == Outcome.Flagged -> OutcomeFlagged(vm)
                         state.courses.isEmpty() -> NoLecturesRunning(state.error)
-                        else -> CheckInBody(state, vm, ::begin)
+                        else -> CheckInBody(state, vm, begin)
                     }
                 }
             }
@@ -190,7 +214,7 @@ private fun CheckInBody(
 
     when {
         state.running -> RunningPanel(state, vm)
-        state.needsHelp -> NeedsHelpPanel(vm)
+        state.needsHelp -> NeedsHelpPanel(vm, onBegin)
         else -> PrimaryButton(
             text = "Check me in",
             onClick = onBegin,
@@ -253,7 +277,7 @@ private fun RunningPanel(state: CheckInState, vm: LectureEntryViewModel) {
  * tell a cheat how far off they are.
  */
 @Composable
-private fun NeedsHelpPanel(vm: LectureEntryViewModel) {
+private fun NeedsHelpPanel(vm: LectureEntryViewModel, onBegin: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -281,7 +305,7 @@ private fun NeedsHelpPanel(vm: LectureEntryViewModel) {
         Spacer(Modifier.height(16.dp))
         PrimaryButton(
             text = "Try again",
-            onClick = vm::tryAgain,
+            onClick = { vm.tryAgain(); onBegin() },
             variant = ButtonVariant.Bluetooth,
         )
         Spacer(Modifier.height(10.dp))
@@ -368,25 +392,13 @@ private fun OutcomePresent(vm: LectureEntryViewModel) {
 }
 
 @Composable
-private fun OutcomeUnderReview(vm: LectureEntryViewModel) {
+private fun OutcomeFlagged(vm: LectureEntryViewModel) {
     OutcomeCard(
         emoji = "🕓",
-        title = "Sent to your lecturer",
-        body = "Your submission is under your lecturer's review. You don't need to do anything else.",
+        title = "Not confirmed",
+        body = "We couldn't verify you were in the room. Speak to your lecturer if you think that's a mistake.",
         bg = Palette.WarnBg,
         ink = Palette.WarnText,
-        vm = vm,
-    )
-}
-
-@Composable
-private fun OutcomeRejected(vm: LectureEntryViewModel) {
-    OutcomeCard(
-        emoji = "✖️",
-        title = "Not approved",
-        body = "Your lecturer did not approve this submission. Speak to them if you think that's a mistake.",
-        bg = Palette.DangerBg,
-        ink = Palette.DangerText,
         vm = vm,
     )
 }

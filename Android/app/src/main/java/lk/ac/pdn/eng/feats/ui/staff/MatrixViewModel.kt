@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import lk.ac.pdn.eng.feats.data.net.ApiResult
 import lk.ac.pdn.eng.feats.data.net.AttendanceMatrixRes
 import lk.ac.pdn.eng.feats.ui.container
+import java.io.File
 
 data class MatrixState(
     val loading: Boolean = true,
@@ -37,31 +38,22 @@ class MatrixViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Builds a CSV string from the loaded matrix for sharing/export. */
-    fun toCsv(): String {
-        val data = _state.value.data ?: return ""
-        val sessions = data.sessions.orEmpty()
-        val header = listOf("Student ID") + sessions.map { it.label ?: it.id.orEmpty() }
-        val sb = StringBuilder()
-        sb.append(header.joinToString(",") { csvCell(it) }).append('\n')
-        data.rows.orEmpty().forEach { row ->
-            val cells = mutableListOf(csvCell(row.displayId ?: ""))
-            sessions.forEach { s ->
-                // Presence only — verification provenance stays server-side.
-                // "?" marks a submission still waiting on the lecturer's decision.
-                cells.add(
-                    when (row.attendance?.get(s.id)) {
-                        "present" -> "P"
-                        "under_review" -> "?"
-                        else -> ""
-                    },
-                )
+    /**
+     * Downloads the Excel export to a cache file ready to share — flagged cells carry
+     * their red fill and reason comment server-side, which a plain CSV string could
+     * never represent. Returns null (and sets [MatrixState.error]) on failure.
+     */
+    suspend fun downloadXlsx(courseId: String): File? =
+        when (val res = repo.attendanceMatrixXlsx(courseId)) {
+            is ApiResult.Success -> {
+                val dir = File(getApplication<Application>().cacheDir, "exports").apply { mkdirs() }
+                val file = File(dir, "attendance-$courseId.xlsx")
+                file.writeBytes(res.data)
+                file
             }
-            sb.append(cells.joinToString(",")).append('\n')
+            is ApiResult.Error -> {
+                _state.value = _state.value.copy(error = res.message)
+                null
+            }
         }
-        return sb.toString()
-    }
-
-    private fun csvCell(value: String): String =
-        if (value.contains(',') || value.contains('"')) "\"" + value.replace("\"", "\"\"") + "\"" else value
 }

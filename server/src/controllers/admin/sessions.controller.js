@@ -2,8 +2,7 @@ const authService = require('../../services/auth.service');
 const lectureSessionService = require('../../services/lectureSession.service');
 const sessionService = require('../../services/session.service');
 const manualCodeService = require('../../services/manualCode.service');
-const attendanceReviewService = require('../../services/attendanceReview.service');
-const { validateBroadcastBody, validateReviewBody } = require('../../validators/session.validator');
+const { validateBroadcastBody } = require('../../validators/session.validator');
 const { validateManualCodeConfigBody } = require('../../validators/manualCode.validator');
 const { parsePagination } = require('../../utils/pagination');
 
@@ -78,25 +77,6 @@ async function patchManualCode(req, res) {
   return res.json({ success: true, ...status });
 }
 
-/** Pending code-override submissions awaiting this lecturer's decision. */
-async function listPendingReviews(req, res) {
-  const items = await attendanceReviewService.listPending(req.sessionItem);
-  return res.json({ items });
-}
-
-async function reviewSubmission(req, res) {
-  const validated = validateReviewBody(req.body);
-  if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
-  const result = await attendanceReviewService.review(
-    req.sessionItem,
-    req.params.attendanceId,
-    validated.decision,
-    req.auth.person._id,
-  );
-  if (!result.ok) return res.status(result.status).json({ error: result.error });
-  return res.json({ success: true, status: result.attendance.status });
-}
-
 module.exports = {
   remove,
   activate,
@@ -107,6 +87,4 @@ module.exports = {
   getBroadcast,
   getManualCode,
   patchManualCode,
-  listPendingReviews,
-  reviewSubmission,
 };

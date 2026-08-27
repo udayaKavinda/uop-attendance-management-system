@@ -1,3 +1,7 @@
+const { STRATEGIES } = require('../services/geofenceLogic.service');
+
+const STRATEGY_IDS = new Set(STRATEGIES.map((s) => s.id));
+
 /**
  * Body for PATCH /api/admin/settings. Every field is independently optional —
  * only recognized ones are applied. At least one must be present.
@@ -6,13 +10,11 @@ function validateSettingsBody(body) {
   const b = body || {};
   const result = {};
 
-  for (const flag of ['bleEnabled', 'suspiciousBandAutoPass']) {
-    if (flag in b) {
-      if (typeof b[flag] !== 'boolean') {
-        return { ok: false, status: 400, error: `${flag} must be a boolean` };
-      }
-      result[flag] = b[flag];
+  if ('bleEnabled' in b) {
+    if (typeof b.bleEnabled !== 'boolean') {
+      return { ok: false, status: 400, error: 'bleEnabled must be a boolean' };
     }
+    result.bleEnabled = b.bleEnabled;
   }
 
   for (const meters of ['nearBufferM', 'farBufferM']) {
@@ -22,6 +24,15 @@ function validateSettingsBody(body) {
         return { ok: false, status: 400, error: `${meters} must be between 0 and 5000 (meters)` };
       }
       result[meters] = Math.round(value);
+    }
+  }
+
+  for (const logic of ['nearBufferLogic', 'farBufferLogic']) {
+    if (logic in b) {
+      if (!STRATEGY_IDS.has(b[logic])) {
+        return { ok: false, status: 400, error: `${logic} must be one of: ${[...STRATEGY_IDS].join(', ')}` };
+      }
+      result[logic] = b[logic];
     }
   }
 

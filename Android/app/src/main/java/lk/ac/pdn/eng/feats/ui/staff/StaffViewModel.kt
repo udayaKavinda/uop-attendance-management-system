@@ -25,7 +25,6 @@ import lk.ac.pdn.eng.feats.data.net.GeofenceUpdateReq
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
 import lk.ac.pdn.eng.feats.data.net.ManualCodeConfigReq
 import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
-import lk.ac.pdn.eng.feats.data.net.PendingReviewDto
 import lk.ac.pdn.eng.feats.data.net.RunningSessionDto
 import lk.ac.pdn.eng.feats.data.net.SettingsDto
 import lk.ac.pdn.eng.feats.data.net.SettingsReq
@@ -63,17 +62,12 @@ data class StaffState(
     val settings: SettingsDto? = null,
     /** Building list for the session builder + the admin map tool. */
     val geofences: List<GeofenceDto> = emptyList(),
-    /** Per-session queue of code submissions awaiting a decision. */
-    val pendingReviews: Map<String, List<PendingReviewDto>> = emptyMap(),
 ) {
     val isAdmin: Boolean get() = role == "admin"
     val bleEnabled: Boolean get() = settings?.bleEnabled != false
 
     /** In the session's scheduled window right now — regardless of `active`. See [stageOf]. */
     fun isRunning(sessionId: String?): Boolean = sessionId != null && running.containsKey(sessionId)
-
-    fun reviewsFor(sessionId: String?): List<PendingReviewDto> =
-        sessionId?.let { pendingReviews[it] } ?: emptyList()
 
     /**
      * `active`, preferring [running] — refreshed every ~10s by pollRunning() — over the
@@ -597,32 +591,6 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         ),
     )
 
-    // ── Review queue (code submissions from outside the trusted bands) ────────────────
-
-    fun loadPendingReviews(sessionId: String) {
-        viewModelScope.launch {
-            when (val res = repo.pendingReviews(sessionId)) {
-                is ApiResult.Success ->
-                    _state.value = _state.value.copy(
-                        pendingReviews = _state.value.pendingReviews + (sessionId to res.data),
-                    )
-                is ApiResult.Error -> Unit // a stale queue is better than an error banner here
-            }
-        }
-    }
-
-    fun reviewSubmission(sessionId: String, attendanceId: String, approve: Boolean) {
-        viewModelScope.launch {
-            when (val res = repo.reviewSubmission(sessionId, attendanceId, approve)) {
-                is ApiResult.Success -> {
-                    setFlash(if (approve) "Marked present." else "Submission rejected.")
-                    loadPendingReviews(sessionId)
-                }
-                is ApiResult.Error -> setError(res.message)
-            }
-        }
-    }
-
     // ── Settings (admin: mode policy, seeding, buffers, manual-code kill-switch) ───────
 
     private fun loadGlobalSettings() {
@@ -639,9 +607,14 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         if (enabled) "Bluetooth turned on for every session." else "Bluetooth switched off. GPS still verifies attendance.",
     )
 
-    fun setSuspiciousBandAutoPass(autoPass: Boolean) = patchSettings(
-        SettingsReq(suspiciousBandAutoPass = autoPass),
-        if (autoPass) "A correct code now passes students in the outer band." else "The outer band now goes to lecturer review.",
+    fun setNearBufferLogic(strategyId: String) = patchSettings(
+        SettingsReq(nearBufferLogic = strategyId),
+        "Near-buffer logic updated.",
+    )
+
+    fun setFarBufferLogic(strategyId: String) = patchSettings(
+        SettingsReq(farBufferLogic = strategyId),
+        "Far-buffer logic updated.",
     )
 
     fun setSeedingParams(seedRate: Int, seedWindowMs: Long) =

@@ -21,8 +21,7 @@ async function bluetoothTarget(req, res) {
 
 const RECORD_STATUS = {
   present: 'accepted',
-  under_review: 'under_review',
-  rejected: 'rejected',
+  flagged: 'flagged',
 };
 
 /**

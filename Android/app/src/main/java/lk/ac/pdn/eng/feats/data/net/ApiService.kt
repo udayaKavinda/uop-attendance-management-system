@@ -1,5 +1,6 @@
 package lk.ac.pdn.eng.feats.data.net
 
+import okhttp3.ResponseBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
@@ -7,6 +8,7 @@ import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Streaming
 
 /**
  * Retrofit declaration of every server endpoint the app uses. Paths match
@@ -95,6 +97,11 @@ interface ApiService {
     @GET("api/admin/courses/{courseId}/attendance-matrix")
     suspend fun attendanceMatrix(@Path("courseId") courseId: String): AttendanceMatrixRes
 
+    /** Downloadable Excel version — red-filled, commented cells for flagged attempts. */
+    @Streaming
+    @GET("api/admin/courses/{courseId}/attendance-matrix.xlsx")
+    suspend fun attendanceMatrixXlsx(@Path("courseId") courseId: String): ResponseBody
+
     // ── Admin / staff: sessions ──────────────────────────────────────────────────────
     /** Omitting `limit` returns every matching session (small installations); paged otherwise. */
     @GET("api/admin/sessions")
@@ -136,18 +143,6 @@ interface ApiService {
         @Path("sessionId") sessionId: String,
         @Body body: ManualCodeConfigReq,
     ): ManualCodeStatusDto
-
-    /** Students who gave a correct code from outside the trusted bands. */
-    @GET("api/admin/sessions/{sessionId}/reviews")
-    suspend fun pendingReviews(@Path("sessionId") sessionId: String): PendingReviewsRes
-
-    /** Approve or reject one pending submission. */
-    @PATCH("api/admin/sessions/{sessionId}/reviews/{attendanceId}")
-    suspend fun reviewSubmission(
-        @Path("sessionId") sessionId: String,
-        @Path("attendanceId") attendanceId: String,
-        @Body body: ReviewDecisionReq,
-    ): SimpleSuccess
 
     // ── Admin: settings ───────────────────────────────────────────────────────────────
     @GET("api/admin/settings")

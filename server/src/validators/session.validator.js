@@ -70,15 +70,6 @@ function validateBroadcastBody(body) {
   return { ok: true, on };
 }
 
-/** Body for PATCH /:sessionId/reviews/:attendanceId — strictly approve or reject. */
-function validateReviewBody(body) {
-  const decision = String(body?.decision || '');
-  if (!['approve', 'reject'].includes(decision)) {
-    return { ok: false, status: 400, error: 'decision must be "approve" or "reject"' };
-  }
-  return { ok: true, decision };
-}
-
 async function checkSessionOverlap(LectureSession, courseId, day, startTime, endTime) {
   const sameDaySessions = await LectureSession.find({
     course: courseId,
@@ -99,7 +90,6 @@ async function checkSessionOverlap(LectureSession, courseId, day, startTime, end
 module.exports = {
   validateSessionCreateBody,
   validateBroadcastBody,
-  validateReviewBody,
   checkSessionOverlap,
   ALLOWED_DAYS,
 };

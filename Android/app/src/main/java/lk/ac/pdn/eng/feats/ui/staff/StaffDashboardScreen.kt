@@ -47,7 +47,6 @@ import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.PauseCircleOutline
-import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
@@ -86,7 +85,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -111,7 +109,6 @@ import lk.ac.pdn.eng.feats.data.net.CourseDto
 import lk.ac.pdn.eng.feats.data.net.GeofenceDto
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
 import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
-import lk.ac.pdn.eng.feats.data.net.PendingReviewDto
 import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
 import lk.ac.pdn.eng.feats.ui.components.AppCard
 import lk.ac.pdn.eng.feats.ui.components.AppTextField
@@ -930,16 +927,6 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
             item { EmptyState("🗓️", "No sessions", "Create a session to see it here.") }
         } else {
             items(filtered, key = { it.id ?: it.hashCode().toString() }) { session ->
-                // Poll the queue only while actually collecting — that is the only time
-                // submissions can arrive (Within-session hasn't started accepting yet).
-                val collecting = state.isCollecting(session)
-                LaunchedEffect(session.id, collecting) {
-                    val id = session.id ?: return@LaunchedEffect
-                    while (collecting) {
-                        vm.loadPendingReviews(id)
-                        delay(15_000)
-                    }
-                }
                 SessionCard(
                     session = session,
                     stage = state.stageOf(session),
@@ -950,7 +937,6 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                         .filter { it.id in session.buildings.orEmpty() }
                         .mapNotNull { it.name?.takeIf(String::isNotBlank) },
                     bleEnabled = state.bleEnabled,
-                    pendingReviews = state.reviewsFor(session.id),
                     onCollect = { session.id?.let(vm::collect) },
                     onDeactivate = { session.id?.let(vm::deactivate) },
                     onDelete = { confirmDelete = session },
@@ -958,9 +944,6 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                     onPauseManualCode = { session.id?.let(vm::pauseManualCode) },
                     onResumeManualCode = { session.id?.let(vm::resumeManualCode) },
                     onRegenerateManualCode = { session.id?.let(vm::regenerateManualCode) },
-                    onReview = { attendanceId, approve ->
-                        session.id?.let { vm.reviewSubmission(it, attendanceId, approve) }
-                    },
                 )
             }
             if (state.sessionsHasMore && query.isBlank()) {
@@ -1057,21 +1040,34 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
                 icon = Icons.Outlined.Password,
                 title = "What the attendance code grants",
                 subtitle = "A student who can't be verified automatically may enter the code you read out. " +
-                    "How far away they were decides what it does for them.",
+                    "Within the far buffer it passes them outright; beyond it, the attempt is flagged in " +
+                    "the attendance export instead — there's no review queue to act on it.",
             ) {
-                PolicySwitch(
-                    label = "Pass students in the outer band",
-                    detail = "On: a correct code marks them present immediately. " +
-                        "Off: they go to your review queue like anyone further away.",
-                    checked = settings.suspiciousBandAutoPass != false,
-                    onCheckedChange = vm::setSuspiciousBandAutoPass,
+                val options = settings.geofenceLogicOptions.orEmpty()
+                val optionPairs = options.map { (it.id ?: "") to (it.label ?: it.id.orEmpty()) }
+                val nearSelected = options.firstOrNull { it.id == settings.nearBufferLogic }
+                val farSelected = options.firstOrNull { it.id == settings.farBufferLogic }
+                LabeledDropdown(
+                    label = "Near-buffer logic",
+                    selectedText = nearSelected?.label ?: "Accuracy-weighted centroid",
+                    placeholder = "Select…",
+                    options = optionPairs,
+                    onSelect = vm::setNearBufferLogic,
                 )
-                Spacer(Modifier.height(10.dp))
-                BandLegend(
-                    nearBufferM = settings.nearBufferM ?: 50,
-                    farBufferM = settings.farBufferM ?: 100,
-                    autoPass = settings.suspiciousBandAutoPass != false,
+                nearSelected?.description?.let {
+                    Text(it, color = Palette.Muted, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+                Spacer(Modifier.height(12.dp))
+                LabeledDropdown(
+                    label = "Far-buffer logic",
+                    selectedText = farSelected?.label ?: "Accuracy-weighted centroid",
+                    placeholder = "Select…",
+                    options = optionPairs,
+                    onSelect = vm::setFarBufferLogic,
                 )
+                farSelected?.description?.let {
+                    Text(it, color = Palette.Muted, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
+                }
             }
         }
 
@@ -1175,42 +1171,6 @@ private fun StepperButton(
             fontWeight = FontWeight.ExtraBold,
             fontSize = 18.sp,
         )
-    }
-}
-
-/** Plain-language restatement of the three distance outcomes, in the admin's own numbers. */
-@Composable
-private fun BandLegend(nearBufferM: Int, farBufferM: Int, autoPass: Boolean) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(AppShapes.Panel)
-            .background(Palette.InactiveBg)
-            .padding(12.dp),
-    ) {
-        BandRow("Within ${nearBufferM}m", "Passes automatically — no code needed.", Palette.SuccessText)
-        Spacer(Modifier.height(6.dp))
-        BandRow(
-            "${nearBufferM}–${farBufferM}m",
-            if (autoPass) "A correct code marks them present." else "A correct code sends them to your review queue.",
-            if (autoPass) Palette.WarnText else Palette.AccentDark,
-        )
-        Spacer(Modifier.height(6.dp))
-        BandRow("Beyond ${farBufferM}m", "A correct code only ever reaches your review queue.", Palette.DangerText)
-    }
-}
-
-@Composable
-private fun BandRow(range: String, effect: String, ink: Color) {
-    Row(verticalAlignment = Alignment.Top) {
-        Text(
-            range,
-            fontWeight = FontWeight.Bold,
-            fontSize = 12.sp,
-            color = ink,
-            modifier = Modifier.width(96.dp),
-        )
-        Text(effect, color = Palette.Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
     }
 }
 
@@ -1337,7 +1297,6 @@ private fun SessionCard(
     manualCode: ManualCodeStatusDto?,
     buildingNames: List<String>,
     bleEnabled: Boolean,
-    pendingReviews: List<PendingReviewDto>,
     /** Server's `broadcasting` flag, freshest available — see call site (10s running-poll,
      *  falling back to the less-fresh full session list only if that poll hasn't hit yet). */
     liveOnServer: Boolean,
@@ -1349,7 +1308,6 @@ private fun SessionCard(
     onPauseManualCode: () -> Unit,
     onResumeManualCode: () -> Unit,
     onRegenerateManualCode: () -> Unit,
-    onReview: (String, Boolean) -> Unit,
 ) {
     val collecting = stage == SessionStage.Collecting
     // `broadcast` mirrors BroadcastService.state — non-null only on the phone that is
@@ -1528,10 +1486,6 @@ private fun SessionCard(
                 onResume = onResumeManualCode,
                 onRegenerate = onRegenerateManualCode,
             )
-
-            if (pendingReviews.isNotEmpty()) {
-                ReviewQueueSection(items = pendingReviews, onReview = onReview)
-            }
 
             HorizontalDivider(color = Palette.Border, modifier = Modifier.padding(vertical = 14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1764,88 +1718,6 @@ private fun ManualCodeSection(
                 tone = if (status.paused == true) SessionActionTone.Success else SessionActionTone.Neutral,
                 onClick = if (status.paused == true) onResume else onPause,
             )
-        }
-    }
-}
-
-/**
- * Students who gave the correct code from outside the trusted distance bands.
- *
- * Deliberately shows identity and nothing else: the decision this asks for is
- * "was this person actually in my lecture", which the lecturer can answer from
- * the room. A distance readout would only invite them to rubber-stamp a number
- * they have no way to check.
- */
-@Composable
-private fun ReviewQueueSection(
-    items: List<PendingReviewDto>,
-    onReview: (String, Boolean) -> Unit,
-) {
-    Column(
-        Modifier
-            .padding(top = 12.dp)
-            .fillMaxWidth()
-            .background(Palette.WarnBg, RoundedCornerShape(14.dp))
-            .border(1.dp, Palette.WarnText.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
-            .padding(13.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.AutoMirrored.Outlined.HelpOutline,
-                contentDescription = null,
-                tint = Palette.WarnText,
-                modifier = Modifier.size(17.dp),
-            )
-            Spacer(Modifier.width(7.dp))
-            Text(
-                if (items.size == 1) "1 student needs your decision" else "${items.size} students need your decision",
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.5.sp,
-                color = Palette.WarnText,
-            )
-        }
-        Text(
-            "They entered the correct code but were too far away to verify on their own.",
-            color = Palette.WarnText.copy(alpha = 0.85f),
-            fontSize = 11.sp,
-            modifier = Modifier.padding(top = 2.dp, bottom = 9.dp),
-        )
-
-        items.forEach { item ->
-            Column(
-                Modifier
-                    .padding(bottom = 8.dp)
-                    .fillMaxWidth()
-                    .background(Palette.Card, RoundedCornerShape(11.dp))
-                    .padding(11.dp),
-            ) {
-                Text(
-                    item.name ?: item.email ?: "Unknown student",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    color = Palette.Ink,
-                )
-                item.email?.takeIf { it != item.name }?.let {
-                    Text(it, color = Palette.Muted, fontSize = 11.5.sp)
-                }
-                Spacer(Modifier.height(9.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SessionActionButton(
-                        text = "Mark present",
-                        icon = Icons.Outlined.PlayCircleOutline,
-                        tone = SessionActionTone.Success,
-                        onClick = { onReview(item.id, true) },
-                        modifier = Modifier.weight(1f),
-                    )
-                    SessionActionButton(
-                        text = "Reject",
-                        icon = Icons.Outlined.DeleteOutline,
-                        tone = SessionActionTone.Danger,
-                        onClick = { onReview(item.id, false) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
         }
     }
 }

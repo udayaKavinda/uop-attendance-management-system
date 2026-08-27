@@ -18,9 +18,5 @@ router.patch('/:sessionId/broadcast', requireStaff, sessionGuard, sessionsContro
 router.get('/:sessionId/broadcast', requireStaff, sessionGuard, sessionsController.getBroadcast);
 router.get('/:sessionId/manual-code', requireStaff, sessionGuard, sessionsController.getManualCode);
 router.patch('/:sessionId/manual-code', requireStaff, sessionGuard, sessionsController.patchManualCode);
-router.get('/:sessionId/reviews', requireStaff, sessionGuard, sessionsController.listPendingReviews);
-// Nested under the session so the existing access guard covers the record too —
-// a lecturer cannot review a submission from someone else's session by id.
-router.patch('/:sessionId/reviews/:attendanceId', requireStaff, sessionGuard, sessionsController.reviewSubmission);
 
 module.exports = router;

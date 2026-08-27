@@ -15,5 +15,11 @@ router.patch('/:courseId/disable', requireStaff, requireCourseAccess(), coursesC
 router.patch('/:courseId/enable', requireStaff, requireCourseAccess(), coursesController.enable);
 router.post('/:courseId/sessions', requireStaff, requireCourseAccess(), coursesController.createSession);
 router.get('/:courseId/attendance-matrix', requireStaff, requireCourseAccess(), coursesController.attendanceMatrix);
+router.get(
+  '/:courseId/attendance-matrix.xlsx',
+  requireStaff,
+  requireCourseAccess(),
+  coursesController.attendanceMatrixXlsx,
+);
 
 module.exports = router;
