@@ -176,9 +176,12 @@ class BroadcastService : Service() {
                         val token = res.data.token
                         if (token != null) {
                             advertiser.advertise(token) { err ->
-                                // Hard radio failure: roll back so the server never
-                                // claims a broadcast nobody is transmitting.
-                                shutdown(turnOffServer = true, reason = "Broadcast stopped: $err")
+                                // Hard radio failure: stop THIS device only. Never flip the
+                                // server's shared broadcasting flag off from a local failure —
+                                // another device may still be broadcasting fine (Join), and the
+                                // session keeps collecting via GPS either way. A staleness sweep
+                                // (or an explicit Deactivate) is what ends it for everyone.
+                                shutdown(turnOffServer = false, reason = "Broadcast stopped: $err")
                             }
                         }
                         if (_state.value?.sessionId == sessionId) {

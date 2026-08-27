@@ -15,6 +15,7 @@ const {
   BROADCAST_WINDOW_ERROR,
   invalidateActiveSessionCache,
   isWithinScheduleWindow,
+  isScheduledNow,
 } = require('./session.service');
 
 async function createSession(course, body) {
@@ -51,7 +52,10 @@ async function createSession(course, body) {
     buildings: validated.buildings,
     manualCodeRotationMode: validated.manualCodeRotationMode,
     manualCodeRotationSeconds: validated.manualCodeRotationSeconds,
-    active: true,
+    // Collecting (active: true) always starts from an explicit Collect tap inside
+    // the session's own scheduled window — never automatically at creation time,
+    // even if the session happens to be created during a window that's already live.
+    active: false,
   });
   return { ok: true, session: created };
 }
@@ -72,6 +76,12 @@ async function softDeleteSession(sessionItem) {
   return { ok: true };
 }
 
+/**
+ * "Collect" — the only way a session becomes active. Requires being inside the
+ * session's own scheduled window right now: collecting attendance outside class
+ * time makes no sense, and the card's Collect control is disabled to match this
+ * everywhere except here, this is the server-side invariant backing that.
+ */
 async function activateSession(sessionItem) {
   // `course` may be a populated doc (activate route) or an ObjectId ref. Resolve
   // it either way so activation never depends on the guard's populate behavior.
@@ -85,6 +95,9 @@ async function activateSession(sessionItem) {
   }
   if (sessionItem.recurring === false && sessionItem.occurrenceDate < localYmd()) {
     return { ok: false, status: 400, error: 'This one-time session has expired; create a new session.' };
+  }
+  if (!isScheduledNow(sessionItem)) {
+    return { ok: false, status: 400, error: BROADCAST_WINDOW_ERROR };
   }
   sessionItem.active = true;
   await sessionItem.save();

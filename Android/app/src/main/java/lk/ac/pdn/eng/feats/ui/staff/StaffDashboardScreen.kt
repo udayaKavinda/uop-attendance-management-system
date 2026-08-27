@@ -101,6 +101,8 @@ import lk.ac.pdn.eng.feats.ble.BlePermissions
 import lk.ac.pdn.eng.feats.ble.BroadcastService
 import lk.ac.pdn.eng.feats.ble.BroadcastState
 import androidx.compose.material3.Switch
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import lk.ac.pdn.eng.feats.data.net.CourseDto
 import lk.ac.pdn.eng.feats.data.net.GeofenceDto
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
@@ -834,8 +836,8 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
         }
     }
 
-    // "Activate" doubles as "start broadcast": once vm.activate() confirms the
-    // session is running, it emits here and this runs the same permission
+    // "Collect"/"Join" double as "start broadcast": once vm.collect() confirms the
+    // session is collecting, it emits here and this runs the same permission
     // preflight a dedicated broadcast button used to trigger directly.
     LaunchedEffect(Unit) {
         vm.broadcastReady.collect { sessionId -> requestBroadcast(sessionId) }
@@ -864,19 +866,19 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
             item { EmptyState("🗓️", "No sessions", "Create a session to see it here.") }
         } else {
             items(filtered, key = { it.id ?: it.hashCode().toString() }) { session ->
-                // Poll the queue only while the lecture is actually running — that
-                // is the only time submissions can arrive.
-                val isRunning = state.isRunning(session.id)
-                LaunchedEffect(session.id, isRunning) {
+                // Poll the queue only while actually collecting — that is the only time
+                // submissions can arrive (Within-session hasn't started accepting yet).
+                val collecting = state.isCollecting(session)
+                LaunchedEffect(session.id, collecting) {
                     val id = session.id ?: return@LaunchedEffect
-                    while (isRunning) {
+                    while (collecting) {
                         vm.loadPendingReviews(id)
                         delay(15_000)
                     }
                 }
                 SessionCard(
                     session = session,
-                    running = isRunning,
+                    stage = state.stageOf(session),
                     broadcast = state.broadcast?.takeIf { it.sessionId == session.id },
                     liveOnServer = state.isBroadcastingOnServer(session),
                     manualCode = session.id?.let { state.manualCodes[it] },
@@ -885,7 +887,8 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                         .mapNotNull { it.name?.takeIf(String::isNotBlank) },
                     bleEnabled = state.bleEnabled,
                     pendingReviews = state.reviewsFor(session.id),
-                    onActivate = { session.id?.let { if (session.active == true) vm.deactivate(it) else vm.activate(it) } },
+                    onCollect = { session.id?.let(vm::collect) },
+                    onDeactivate = { session.id?.let(vm::deactivate) },
                     onDelete = { confirmDelete = session },
                     onLoadManualCode = { session.id?.let(vm::loadManualCode) },
                     onPauseManualCode = { session.id?.let(vm::pauseManualCode) },
@@ -1035,12 +1038,16 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
             SettingsSection(
                 icon = Icons.Outlined.Person,
                 title = "Student sign-in",
-                subtitle = "New self-registering students must sign in with this email domain. " +
-                    "Existing accounts and staff you've added directly are never affected.",
+                subtitle = "When on, new self-registering students must sign in with a $DEFAULT_STUDENT_EMAIL_DOMAIN " +
+                    "address. Existing accounts and staff you've added directly are never affected.",
             ) {
-                StudentEmailDomainField(
-                    domain = settings.studentEmailDomain.orEmpty(),
-                    onSave = vm::setStudentEmailDomain,
+                PolicySwitch(
+                    label = "Restrict to $DEFAULT_STUDENT_EMAIL_DOMAIN",
+                    detail = "Off: any Google account can self-register as a student.",
+                    checked = settings.studentEmailDomain?.isNotBlank() == true,
+                    onCheckedChange = { on ->
+                        vm.setStudentEmailDomain(if (on) DEFAULT_STUDENT_EMAIL_DOMAIN else "")
+                    },
                 )
             }
         }
@@ -1051,50 +1058,60 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
                 title = "App version",
                 subtitle = "Devices below this Android versionCode are blocked with a mandatory update screen. 0 disables the check.",
             ) {
-                MinVersionField(
+                MinVersionStepper(
                     versionCode = settings.minSupportedVersionCode ?: 0,
-                    onSave = vm::setMinSupportedVersionCode,
+                    onChange = vm::setMinSupportedVersionCode,
                 )
             }
         }
     }
 }
 
+private const val DEFAULT_STUDENT_EMAIL_DOMAIN = "eng.pdn.ac.lk"
+
 @Composable
-private fun StudentEmailDomainField(domain: String, onSave: (String) -> Unit) {
-    var text by remember(domain) { mutableStateOf(domain) }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        AppTextField(
-            text,
-            { text = it.trim().lowercase() },
-            "Domain (blank disables)",
-            placeholder = "eng.pdn.ac.lk",
-            modifier = Modifier.weight(1f),
+private fun MinVersionStepper(versionCode: Int, onChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        StepperButton(symbol = "−", contentDescription = "Decrease", enabled = versionCode > 0) {
+            onChange((versionCode - 1).coerceAtLeast(0))
+        }
+        Text(
+            versionCode.toString(),
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 20.sp,
+            color = Palette.Ink,
+            modifier = Modifier.width(48.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
+        StepperButton(symbol = "+", contentDescription = "Increase", enabled = true) {
+            onChange(versionCode + 1)
+        }
     }
-    Spacer(Modifier.height(6.dp))
-    PillButton("Save domain", onClick = { onSave(text) }, tone = PillTone.Accent)
 }
 
 @Composable
-private fun MinVersionField(versionCode: Int, onSave: (Int) -> Unit) {
-    var text by remember(versionCode) { mutableStateOf(versionCode.toString()) }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        AppTextField(
-            text,
-            { text = it.filter(Char::isDigit) },
-            "Minimum versionCode",
-            placeholder = "0",
-            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
-            modifier = Modifier.weight(1f),
+private fun StepperButton(
+    symbol: String,
+    contentDescription: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(if (enabled) Palette.ChipBg else Palette.InactiveBg)
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            symbol,
+            color = if (enabled) Palette.AccentDark else Palette.Muted,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 18.sp,
         )
     }
-    Spacer(Modifier.height(6.dp))
-    PillButton(
-        "Save minimum version",
-        onClick = { onSave(text.toIntOrNull() ?: 0) },
-        tone = PillTone.Accent,
-    )
 }
 
 /** Plain-language restatement of the three distance outcomes, in the admin's own numbers. */
@@ -1251,7 +1268,7 @@ private fun BufferFields(nearBufferM: Int, farBufferM: Int, onSave: (Int, Int) -
 @Composable
 private fun SessionCard(
     session: StaffSessionDto,
-    running: Boolean,
+    stage: SessionStage,
     broadcast: BroadcastState?,
     manualCode: ManualCodeStatusDto?,
     buildingNames: List<String>,
@@ -1260,7 +1277,9 @@ private fun SessionCard(
     /** Server's `broadcasting` flag, freshest available — see call site (10s running-poll,
      *  falling back to the less-fresh full session list only if that poll hasn't hit yet). */
     liveOnServer: Boolean,
-    onActivate: () -> Unit,
+    /** Backs both "Collect" (Within-session) and "Join" (Collecting, not yet broadcasting here). */
+    onCollect: () -> Unit,
+    onDeactivate: () -> Unit,
     onDelete: () -> Unit,
     onLoadManualCode: () -> Unit,
     onPauseManualCode: () -> Unit,
@@ -1268,13 +1287,12 @@ private fun SessionCard(
     onRegenerateManualCode: () -> Unit,
     onReview: (String, Boolean) -> Unit,
 ) {
-    val active = session.active == true
+    val collecting = stage == SessionStage.Collecting
     // `broadcast` mirrors BroadcastService.state — non-null only on the phone that is
-    // actually transmitting. `liveOnServer` is the server-side truth, visible to every
-    // viewer (e.g. an admin looking at a session a lecturer is broadcasting from their own
-    // phone). Both must be checked, or a remote viewer would wrongly see "not broadcasting".
+    // actually transmitting BLE. This is independent of `stage`: Collecting means GPS is
+    // verifying every student regardless of whether anyone happens to be broadcasting.
     val liveHere = broadcast != null
-    val liveAnywhere = liveOnServer || liveHere
+    val liveAnywhere = collecting && (liveOnServer || liveHere)
     val buildingLabel = when {
         buildingNames.isNotEmpty() -> buildingNames.joinToString(", ")
         session.buildings.orEmpty().isNotEmpty() -> "${session.buildings.orEmpty().size} buildings"
@@ -1284,10 +1302,10 @@ private fun SessionCard(
     AppCard(
         Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        border = when {
-            liveAnywhere -> Palette.SuccessBorder
-            running -> Palette.RunningBorder
-            else -> Palette.Border
+        border = when (stage) {
+            SessionStage.Collecting -> Palette.SuccessBorder
+            SessionStage.WithinSession -> Palette.RunningBorder
+            SessionStage.Inactive -> Palette.Border
         },
     ) {
         Column(Modifier.padding(16.dp)) {
@@ -1295,13 +1313,13 @@ private fun SessionCard(
                 Box(
                     modifier = Modifier
                         .size(44.dp)
-                        .background(if (liveAnywhere) Palette.SuccessBg else Palette.AccentSoft, RoundedCornerShape(13.dp)),
+                        .background(if (collecting) Palette.SuccessBg else Palette.AccentSoft, RoundedCornerShape(13.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         Icons.Outlined.Schedule,
                         contentDescription = null,
-                        tint = if (liveAnywhere) Palette.SuccessText else Palette.AccentDark,
+                        tint = if (collecting) Palette.SuccessText else Palette.AccentDark,
                         modifier = Modifier.size(22.dp),
                     )
                 }
@@ -1321,7 +1339,7 @@ private fun SessionCard(
                         maxLines = 1,
                     )
                 }
-                SessionStatePill(active = active, running = running, onAir = liveAnywhere)
+                SessionStatePill(stage = stage)
             }
 
             Spacer(Modifier.height(14.dp))
@@ -1361,7 +1379,7 @@ private fun SessionCard(
 
             Spacer(Modifier.height(12.dp))
             when {
-                liveAnywhere -> {
+                collecting -> {
                     Column(
                         Modifier
                             .fillMaxWidth()
@@ -1372,26 +1390,43 @@ private fun SessionCard(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             LiveDot()
                             Spacer(Modifier.width(7.dp))
-                            Text("ATTENDANCE IS LIVE", color = Palette.SuccessText, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                            Text("COLLECTING ATTENDANCE", color = Palette.SuccessText, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
                         }
-                        if (liveHere) {
-                            val details = listOfNotNull(
-                                broadcast?.attendanceCount?.let { if (it == 1) "1 student marked" else "$it students marked" },
-                                broadcast?.minutesRemaining?.let { "${it}m remaining" },
-                            ).joinToString(" · ")
-                            if (details.isNotBlank()) {
-                                Text(details, color = Palette.SuccessText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                        when {
+                            liveHere -> {
+                                val details = listOfNotNull(
+                                    broadcast?.attendanceCount?.let { if (it == 1) "1 student marked" else "$it students marked" },
+                                    broadcast?.minutesRemaining?.let { "${it}m remaining" },
+                                ).joinToString(" · ")
+                                if (details.isNotBlank()) {
+                                    Text(details, color = Palette.SuccessText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                                }
+                                // A radio failure only ever stops THIS device's own broadcast — it
+                                // never turns off collecting. GPS keeps verifying either way, and
+                                // any other device that's joined is unaffected.
+                                broadcast?.error?.let {
+                                    Text(
+                                        "$it GPS is still verifying students for this session.",
+                                        color = Palette.ErrorText,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.padding(top = 4.dp),
+                                    )
+                                }
                             }
-                            broadcast?.error?.let {
-                                Text(it, color = Palette.ErrorText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                            liveAnywhere -> {
+                                // Broadcasting from a different device — no local BroadcastState to read
+                                // counts from, and we deliberately don't poll GET .../broadcast here since
+                                // that poll doubles as the broadcaster's own heartbeat; polling it from a
+                                // viewing device would falsely keep a dead broadcast looking alive.
+                                Text(
+                                    "Broadcasting from another device.",
+                                    color = Palette.SuccessText,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
                             }
-                        } else {
-                            // Broadcasting from a different device — no local BroadcastState to read counts
-                            // from, and we deliberately don't poll GET .../broadcast here since that poll
-                            // doubles as the broadcaster's own heartbeat; polling it from a viewing device
-                            // would falsely keep a dead broadcast looking alive.
-                            Text(
-                                "Broadcasting from another device.",
+                            else -> Text(
+                                "Verifying by GPS. No one is broadcasting Bluetooth yet.",
                                 color = Palette.SuccessText,
                                 fontSize = 12.sp,
                                 modifier = Modifier.padding(top = 4.dp),
@@ -1399,20 +1434,24 @@ private fun SessionCard(
                         }
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "Deactivate below to stop the broadcast.",
+                            when {
+                                liveHere -> "Deactivate below to stop collecting for everyone."
+                                bleEnabled -> "Tap Join below to also broadcast from this device."
+                                else -> "Bluetooth is off system-wide — GPS keeps collecting regardless."
+                            },
                             color = Palette.SuccessText.copy(alpha = 0.8f),
                             fontSize = 11.sp,
                         )
                     }
                 }
-                running && bleEnabled -> SessionNotice(
-                    "This session is running but not broadcasting. Deactivate and Activate again to restart it.",
+                stage == SessionStage.WithinSession -> SessionNotice(
+                    if (bleEnabled) {
+                        "This session is within its scheduled window. Tap Collect below to start collecting attendance."
+                    } else {
+                        "This session is within its scheduled window. Bluetooth is off system-wide — Collect will verify by GPS only."
+                    },
                 )
-                running -> SessionNotice(
-                    "Bluetooth is switched off system-wide. GPS is still verifying students for this session.",
-                )
-                active -> SessionNotice("Activating this session also starts its broadcast once the scheduled window begins.")
-                else -> SessionNotice("This session is inactive. Activate it to start verifying attendance and broadcasting.")
+                else -> SessionNotice("This session is outside its scheduled window. Collect becomes available once it opens.")
             }
 
             // Every session has a code, so this is unconditional now — but the live
@@ -1431,44 +1470,62 @@ private fun SessionCard(
 
             HorizontalDivider(color = Palette.Border, modifier = Modifier.padding(vertical = 14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // "Collect" starts collecting (Within-session → Collecting); once someone is
+                // already collecting, the identical action is offered as "Join" to any other
+                // device that hasn't started broadcasting yet — see StaffViewModel.collect().
+                // Disabled outside the scheduled window: there's nothing to collect yet.
+                val (leftText, leftIcon, leftEnabled) = when {
+                    stage == SessionStage.Inactive -> Triple("Collect", Icons.Outlined.PlayCircleOutline, false)
+                    stage == SessionStage.WithinSession -> Triple("Collect", Icons.Outlined.PlayCircleOutline, true)
+                    liveHere -> Triple("Broadcasting", Icons.Outlined.PlayCircleOutline, false)
+                    else -> Triple("Join", Icons.Outlined.PersonAdd, true)
+                }
                 SessionActionButton(
-                    text = if (active) "Deactivate" else "Activate",
-                    icon = if (active) Icons.Outlined.PauseCircleOutline else Icons.Outlined.PlayCircleOutline,
-                    tone = if (active) SessionActionTone.Neutral else SessionActionTone.Success,
-                    onClick = onActivate,
+                    text = leftText,
+                    icon = leftIcon,
+                    tone = SessionActionTone.Success,
+                    enabled = leftEnabled,
+                    onClick = onCollect,
                     modifier = Modifier.weight(1f),
                 )
-                SessionActionButton(
-                    text = "Delete",
-                    icon = Icons.Outlined.DeleteOutline,
-                    tone = SessionActionTone.Danger,
-                    onClick = onDelete,
-                    modifier = Modifier.weight(1f),
-                )
+                if (collecting) {
+                    SessionActionButton(
+                        text = "Deactivate",
+                        icon = Icons.Outlined.PauseCircleOutline,
+                        tone = SessionActionTone.Neutral,
+                        onClick = onDeactivate,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    SessionActionButton(
+                        text = "Delete",
+                        icon = Icons.Outlined.DeleteOutline,
+                        tone = SessionActionTone.Danger,
+                        onClick = onDelete,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun SessionStatePill(active: Boolean, running: Boolean, onAir: Boolean) {
-    val label = when {
-        onAir -> "Live"
-        running -> "In progress"
-        active -> "Active"
-        else -> "Inactive"
+private fun SessionStatePill(stage: SessionStage) {
+    val label = when (stage) {
+        SessionStage.Collecting -> "Collecting"
+        SessionStage.WithinSession -> "Within session"
+        SessionStage.Inactive -> "Inactive"
     }
-    val foreground = when {
-        onAir -> Palette.SuccessText
-        running -> Palette.AccentDark
-        active -> Palette.SuccessText
-        else -> Palette.Muted
+    val foreground = when (stage) {
+        SessionStage.Collecting -> Palette.SuccessText
+        SessionStage.WithinSession -> Palette.AccentDark
+        SessionStage.Inactive -> Palette.Muted
     }
-    val background = when {
-        onAir -> Palette.SuccessBg
-        running -> Palette.AccentSoft
-        active -> Palette.EnabledBg
-        else -> Palette.InactiveBg
+    val background = when (stage) {
+        SessionStage.Collecting -> Palette.SuccessBg
+        SessionStage.WithinSession -> Palette.AccentSoft
+        SessionStage.Inactive -> Palette.InactiveBg
     }
     Surface(shape = RoundedCornerShape(999.dp), color = background) {
         Row(
@@ -1517,6 +1574,7 @@ private fun SessionActionButton(
     tone: SessionActionTone,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     val container = when (tone) {
         SessionActionTone.Primary -> Palette.Accent
@@ -1538,11 +1596,12 @@ private fun SessionActionButton(
     }
     Surface(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
-        color = container,
-        contentColor = content,
-        border = BorderStroke(1.dp, border),
+        color = if (enabled) container else Palette.InactiveBg,
+        contentColor = if (enabled) content else Palette.Muted,
+        border = BorderStroke(1.dp, if (enabled) border else Palette.Border),
     ) {
         Row(
             horizontalArrangement = Arrangement.Center,

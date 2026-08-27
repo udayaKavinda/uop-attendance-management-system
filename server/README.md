@@ -89,6 +89,12 @@ depends on it.
   student can be up to `nearBufferM` from the building, and a student who heard a seeder
   is already one hop out; letting either re-broadcast would grow the effective radius.
 - Ending/deactivating/deleting a session removes its BLE token pool.
+- **Multiple staff devices may broadcast the same session simultaneously** (the "Join"
+  client action) — the primary token is per-session, not per-device, so every broadcasting
+  phone just advertises whatever the server currently hands back, extending physical
+  range in a large room. One device's radio failing (or that device stopping) never
+  affects the others or the session's `active` state; only the heartbeat-staleness sweep
+  or an explicit deactivate ends the channel for everyone.
 
 ### One-time sessions
 
@@ -121,6 +127,26 @@ active/deleted state, BLE broadcast/heartbeat, and code-rotation configuration.
 `occurrenceDate` is required for one-time sessions and null for recurring sessions.
 `buildings` requires at least one entry — GPS runs for every session and needs a polygon
 to measure against. There is no `verification` field.
+
+**`active` means "collecting attendance right now"** — created `false` always, and the
+*only* way it becomes `true` is `PATCH /:id/activate` ("Collect"/"Join" client-side),
+which itself requires being inside the session's own scheduled window
+(`isScheduledNow`) — collecting outside class time is rejected, not just hidden client-side.
+Three states fall out of `active` combined with the window:
+
+| `active` | in window | client-facing stage |
+|---|---|---|
+| — | no | Inactive |
+| `false` | yes | Within-session |
+| `true` | yes | Collecting |
+
+GPS verification runs for every student throughout Collecting regardless of Bluetooth —
+it has no on/off switch — so a broadcasting phone's radio failing never touches `active`;
+only an explicit `PATCH /:id/deactivate` or the window closing does. Recurring sessions
+have no expiry date, so nothing else would ever clear `active` between weekly
+occurrences — a background sweep (`deactivateRecurringSessionsPastWindow`, alongside the
+existing one-time-session expiry sweep) resets it once each day's window closes, so every
+occurrence needs its own explicit Collect tap.
 
 ### Geofence
 
@@ -214,8 +240,8 @@ Base path: `/api/admin/sessions` (owner/admin session guard applies).
 | Method/path | Purpose |
 |---|---|
 | `GET /?page=&limit=` | list accessible sessions, soonest/currently-running first. Omitting `limit` returns everything; passing it pages (`{ items, total, page, limit, hasMore }`) |
-| `GET /running` | running session broadcast reconciliation |
-| `PATCH /:id/activate` / `deactivate` | change active state |
+| `GET /running` | sessions whose scheduled window is open right now, **not** filtered by `active` — `{ sessionId, active, broadcasting }` per entry, refreshed on a faster cadence than the full list so a client can tell Within-session apart from Collecting without a full reload |
+| `PATCH /:id/activate` / `deactivate` | "Collect"/"Join" and "Deactivate" client-side — `activate` requires being inside the session's own window right now (see LectureSession above) |
 | `DELETE /:id` | soft-delete and revoke secrets |
 | `PATCH /:id/broadcast` | set `{ on }`; 403 while the global BLE switch is off |
 | `GET /:id/broadcast` | staff token poll/heartbeat and live counts |
@@ -237,6 +263,7 @@ Base path: `/api/admin/sessions` (owner/admin session guard applies).
 ## Background jobs and caches
 
 - Non-recurring session expiry.
+- Recurring-session `active` reset once each day's window closes.
 - Stale/out-of-window broadcast closure.
 - Out-of-window lecturer-code removal (every session, since every session has a code).
 - Expired seed-token cleanup (verification independently checks leases).
@@ -258,3 +285,10 @@ every band, the lecturer review queue, running-course DTO contracts, strict
 schedules/one-time dates, GPS geometry and fix filtering, active geofences, seeder
 eligibility, pages, and unified attendance. Keep Android and server contract tests
 aligned whenever a response changes.
+
+Not yet covered by a dedicated test: multi-batch course creation, the `add-lecturer`
+endpoint, pagination on the three admin list endpoints, the student email domain gate, the
+`minSupportedVersionCode` app-version check, the Collect/`activateSession` schedule-window
+gate, the recurring-session window-close sweep, and `isScheduledNow`/`getRunningSessionsForStaff`'s
+active-independent window check. Add contract tests for these before relying on CI to
+catch a regression there.

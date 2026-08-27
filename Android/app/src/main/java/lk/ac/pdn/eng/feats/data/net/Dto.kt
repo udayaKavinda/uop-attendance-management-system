@@ -174,9 +174,15 @@ data class CreateSessionReq(
 /** Body of PATCH /api/admin/sessions/:id/broadcast. */
 data class SetBroadcastReq(val on: Boolean)
 
-/** Element of GET /api/admin/sessions/running. */
+/**
+ * Element of GET /api/admin/sessions/running — sessions whose scheduled window is
+ * open right now, NOT filtered by `active`, so the client can distinguish
+ * Within-session (in window, active:false) from Collecting (in window, active:true).
+ * Refreshed on a faster ~10s cadence than the full session list.
+ */
 data class RunningSessionDto(
     val sessionId: String? = null,
+    val active: Boolean? = null,
     val broadcasting: Boolean? = null,
 )
 

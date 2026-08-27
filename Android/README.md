@@ -76,13 +76,48 @@ Lecturer broadcasting runs in a foreground service with a persistent notificatio
 heartbeat, rotating 15-second token, student count, and remaining session time. Both the
 UI and the server refuse to broadcast while the global Bluetooth switch is off.
 
-Session cards have a single **Activate**/**Deactivate** control — there is no separate
-"start broadcast" button. Activating a session that's already inside its scheduled window
-also runs the broadcast permission preflight and starts broadcasting in the same tap;
-deactivating also stops this phone's radio if it was the one broadcasting. Cards sort
-soonest/currently-running first rather than by creation or last-edited time, and no longer
-show a "Bluetooth + GPS" chip, since that's the same for every session and carries no
-information.
+### Session card stages
+
+Every session card is in exactly one of three stages, computed from the schedule window
+plus the server's `active` flag — not from Bluetooth:
+
+| Stage | Condition |
+|---|---|
+| **Inactive** | outside the scheduled window right now, regardless of `active` |
+| **Within-session** | inside the window, `active: false` — nobody has started collecting yet |
+| **Collecting** | inside the window, `active: true` — GPS is verifying every student, Bluetooth or not |
+
+The bottom-left button is **Collect** in Within-session (tap: activates the session and
+runs the broadcast permission preflight in the same action, same merged behavior as
+before) and disabled entirely in Inactive — there's nothing to collect outside class time,
+enforced server-side too (`activateSession` rejects it, not just a client-side disable).
+Once Collecting, the identical underlying action — activating an already-active session is
+a harmless no-op — is offered to any other viewer (a co-owning lecturer, or an admin) as
+**Join** instead, letting a second (or third) device add its own Bluetooth broadcast
+without needing to "start" anything that's already running. The bottom-right button is
+**Delete** outside Collecting and **Deactivate** while Collecting.
+
+A Bluetooth radio failure never changes the stage or ends collection for anyone: it stops
+only that one device's own broadcast (never the server's shared state), since GPS keeps
+verifying regardless and another joined device is unaffected either way. Only an explicit
+Deactivate, or the window itself closing, ends Collecting. Recurring sessions don't carry
+`active: true` into their next weekly occurrence either — a server-side sweep resets it
+once each day's window closes, so every occurrence needs its own Collect tap.
+
+"Collecting" status is visible to every viewer, not just the broadcasting phone: an admin
+or co-owning lecturer looking at a session someone else is broadcasting from their own
+device sees the same green "COLLECTING ATTENDANCE" card (sourced from the server's
+`active`/`broadcasting` flags, refreshed every ~10s) with a "Broadcasting from another
+device" note in place of the local attendance-count/time-remaining detail, which only the
+actual broadcasting phone has. On load, a device only ever stops its *own* local radio to
+match the server — it never starts broadcasting just because the server says some session
+is collecting, since that could never reliably distinguish "this phone was broadcasting
+before a restart" from "a completely different device is legitimately broadcasting right
+now."
+
+Cards sort soonest/currently-running first rather than by creation or last-edited time,
+and no longer show a "Bluetooth + GPS" chip, since that was the same for every session and
+carried no information.
 
 ### Lecturer code and peer seeding
 

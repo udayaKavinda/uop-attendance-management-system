@@ -68,9 +68,32 @@ data class StaffState(
 ) {
     val isAdmin: Boolean get() = role == "admin"
     val bleEnabled: Boolean get() = settings?.bleEnabled != false
+
+    /** In the session's scheduled window right now — regardless of `active`. See [stageOf]. */
     fun isRunning(sessionId: String?): Boolean = sessionId != null && running.containsKey(sessionId)
+
     fun reviewsFor(sessionId: String?): List<PendingReviewDto> =
         sessionId?.let { pendingReviews[it] } ?: emptyList()
+
+    /**
+     * `active`, preferring [running] — refreshed every ~10s by pollRunning() — over the
+     * session's own `active` field, which is only as fresh as the last full [sessions]
+     * reload. Same freshness reasoning as [isBroadcastingOnServer]: another staff member's
+     * dashboard (or the recurring-session window-close sweep) can flip this between two
+     * full reloads, and a stale read here would show the wrong stage.
+     */
+    fun isActiveOnServer(session: StaffSessionDto): Boolean =
+        running[session.id]?.active ?: (session.active == true)
+
+    /** In-window AND active — the session is actually accepting attendance right now. */
+    fun isCollecting(session: StaffSessionDto): Boolean = isRunning(session.id) && isActiveOnServer(session)
+
+    /** The three-stage session-card model — see stageOf's callers for the full contract. */
+    fun stageOf(session: StaffSessionDto): SessionStage = when {
+        !isRunning(session.id) -> SessionStage.Inactive
+        isActiveOnServer(session) -> SessionStage.Collecting
+        else -> SessionStage.WithinSession
+    }
 
     /**
      * Server-side "is this session broadcasting" truth, visible to every viewer (not just
@@ -82,6 +105,14 @@ data class StaffState(
     fun isBroadcastingOnServer(session: StaffSessionDto): Boolean =
         running[session.id]?.broadcasting ?: (session.broadcasting == true)
 }
+
+/**
+ * The three session-card stages: [Inactive] (out of the scheduled window, regardless of
+ * `active`), [WithinSession] (in window, nobody has tapped Collect yet), and [Collecting]
+ * (in window and active — GPS is verifying every student regardless of Bluetooth, which is
+ * exactly why a Bluetooth radio failure never changes this stage: it isn't tied to it).
+ */
+enum class SessionStage { Inactive, WithinSession, Collecting }
 
 class StaffViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -412,12 +443,24 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Activating also doubles as "start broadcast" — see [broadcastReady]. */
-    fun activate(sessionId: String) {
+    /**
+     * "Collect" (Within-session → Collecting) and "Join" (already Collecting, this device
+     * hasn't started broadcasting yet) are the same underlying action — activating an
+     * already-active session is a harmless no-op server-side, so this single function
+     * backs both buttons; only the displayed label differs based on current stage. Also
+     * doubles as "start broadcast" — see [broadcastReady].
+     */
+    fun collect(sessionId: String) {
         viewModelScope.launch {
             when (val res = repo.activateSession(sessionId)) {
                 is ApiResult.Success -> {
-                    setFlash("Session activated.")
+                    setFlash("Collecting attendance.")
+                    // Optimistic: flips the stage to Collecting immediately instead of
+                    // for one round trip still reading Within-session.
+                    _state.value = _state.value.copy(
+                        sessions = _state.value.sessions.map { if (it.id == sessionId) it.copy(active = true) else it },
+                        running = _state.value.running.mapValues { (id, r) -> if (id == sessionId) r.copy(active = true) else r },
+                    )
                     refresh()
                     refreshRunningNow()
                     if (_state.value.isRunning(sessionId) && _state.value.bleEnabled) {
@@ -429,15 +472,41 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Deactivating also stops this phone's radio if it's the one broadcasting this session. */
+    /**
+     * Deactivating also stops this phone's radio if it's the one broadcasting this session.
+     * Ends Collecting, but does NOT necessarily leave the scheduled window — it lands on
+     * Within-session if the window is still open, Inactive only once the window itself
+     * closes. So the optimistic update below flips `active` to false on the existing
+     * `running` entry rather than removing it; removing it would wrongly jump the stage
+     * straight to Inactive even mid-window.
+     *
+     * The local radio stop and the server call don't land at the same instant — the server
+     * round-trip takes a beat, and `refresh()` after it takes another. Without an optimistic
+     * update, a card briefly shows `liveHere = false` (radio just stopped) while `liveOnServer`
+     * is still the last-fetched `true`, which read as "ATTENDANCE IS LIVE · Broadcasting from
+     * another device" for a moment — misleadingly, since nothing is broadcasting anywhere.
+     * Clearing both local sources of truth synchronously, before the network calls, closes
+     * that window entirely instead of just narrowing it.
+     */
     fun deactivate(sessionId: String) {
+        if (BroadcastService.state.value?.sessionId == sessionId) {
+            BroadcastService.stop(getApplication())
+        }
+        _state.value = _state.value.copy(
+            sessions = _state.value.sessions.map {
+                if (it.id == sessionId) it.copy(active = false, broadcasting = false) else it
+            },
+            running = _state.value.running.mapValues { (id, r) ->
+                if (id == sessionId) r.copy(active = false, broadcasting = false) else r
+            },
+        )
         viewModelScope.launch {
-            if (BroadcastService.state.value?.sessionId == sessionId) {
-                BroadcastService.stop(getApplication())
-            }
             when (val res = repo.deactivateSession(sessionId)) {
                 is ApiResult.Success -> { setFlash("Session deactivated."); refresh() }
-                is ApiResult.Error -> setError(res.message)
+                // The optimistic clear above assumed success — resync with the server
+                // now that it didn't, rather than leaving the UI showing a state that
+                // never actually happened.
+                is ApiResult.Error -> { setError(res.message); refresh() }
             }
         }
     }

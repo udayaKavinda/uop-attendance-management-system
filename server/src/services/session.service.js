@@ -32,12 +32,22 @@ function evaluateScheduleWindow(sessionConfig, now = new Date()) {
   return { ok: true };
 }
 
-/** Single source of truth for whether a session is inside its weekly time window. */
-function isWithinScheduleWindow(sessionItem, now = new Date()) {
-  if (!sessionItem || !sessionItem.active || sessionItem.deleted) return false;
+/**
+ * Day/date/time match only — deliberately ignores the `active` flag, so it can gate
+ * the transition INTO active (Collect) for a session that, by definition, isn't
+ * active yet at the moment of the check.
+ */
+function isScheduledNow(sessionItem, now = new Date()) {
+  if (!sessionItem || sessionItem.deleted) return false;
   if (typeof sessionItem.recurring !== 'boolean') return false;
   if (sessionItem.recurring === false && sessionItem.occurrenceDate !== localYmd(now)) return false;
   return evaluateScheduleWindow(sessionItem, now).ok;
+}
+
+/** Single source of truth for whether a session is inside its weekly time window. */
+function isWithinScheduleWindow(sessionItem, now = new Date()) {
+  if (!sessionItem || !sessionItem.active) return false;
+  return isScheduledNow(sessionItem, now);
 }
 
 function checkScheduleWindow(sessionConfig) {
@@ -122,19 +132,26 @@ async function getRunningCoursesForStudent(now = new Date()) {
   });
 }
 
+/**
+ * Sessions whose scheduled window is open right now — deliberately NOT filtered by
+ * `active`, so the client can tell "in window but nobody's collecting yet" (Within
+ * session) apart from "out of window" (Inactive) apart from "in window and active"
+ * (Collecting). Use `isScheduledNow`, not `isWithinScheduleWindow`, for exactly
+ * that reason: the latter requires `active` and would hide the Within-session case.
+ */
 async function getRunningSessionsForStaff(scope, now = new Date()) {
   const { day } = getCurrentScheduleContext(now);
   const sessions = await LectureSession.find({
     deleted: false,
-    active: true,
     lectureDay: day,
     ...scope,
   }).populate('course', 'active');
 
   return sessions
-    .filter((s) => s.course?.active && isWithinScheduleWindow(s, now))
+    .filter((s) => s.course?.active && isScheduledNow(s, now))
     .map((s) => ({
       sessionId: String(s._id),
+      active: s.active === true,
       // Raw flag (not staleness-checked): the dashboard uses it to reconcile —
       // auto-resume the broadcast or turn it off on the server.
       broadcasting: Boolean(s.broadcasting),
@@ -144,6 +161,7 @@ async function getRunningSessionsForStaff(scope, now = new Date()) {
 module.exports = {
   BROADCAST_WINDOW_ERROR,
   isWithinScheduleWindow,
+  isScheduledNow,
   checkScheduleWindow,
   isBroadcastLive,
   invalidateActiveSessionCache,

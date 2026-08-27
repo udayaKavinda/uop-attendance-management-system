@@ -1,7 +1,7 @@
 const LectureSession = require('../models/LectureSession');
 const { isNonRecurringExpired } = require('../utils/schedule');
 const { BROADCAST_STALE_MS } = require('../utils/constants');
-const { isWithinScheduleWindow } = require('./session.service');
+const { isWithinScheduleWindow, invalidateActiveSessionCache } = require('./session.service');
 const { closeBroadcast } = require('./lectureSession.service');
 const manualCode = require('./manualCode.service');
 const bluetoothCode = require('./bluetoothCode.service');
@@ -11,6 +11,22 @@ async function deactivateExpiredNonRecurringSessions(filter = {}) {
   const expiredIds = candidates.filter((s) => isNonRecurringExpired(s)).map((s) => s._id);
   if (expiredIds.length === 0) return;
   await LectureSession.updateMany({ _id: { $in: expiredIds } }, { $set: { active: false } });
+}
+
+/**
+ * Recurring sessions have no expiry date, so nothing else ever clears `active` once
+ * a lecturer collects — a "Collecting" session would otherwise stay collecting
+ * forever, then immediately reappear as "Collecting" the instant next week's window
+ * opens with no one having tapped Collect. Resets it here once today's window
+ * closes, so every occurrence needs its own explicit Collect tap, matching how
+ * one-time sessions already go inactive via expiry.
+ */
+async function deactivateRecurringSessionsPastWindow(now = new Date()) {
+  const candidates = await LectureSession.find({ active: true, recurring: true, deleted: false });
+  const pastWindowIds = candidates.filter((s) => !isWithinScheduleWindow(s, now)).map((s) => s._id);
+  if (pastWindowIds.length === 0) return;
+  await LectureSession.updateMany({ _id: { $in: pastWindowIds } }, { $set: { active: false } });
+  invalidateActiveSessionCache();
 }
 
 /**
@@ -67,6 +83,9 @@ function startNonRecurringExpiryJob() {
     deactivateExpiredNonRecurringSessions().catch((err) => {
       console.error('[session-expiry]', err);
     });
+    deactivateRecurringSessionsPastWindow().catch((err) => {
+      console.error('[recurring-session-window-sweep]', err);
+    });
     closeStaleBroadcasts().catch((err) => {
       console.error('[broadcast-sweep]', err);
     });
@@ -86,6 +105,7 @@ function startNonRecurringExpiryJob() {
 
 module.exports = {
   deactivateExpiredNonRecurringSessions,
+  deactivateRecurringSessionsPastWindow,
   closeStaleBroadcasts,
   closeOutOfWindowBroadcasts,
   closeOutOfWindowManualCodes,
