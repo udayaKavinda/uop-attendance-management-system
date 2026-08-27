@@ -388,20 +388,11 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
     fun disableCourse(courseId: String) = mutate("Course archived.") { repo.disableCourse(courseId) }
     fun enableCourse(courseId: String) = mutate("Course unarchived.") { repo.enableCourse(courseId) }
 
+    /** Owner or admin — wholesale add/remove, same call for both roles. */
     fun assignLecturers(courseId: String, lecturerIds: List<String>) {
         viewModelScope.launch {
             when (val res = repo.assignLecturer(courseId, lecturerIds)) {
                 is ApiResult.Success -> { setFlash("Owners updated."); refresh() }
-                is ApiResult.Error -> setError(res.message)
-            }
-        }
-    }
-
-    /** Additive-only: a course owner adds ONE more co-owner (cannot remove one this way). */
-    fun addLecturer(courseId: String, lecturerId: String) {
-        viewModelScope.launch {
-            when (val res = repo.addLecturer(courseId, lecturerId)) {
-                is ApiResult.Success -> { setFlash("Owner added."); refresh() }
                 is ApiResult.Error -> setError(res.message)
             }
         }

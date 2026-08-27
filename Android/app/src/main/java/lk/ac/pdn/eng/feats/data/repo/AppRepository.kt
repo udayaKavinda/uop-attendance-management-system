@@ -1,6 +1,5 @@
 package lk.ac.pdn.eng.feats.data.repo
 
-import lk.ac.pdn.eng.feats.data.net.AddLecturerReq
 import lk.ac.pdn.eng.feats.data.net.ApiResult
 import lk.ac.pdn.eng.feats.data.net.ApiService
 import lk.ac.pdn.eng.feats.data.net.AssignLecturerReq
@@ -76,11 +75,9 @@ class AppRepository(private val api: ApiService) {
     suspend fun createCourse(req: CreateCourseReq): ApiResult<List<CourseDto>> =
         apiCall { api.createCourse(req).courses ?: emptyList() }
 
+    /** Owner or admin — wholesale add/remove. */
     suspend fun assignLecturer(courseId: String, lecturerIds: List<String>): ApiResult<CourseDto?> =
         apiCall { api.assignLecturer(courseId, AssignLecturerReq(lecturerIds)).course }
-
-    suspend fun addLecturer(courseId: String, lecturerId: String): ApiResult<CourseDto?> =
-        apiCall { api.addLecturer(courseId, AddLecturerReq(lecturerId)).course }
 
     suspend fun disableCourse(courseId: String): ApiResult<Unit> =
         apiCall { api.disableCourse(courseId); Unit }

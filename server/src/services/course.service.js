@@ -1,7 +1,6 @@
 const Course = require('../models/Course');
 const LectureSession = require('../models/LectureSession');
 const ManualCode = require('../models/ManualCode');
-const Person = require('../models/Person');
 const bluetoothCode = require('./bluetoothCode.service');
 const { invalidateActiveSessionCache } = require('./session.service');
 const { validateLecturerIds } = require('../validators/course.validator');
@@ -100,7 +99,12 @@ async function enableCourse(course) {
   return { ok: true, course };
 }
 
-/** Admin-only: wholesale reassignment (can add AND remove owners). */
+/**
+ * Owner or admin — wholesale reassignment (add and remove owners in one call), gated by
+ * `requireCourseAccess()` at the route so a lecturer may only do this on courses they
+ * already own. The "at least 1 owner" rule in `validateLecturerIds` is what stops anyone
+ * (owner or admin) from saving a course down to zero owners.
+ */
 async function assignLecturers(courseId, lecturerIds) {
   const validation = await validateLecturerIds(lecturerIds);
   if (!validation.ok) return validation;
@@ -112,29 +116,10 @@ async function assignLecturers(courseId, lecturerIds) {
   return { ok: true, course };
 }
 
-/**
- * Additive only: an existing owner (or admin) can add ONE more co-owner, but
- * can never remove an owner this way — removal stays admin-only via
- * `assignLecturers`, so a lecturer can't be griefed off their own course.
- */
-async function addLecturer(course, lecturerId) {
-  const id = String(lecturerId || '').trim();
-  const lecturer = await Person.findOne({ _id: id, role: 'lecturer', deleted: false });
-  if (!lecturer) return { ok: false, status: 400, error: 'Invalid lecturerId' };
-  const already = (course.lecturers || []).some((l) => String(l) === id);
-  if (!already) {
-    course.lecturers.push(lecturer._id);
-    await course.save();
-  }
-  await course.populate('lecturers', 'name email phone');
-  return { ok: true, course };
-}
-
 module.exports = {
   listForStaff,
   createCourse,
   disableCourse,
   enableCourse,
   assignLecturers,
-  addLecturer,
 };

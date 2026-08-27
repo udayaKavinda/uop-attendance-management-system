@@ -14,7 +14,8 @@ authoritative server reference for the implemented system.
 - A public app-version check the client uses to enforce an admin-set minimum Android
   `versionCode`, blocking outdated installs with a mandatory update prompt.
 - Staff course/session administration with lecturer ownership enforcement; any existing
-  owner (not just an admin) may add a co-owner to their own course.
+  owner (not just an admin) may add and remove co-owners on their own course, same as an
+  admin can on any course.
 - One verification model for every session: Bluetooth and GPS together, with a
   lecturer-read code as the escalation path and a review queue behind it.
 - Peer BLE seeding with rotating tokens, bounded leases, and decoy windows.
@@ -227,8 +228,7 @@ Base path: `/api/admin/courses`.
 |---|---|---|
 | `GET /?page=&limit=&lecturerId=` | staff | owned courses; admins see all, or one lecturer's with `lecturerId`. Omitting `limit` returns everything; passing it pages (`{ items, total, page, limit, hasMore }`) |
 | `POST /` | staff | create a course — `batches: string[]` creates one Course document per batch |
-| `PATCH /:courseId/assign-lecturer` | admin | wholesale reassignment — set any number of owners (add or remove) |
-| `PATCH /:courseId/add-lecturer` | owner/admin | additive-only: add ONE co-owner, never removes one |
+| `PATCH /:courseId/assign-lecturer` | owner/admin | wholesale reassignment — set any number of owners (add or remove); a lecturer may only do this on a course they already own |
 | `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course — this is also what "delete" means; no destructive delete exists |
 | `POST /:courseId/sessions` | owner/admin | atomically create schedule, buildings (≥1, required), and code rotation |
 | `GET /:courseId/attendance-matrix` | owner/admin | per-student `present` / `under_review` / absent matrix |
@@ -286,8 +286,10 @@ schedules/one-time dates, GPS geometry and fix filtering, active geofences, seed
 eligibility, pages, and unified attendance. Keep Android and server contract tests
 aligned whenever a response changes.
 
-Not yet covered by a dedicated test: multi-batch course creation, the `add-lecturer`
-endpoint, pagination on the three admin list endpoints, the student email domain gate, the
+Not yet covered by a dedicated test: multi-batch course creation, the lecturer-owner path
+through `assign-lecturer` (as opposed to the admin path), pagination on the three admin
+list endpoints, the lecturer directory's staff-wide (not admin-only) access, the student
+email domain gate, the
 `minSupportedVersionCode` app-version check, the Collect/`activateSession` schedule-window
 gate, the recurring-session window-close sweep, and `isScheduledNow`/`getRunningSessionsForStaff`'s
 active-independent window check. Add contract tests for these before relying on CI to

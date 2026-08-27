@@ -25,8 +25,9 @@ or React client.
 ### Lecturer
 
 Tabs: **Courses**, **Create session**, and **Sessions**. Lecturers manage only courses they
-own, add co-owners to a course they own (additive only — never removes an existing owner;
-wholesale reassignment stays admin-only), create sessions (choosing buildings — mandatory —
+own, but on those courses the same **Owners** dialog admins use is available to them too —
+add and remove co-owners freely, same wholesale reassignment either role gets, just scoped
+to courses they already own. Lecturers create sessions (choosing buildings — mandatory —
 and code rotation), broadcast Bluetooth while a session runs, reveal/pause/regenerate the
 attendance code, decide the review queue, and open attendance reports. Neither dashboard
 header shows a "University of Peradeniya" subtitle — that branding lives only on the sign-in
@@ -226,10 +227,11 @@ Authentication: `/api/auth/google-nonce`, `/api/auth/google-id-token`,
 Student: `/api/courses/running`, `/api/attendance-status`, `/api/attendance`,
 `/api/bluetooth-target`, and `/api/attendance/seed-token`.
 
-Staff/admin: `/api/admin/courses` (paged, plus `add-lecturer`), course sessions and
-attendance matrix, `/api/admin/sessions` (paged) with broadcast, lecturer-code, and
-review-queue actions, `/api/admin/lecturers` (paged), `/api/admin/geofences`, and
-`/api/admin/settings`.
+Staff/admin: `/api/admin/courses` (paged, plus `assign-lecturer` open to any owning
+lecturer, not just admins), course sessions and attendance matrix, `/api/admin/sessions`
+(paged) with broadcast, lecturer-code, and review-queue actions, `/api/admin/lecturers`
+(paged, readable by any staff member for the Owners search — writes stay admin-only),
+`/api/admin/geofences`, and `/api/admin/settings`.
 
 The server README is the authoritative request/response and access-control reference.
 

@@ -204,7 +204,6 @@ private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (Str
     var name by remember { mutableStateOf("") }
     var filterQuery by remember { mutableStateOf("") }
     var ownersFor by remember { mutableStateOf<CourseDto?>(null) }
-    var addOwnerFor by remember { mutableStateOf<CourseDto?>(null) }
 
     // Server-scoped by selectedLecturerFilter for admins (see StaffViewModel.setLecturerFilter) —
     // state.courses is already the right set, just re-sorted for archived-last display.
@@ -320,13 +319,11 @@ private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (Str
             items(visibleCourses, key = { it.id ?: it.hashCode().toString() }) { course ->
                 CourseCard(
                     course = course,
-                    isAdmin = state.isAdmin,
                     onOpen = { course.id?.let(onOpenMatrix) },
                     onArchiveToggle = {
                         course.id?.let { if (course.active == false) vm.enableCourse(it) else vm.disableCourse(it) }
                     },
                     onOwners = { ownersFor = course },
-                    onAddOwner = { addOwnerFor = course },
                 )
             }
             if (state.coursesHasMore) {
@@ -341,15 +338,6 @@ private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (Str
             vm = vm,
             onSave = { ids -> course.id?.let { vm.assignLecturers(it, ids) }; ownersFor = null },
             onDismiss = { ownersFor = null },
-        )
-    }
-
-    addOwnerFor?.let { course ->
-        AddOwnerDialog(
-            course = course,
-            vm = vm,
-            onSave = { lecturerId -> course.id?.let { vm.addLecturer(it, lecturerId) } },
-            onDismiss = { addOwnerFor = null },
         )
     }
 }
@@ -448,11 +436,9 @@ private fun List<CourseDto>.sortedForDisplay(): List<CourseDto> =
 @Composable
 private fun CourseCard(
     course: CourseDto,
-    isAdmin: Boolean,
     onOpen: () -> Unit,
     onArchiveToggle: () -> Unit,
     onOwners: () -> Unit,
-    onAddOwner: () -> Unit,
 ) {
     val archived = course.active == false
     AppCard(
@@ -485,11 +471,9 @@ private fun CourseCard(
             HorizontalDivider(color = Palette.Border)
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (isAdmin) {
-                    PillButton("Owners", onClick = onOwners, tone = PillTone.Accent)
-                } else {
-                    PillButton("Add owner", onClick = onAddOwner, tone = PillTone.Accent)
-                }
+                // A course only ever appears here for an owning lecturer or an admin —
+                // both may add and remove owners, same as the admin Owners dialog.
+                PillButton("Owners", onClick = onOwners, tone = PillTone.Accent)
                 PillButton(
                     if (archived) "Unarchive" else "Archive",
                     onClick = onArchiveToggle,
@@ -2081,48 +2065,6 @@ private fun OwnersDialog(
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-/** Lecturer-side (or admin) additive-only co-owner add — cannot remove an existing owner. */
-@Composable
-private fun AddOwnerDialog(
-    course: CourseDto,
-    vm: StaffViewModel,
-    onSave: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val state by vm.state.collectAsState()
-    val existingIds = course.lecturers?.mapNotNull { it.id }?.toSet() ?: emptySet()
-    var searchQuery by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Add owner — ${course.code}") },
-        text = {
-            Column(Modifier.fillMaxWidth()) {
-                Text(
-                    "Search for a lecturer to add as a co-owner of this course.",
-                    color = Palette.Muted,
-                    fontSize = 13.sp,
-                )
-                Spacer(Modifier.height(8.dp))
-                LecturerSearchField(
-                    query = searchQuery,
-                    onQueryChange = {
-                        searchQuery = it
-                        vm.searchLecturers(it)
-                    },
-                    results = state.lecturerSearchResults,
-                    loading = state.lecturerSearchLoading,
-                    onSelect = { lect -> lect.id?.let(onSave) },
-                    placeholder = "Search lecturer to add…",
-                    excludeIds = existingIds,
-                )
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
 }
 

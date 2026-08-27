@@ -43,15 +43,9 @@ async function enable(req, res) {
   return res.json({ success: true, course: result.course });
 }
 
+/** Owner or admin — wholesale reassignment (add and remove owners in one call). */
 async function assignLecturer(req, res) {
   const result = await courseService.assignLecturers(req.params.courseId, req.body.lecturerIds);
-  if (!result.ok) return res.status(result.status).json({ error: result.error });
-  return res.json({ success: true, course: result.course });
-}
-
-/** Owner or admin adds ONE co-owner to a course they already have access to. */
-async function addLecturer(req, res) {
-  const result = await courseService.addLecturer(req.course, req.body.lecturerId);
   if (!result.ok) return res.status(result.status).json({ error: result.error });
   return res.json({ success: true, course: result.course });
 }
@@ -73,7 +67,6 @@ module.exports = {
   disable,
   enable,
   assignLecturer,
-  addLecturer,
   createSession,
   attendanceMatrix,
 };

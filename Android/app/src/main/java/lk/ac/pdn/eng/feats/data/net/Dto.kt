@@ -107,10 +107,8 @@ data class CreateCourseReq(
     val lecturerIds: List<String>? = null,
 )
 
+/** Body for PATCH .../courses/:id/assign-lecturer — owner or admin, wholesale add/remove. */
 data class AssignLecturerReq(val lecturerIds: List<String>)
-
-/** Body for PATCH .../courses/:id/add-lecturer — additive-only co-owner add. */
-data class AddLecturerReq(val lecturerId: String)
 
 // ── Sessions ───────────────────────────────────────────────────────────────────
 

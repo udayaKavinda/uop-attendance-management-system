@@ -73,17 +73,11 @@ interface ApiService {
     @POST("api/admin/courses")
     suspend fun createCourse(@Body body: CreateCourseReq): CreateCourseRes
 
+    /** Owner or admin — wholesale add/remove. */
     @PATCH("api/admin/courses/{courseId}/assign-lecturer")
     suspend fun assignLecturer(
         @Path("courseId") courseId: String,
         @Body body: AssignLecturerReq,
-    ): CourseRes
-
-    /** Additive-only: an existing owner (or admin) adds ONE co-owner. */
-    @PATCH("api/admin/courses/{courseId}/add-lecturer")
-    suspend fun addLecturer(
-        @Path("courseId") courseId: String,
-        @Body body: AddLecturerReq,
     ): CourseRes
 
     @PATCH("api/admin/courses/{courseId}/disable")
