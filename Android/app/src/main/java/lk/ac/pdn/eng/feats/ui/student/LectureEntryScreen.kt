@@ -81,7 +81,12 @@ import lk.ac.pdn.eng.feats.ui.theme.Palette
 fun LectureEntryScreen(
     email: String,
     onLogout: () -> Unit,
-    vm: LectureEntryViewModel = viewModel(),
+    // Keyed on email: this screen is composed directly from AppRoot's login branch,
+    // not as a NavHost destination, so without a key a device that signs out and a
+    // different account signs back in (same process) would keep the PREVIOUS
+    // student's ViewModel — stale outcome and all — and the new student could land
+    // straight on "You're marked present" without having done anything.
+    vm: LectureEntryViewModel = viewModel(key = email),
 ) {
     val state by vm.state.collectAsState()
     val context = LocalContext.current

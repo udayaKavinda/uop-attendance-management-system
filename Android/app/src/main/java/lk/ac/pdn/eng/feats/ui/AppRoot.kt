@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -74,10 +75,22 @@ fun AppRoot(
         }
 
         is SessionState.LoggedIn -> {
-            if (s.user.isStaff) {
-                StaffNav(email = s.user.email, onLogout = mainVm::logout)
-            } else {
-                LectureEntryScreen(email = s.user.email, onLogout = mainVm::logout)
+            // Keyed on identity: `LectureEntryScreen`/`StaffNav` are called directly
+            // here rather than as NavHost destinations, so `viewModel()` inside them
+            // resolves to this Activity's ViewModelStore. Without a key, a device that
+            // signs out and a different account signs back in (same process — a very
+            // real scenario when several students in a row use one phone at "Get
+            // help") keeps the SAME LectureEntryViewModel/StaffViewModel instance,
+            // stale outcome and all: the new user could land straight on the previous
+            // user's "You're marked present" screen without having done anything.
+            // Keying on email forces a fresh ViewModel — and fresh screen state —
+            // whenever the signed-in identity changes.
+            key(s.user.email) {
+                if (s.user.isStaff) {
+                    StaffNav(email = s.user.email, onLogout = mainVm::logout)
+                } else {
+                    LectureEntryScreen(email = s.user.email, onLogout = mainVm::logout)
+                }
             }
         }
     }
