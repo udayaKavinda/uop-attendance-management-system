@@ -25,7 +25,6 @@ export function LoginScreen({ error, onSignIn }: { error?: string; onSignIn: () 
         <PrimaryButton text="Continue with Google" onClick={onSignIn} />
         {showInstallHint && (
           <p className="subtitle" style={{ textAlign: 'center', marginTop: 16 }}>
-            Tip: tap Share, then “Add to Home Screen” to open attendance in one tap next time.
           </p>
         )}
       </Card>

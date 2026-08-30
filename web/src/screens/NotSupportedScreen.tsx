@@ -19,8 +19,7 @@ export function NotSupportedScreen() {
           <h1 className="hero__title">Use the Android app</h1>
           <p className="hero__body" style={{ marginBottom: 0 }}>
             This web version is for iPhone and iPad only. On Android, install the UOP Attendance
-            app — it marks attendance over Bluetooth as well as GPS, so it works in places this
-            page cannot.
+            app.
           </p>
         </div>
       </Card>
