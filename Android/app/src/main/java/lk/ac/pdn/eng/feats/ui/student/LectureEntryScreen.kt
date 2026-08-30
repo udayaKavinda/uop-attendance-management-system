@@ -300,7 +300,7 @@ private fun NeedsHelpPanel(vm: LectureEntryViewModel, onBegin: () -> Unit) {
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            "Move further inside the lecture room and try once more, or ask your lecturer for the attendance code.",
+            "Try once more, or ask your lecturer for the attendance code.",
             color = Palette.WarnText.copy(alpha = 0.85f),
             fontSize = 12.sp,
             textAlign = TextAlign.Center,

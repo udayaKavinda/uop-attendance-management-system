@@ -167,10 +167,7 @@ function NeedsHelpPanel({
         🤔
       </div>
       <div className="needshelp__title">We couldn't confirm you're in the lecture</div>
-      <div className="needshelp__body">
-        Move further inside the lecture room and try once more, or ask your lecturer for the
-        attendance code.
-      </div>
+      <div className="needshelp__body">Try once more, or ask your lecturer for the attendance code.</div>
       <div className="stack">
         <PrimaryButton text="Try again" variant="bluetooth" onClick={onTryAgain} />
         <PrimaryButton text="Get help" variant="plain" onClick={onGetHelp} />
