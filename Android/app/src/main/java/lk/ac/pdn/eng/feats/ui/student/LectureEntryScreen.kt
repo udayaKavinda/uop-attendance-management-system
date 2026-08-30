@@ -462,7 +462,7 @@ private fun CourseSearchDropdown(
     AppTextField(
         query,
         { query = it },
-        "Search your Course",
+        "Search your course",
         placeholder = "Course code or name…",
         enabled = enabled,
     )
