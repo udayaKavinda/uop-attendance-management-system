@@ -1,0 +1,6 @@
+node_modules
+dist
+*.local
+
+# Rendered from scripts/generate-icon.mjs on every build — see that file.
+public/apple-touch-icon.png

@@ -42,13 +42,27 @@ red-fills a flagged cell and attaches the reason as a cell comment.
 
 - `Android/` — Kotlin/Jetpack Compose application for students, lecturers, and admins.
 - `server/` — Express API, MongoDB models, authentication, attendance logic, and tests.
+- `web/` — React student check-in client for iOS, served by Express at `/app`.
 - `docs/attendance-verification-design.md` — implemented verification behavior and
   security decisions.
 - `deploy/` — Nginx reverse-proxy example.
 - `.github/workflows/deploy.yml` — tested, main-only production deployment with rollback.
 
-There is no React/web application. Express serves the API plus public `/privacy` and
-`/delete` pages.
+Express also serves the public `/privacy` and `/delete` pages.
+
+### Why there is a web client, and why it is iOS-only
+
+Android has the native app, which verifies over Bluetooth *and* GPS. No iOS browser
+can read a Bluetooth beacon — Safari has no Web Bluetooth — so `web/` is GPS-only and
+exists to give iPhone users a way in ahead of a native iOS app. Sending Android users
+to it would be a downgrade, so it shows them a "use the Android app" notice instead.
+That gate is a UX guard, not a security boundary: nothing about it is enforced
+server-side, and it needs no server enforcement, because the GPS and lecturer-code
+paths it uses are the same ones the Android app already exposes.
+
+It is served from the API's own origin on purpose. Authentication is an httpOnly
+session cookie and Safari blocks third-party cookies outright, so a separately-hosted
+client would be signed out on every request. See [web/README.md](web/README.md).
 
 ## Quick start
 
@@ -56,6 +70,13 @@ There is no React/web application. Express serves the API plus public `/privacy`
 npm --prefix server ci
 npm --prefix server test -- --runInBand
 npm --prefix server start
+```
+
+Web client (optional; the API runs without it and answers `/app` with a 503 until built):
+
+```bash
+npm --prefix web ci
+npm --prefix web run build
 ```
 
 Android (JDK 17 and Android SDK required):

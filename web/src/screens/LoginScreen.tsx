@@ -1,0 +1,36 @@
+import { Card, ErrorBanner, Screen } from '../components/Chrome';
+import { isStandalone } from '../platform/ios';
+
+export function LoginScreen({ error, onSignIn }: { error?: string; onSignIn: () => void }) {
+  // Only worth suggesting from a Safari tab; from the home screen it is done.
+  const showInstallHint = !isStandalone();
+
+  return (
+    <Screen>
+      <Card>
+        <div className="hero">
+          <div className="hero__logo" aria-hidden="true">
+            🎓
+          </div>
+          <h1 className="hero__title">Attendance</h1>
+          <p className="hero__body">
+            Sign in with your university Google account to mark your lecture attendance.
+          </p>
+        </div>
+        {error && (
+          <div style={{ marginBottom: 14 }}>
+            <ErrorBanner message={error} />
+          </div>
+        )}
+        <button type="button" className="button" onClick={onSignIn}>
+          Continue with Google
+        </button>
+        {showInstallHint && (
+          <p className="subtitle" style={{ textAlign: 'center', marginTop: 16 }}>
+            Tip: tap Share, then “Add to Home Screen” to open attendance in one tap next time.
+          </p>
+        )}
+      </Card>
+    </Screen>
+  );
+}

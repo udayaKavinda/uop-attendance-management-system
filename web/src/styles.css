@@ -1,0 +1,542 @@
+/*
+ * Palette mirrored from the native app's Compose theme
+ * (Android/…/ui/theme/Color.kt), which in turn mirrors the original React
+ * tokens — so the two clients stay visually one product.
+ */
+:root {
+  --app-bg: #f7f8fa;
+  --card: #ffffff;
+  --ink: #111827;
+  --muted: #6b7280;
+  --border: #e8eaef;
+
+  --accent: #7b61ff;
+  --accent-dark: #5b4cdb;
+  --accent-soft: rgba(123, 97, 255, 0.12);
+
+  --grad-indigo: #6366f1;
+  --grad-violet: #8b5cf6;
+
+  --bt-deep: #0369a1;
+  --bt-mid: #0284c7;
+  --bt-light: #38bdf8;
+  --bt-badge-bg: #e0f2fe;
+  --bt-badge-border: #bae6fd;
+
+  --success-text: #047857;
+  --success-bg: #d1fae5;
+
+  --warn-text: #92400e;
+  --warn-bg: #fef3c7;
+
+  --error-text: #b42318;
+  --error-bg: #fef3f2;
+  --error-border: #fecdca;
+
+  --inactive-bg: #f9fafb;
+  --input-border: #d8dce6;
+  --chip-bg: #f5f3ff;
+
+  --uop-maroon: #7a1414;
+
+  --radius-panel: 14px;
+  --radius-card: 20px;
+  --pill: 999px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--app-bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  /* iOS bounces the whole document by default, which looks broken in standalone. */
+  overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+/* ── Layout ───────────────────────────────────────────────────────────────── */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  /* Clears the notch and home indicator once added to the home screen. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+.app__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 12px 16px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar__logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--chip-bg);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+}
+
+.topbar__titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.topbar__title {
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.topbar__subtitle {
+  color: var(--accent-dark);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__signout {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px;
+}
+
+.footer {
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 12px 16px 16px;
+}
+
+.card {
+  width: 100%;
+  max-width: 480px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 22px;
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04), 0 8px 24px rgba(17, 24, 39, 0.05);
+}
+
+/* ── Type ─────────────────────────────────────────────────────────────────── */
+
+.title {
+  font-size: 17px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.subtitle {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0 0;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+/* ── Controls ─────────────────────────────────────────────────────────────── */
+
+.button {
+  width: 100%;
+  border: 0;
+  border-radius: var(--pill);
+  padding: 14px 18px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(95deg, var(--grad-indigo), var(--accent), var(--grad-violet));
+}
+
+.button--bluetooth {
+  background: linear-gradient(95deg, var(--bt-deep), var(--bt-mid), var(--bt-light));
+}
+
+.button--plain {
+  background: #fff;
+  color: var(--warn-text);
+  border: 0;
+}
+
+.button:disabled {
+  opacity: 0.5;
+}
+
+.button--link {
+  width: auto;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 12px;
+}
+
+.input {
+  width: 100%;
+  border: 1px solid var(--input-border);
+  border-radius: 12px;
+  padding: 13px 14px;
+  /* Anything under 16px makes iOS Safari zoom the viewport on focus. */
+  font-size: 16px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ── Course picker ────────────────────────────────────────────────────────── */
+
+.course {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--inactive-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  padding: 14px;
+  margin-bottom: 8px;
+  color: inherit;
+}
+
+.course--selected {
+  background: var(--chip-bg);
+  border: 2px solid var(--accent);
+}
+
+.course__code {
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.course__meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.course__tick {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  border: 2px solid var(--input-border);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: #fff;
+}
+
+.course--selected .course__tick {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.course__none {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ── Running panel ────────────────────────────────────────────────────────── */
+
+.running {
+  background: var(--bt-badge-bg);
+  border: 1px solid var(--bt-badge-border);
+  border-radius: var(--radius-panel);
+  padding: 18px;
+  text-align: center;
+}
+
+.running__title {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--bt-deep);
+}
+
+.running__hint {
+  font-size: 12px;
+  color: rgba(3, 105, 161, 0.75);
+  margin: 4px 0 14px;
+}
+
+.running__remaining {
+  color: var(--bt-deep);
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 8px;
+}
+
+.progress {
+  height: 6px;
+  border-radius: var(--pill);
+  background: #fff;
+  overflow: hidden;
+}
+
+.progress__fill {
+  height: 100%;
+  background: var(--bt-mid);
+  transition: width 1s linear;
+}
+
+.dot {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 12px;
+  border-radius: 27px;
+  background: rgba(255, 255, 255, 0.7);
+  display: grid;
+  place-items: center;
+}
+
+.dot__inner {
+  width: 34px;
+  height: 34px;
+  border-radius: 17px;
+  background: linear-gradient(90deg, var(--bt-deep), var(--bt-light));
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot__inner {
+    animation: none;
+  }
+  .progress__fill {
+    transition: none;
+  }
+}
+
+/* ── Needs-help panel ─────────────────────────────────────────────────────── */
+
+.needshelp {
+  background: var(--warn-bg);
+  border-radius: var(--radius-panel);
+  padding: 18px;
+  text-align: center;
+}
+
+.needshelp__title {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--warn-text);
+}
+
+.needshelp__body {
+  font-size: 12px;
+  color: rgba(146, 64, 14, 0.85);
+  margin: 6px 0 16px;
+}
+
+/* ── Outcome ──────────────────────────────────────────────────────────────── */
+
+.outcome {
+  text-align: center;
+}
+
+.outcome__badge {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 16px;
+  border-radius: 24px;
+  display: grid;
+  place-items: center;
+  font-size: 32px;
+}
+
+.outcome__badge--present {
+  background: var(--success-bg);
+}
+
+.outcome__badge--flagged {
+  background: var(--warn-bg);
+}
+
+.outcome__title {
+  font-weight: 800;
+  font-size: 19px;
+  margin: 0 0 8px;
+}
+
+.outcome__body {
+  font-size: 13px;
+  margin: 0 0 22px;
+}
+
+.outcome__body--present {
+  color: var(--success-text);
+}
+
+.outcome__body--flagged {
+  color: var(--warn-text);
+}
+
+/* ── Banners and empty states ─────────────────────────────────────────────── */
+
+.banner {
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--error-text);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.empty {
+  text-align: center;
+  padding: 8px 0;
+}
+
+.empty__icon {
+  font-size: 32px;
+}
+
+.empty__title {
+  font-weight: 700;
+  margin: 10px 0 6px;
+}
+
+.empty__text {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+/* ── Dialog ───────────────────────────────────────────────────────────────── */
+
+.dialog__scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 10;
+}
+
+.dialog {
+  width: 100%;
+  max-width: 400px;
+  background: var(--card);
+  border-radius: var(--radius-card);
+  padding: 22px;
+}
+
+.dialog__title {
+  font-weight: 800;
+  font-size: 17px;
+  margin: 0 0 8px;
+}
+
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.dialog__action {
+  background: none;
+  border: 0;
+  padding: 10px 14px;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--accent-dark);
+}
+
+.dialog__action--muted {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.dialog__action:disabled {
+  opacity: 0.5;
+}
+
+/* ── Login / blocked ──────────────────────────────────────────────────────── */
+
+.hero {
+  text-align: center;
+}
+
+.hero__logo {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 16px;
+  border-radius: 20px;
+  background: var(--uop-maroon);
+  display: grid;
+  place-items: center;
+  font-size: 30px;
+}
+
+.hero__title {
+  font-size: 20px;
+  font-weight: 800;
+  margin: 0 0 6px;
+}
+
+.hero__body {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0 0 22px;
+}
+
+.stack > * + * {
+  margin-top: 12px;
+}

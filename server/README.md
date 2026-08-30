@@ -240,6 +240,16 @@ All JSON mutation requests require `X-Requested-With: fetch`. `student`, `staff`
 | GET | `/api/app-version` | public | `{ minSupportedVersionCode }` — client blocks below this |
 | GET | `/privacy` | public | current privacy policy |
 | GET | `/delete` | public | account deletion instructions |
+| GET | `/app/*` | public | iOS web client (static bundle + SPA fallback) |
+
+`/app` serves the React student client from `web/dist` — see [../web/README.md](../web/README.md).
+It is mounted on this server's own origin because the session cookie above is httpOnly
+and Safari blocks third-party cookies, so a separately-hosted client could never stay
+signed in. The mount is path-scoped and cannot shadow `/api`, `/auth`, `/privacy` or
+`/delete`; `webApp.routes.test.js` asserts exactly that. An unbuilt client answers 503
+rather than failing the process, so an API-only deploy still starts. The client reuses
+`GET /auth/google` with `returnTo` set to the app's own base — no separate OAuth client
+or CORS entry is involved.
 
 ### Student discovery and attendance
 

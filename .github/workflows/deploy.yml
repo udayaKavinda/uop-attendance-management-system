@@ -45,6 +45,16 @@ jobs:
           cd "$APP_DIR"
           PATH=/usr/bin:$PATH /usr/bin/npm --prefix server ci --omit=dev --no-audit --no-fund
 
+      # The iOS web client is served by Express from web/dist (same origin as the
+      # API — Safari blocks third-party cookies, so it cannot live anywhere else).
+      # `git clean -fdx` above wipes the previous build, so it is rebuilt here on
+      # every deploy. Vite and TypeScript are devDependencies, hence no --omit=dev.
+      - name: Build web client
+        run: |
+          cd "$APP_DIR"
+          PATH=/usr/bin:$PATH /usr/bin/npm --prefix web ci --no-audit --no-fund
+          PATH=/usr/bin:$PATH /usr/bin/npm --prefix web run build
+
       - name: Restart attendance service
         run: sudo /bin/systemctl restart attendance
 
@@ -61,5 +71,9 @@ jobs:
           cd "$APP_DIR"
           git reset --hard "$PREVIOUS_SHA"
           PATH=/usr/bin:$PATH /usr/bin/npm --prefix server ci --omit=dev --no-audit --no-fund
+          # web/dist is untracked, so the reset above leaves the failed deploy's
+          # bundle in place; rebuild it so the client matches the rolled-back API.
+          PATH=/usr/bin:$PATH /usr/bin/npm --prefix web ci --no-audit --no-fund
+          PATH=/usr/bin:$PATH /usr/bin/npm --prefix web run build
           sudo /bin/systemctl restart attendance
           exit 1

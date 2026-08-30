@@ -2,11 +2,25 @@ const crypto = require('crypto');
 const {
   CAPACITOR_RETURN_ORIGINS,
   NATIVE_OAUTH_RETURN_BASES,
+  WEB_APP_MOUNT_PATH,
 } = require('../utils/constants');
 const { corsOrigins, defaultAppOrigin } = require('../config/cors');
 
+/**
+ * The iOS web client's own base. Same origin as this server (see
+ * WEB_APP_MOUNT_PATH), so the OAuth callback's session cookie is first-party by
+ * the time the browser lands back on the app.
+ */
+function webAppReturnBase() {
+  const origin = publicAppOrigin();
+  return origin ? `${origin}${WEB_APP_MOUNT_PATH}` : '';
+}
+
 function allowedOAuthReturnOrigins() {
-  return new Set([...corsOrigins, ...CAPACITOR_RETURN_ORIGINS, ...NATIVE_OAUTH_RETURN_BASES]);
+  const bases = [...corsOrigins, ...CAPACITOR_RETURN_ORIGINS, ...NATIVE_OAUTH_RETURN_BASES];
+  const webBase = webAppReturnBase();
+  if (webBase) bases.push(webBase);
+  return new Set(bases);
 }
 
 function pickOAuthReturnBase(req) {
@@ -97,6 +111,7 @@ function buildNativeReturnHtml(target) {
 }
 
 module.exports = {
+  webAppReturnBase,
   pickOAuthReturnBase,
   issueOAuthExchangeCode,
   consumeOAuthExchangeCode,
