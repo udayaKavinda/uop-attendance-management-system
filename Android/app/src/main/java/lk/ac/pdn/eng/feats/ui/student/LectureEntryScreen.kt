@@ -399,7 +399,7 @@ private fun OutcomeFlagged(vm: LectureEntryViewModel) {
     OutcomeCard(
         emoji = "🕓",
         title = "Under review",
-        body = "We couldn't verify you were in the lecture room, so your attendance is under lecturer review.",
+        body = "We couldn't verify that you were present in the lecture room. Your attendance is now pending review by the lecturer.",
         bg = Palette.WarnBg,
         ink = Palette.WarnText,
         vm = vm,

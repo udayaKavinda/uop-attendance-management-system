@@ -42,7 +42,7 @@ export function CheckInScreen({ email, onSignOut }: { email: string; onSignOut: 
               variant="flagged"
               emoji="🕓"
               title="Under review"
-              body="We couldn't verify you were in the lecture room, so your attendance is under lecturer review."
+              body="We couldn't verify that you were present in the lecture room. Your attendance is now pending review by the lecturer."
               onDone={checkIn.markAnotherCourse}
             />
           ) : state.courses.length === 0 ? (

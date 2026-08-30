@@ -197,10 +197,11 @@ mid-lecture). The only place this becomes visible is the Excel attendance export
 the reason attached as a cell comment. The on-screen matrix and the JSON API expose
 `status` only, same as `present`.
 
-The student is shown **"Under review"** for this outcome, worded as what to expect rather
-than as a workflow — their attendance is with the lecturer, and there is deliberately no
-invitation to dispute it, because nothing in the app can act on a dispute. Both clients
-use the same wording.
+The student is shown **"Under review"** — "We couldn't verify that you were present in the
+lecture room. Your attendance is now pending review by the lecturer." — worded as what to
+expect rather than as a workflow — their attendance is with the lecturer, and there is
+deliberately no invitation to dispute it, because nothing in the app can act on a dispute.
+Both clients use the same wording.
 
 **Raw GPS fixes never write anything for `suspicious`/`far`/`unknown`** — only an actual
 "get help" code submission does. A student whose GPS never passes and who never types a
