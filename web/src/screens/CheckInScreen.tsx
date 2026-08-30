@@ -69,7 +69,13 @@ export function CheckInScreen({ email, onSignOut }: { email: string; onSignOut: 
               <button
                 type="button"
                 className="button--link"
-                style={{ display: 'block', margin: '14px auto 0' }}
+                style={{
+                  display: 'block',
+                  margin: '4px auto 0',
+                  padding: '2px 4px',
+                  color: 'var(--bt-mid)',
+                  textDecoration: 'underline',
+                }}
                 onClick={() => setView('register')}
               >
                 Register your courses

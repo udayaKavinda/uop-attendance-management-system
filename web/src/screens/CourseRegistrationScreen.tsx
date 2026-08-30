@@ -41,12 +41,16 @@ export function CourseRegistrationScreen({ onBack }: { onBack: () => void }) {
     };
   }, []);
 
+  // At rest (no query), only registered courses show — this screen is for
+  // managing that set, not for browsing the whole catalog. Searching looks
+  // across every unarchived course, registered or not, so a course can
+  // actually be added.
   const trimmed = query.trim();
   const visible = trimmed
     ? courses.filter((c) =>
         `${c.code} ${c.name} ${c.batch}`.toLowerCase().includes(trimmed.toLowerCase()),
       )
-    : courses;
+    : courses.filter((c) => registeredIds.has(c._id));
 
   const toggle = async (course: CourseSummary) => {
     if (pendingId) return;
@@ -81,11 +85,7 @@ export function CourseRegistrationScreen({ onBack }: { onBack: () => void }) {
           ← Back
         </button>
         <h1 className="title">Register your courses</h1>
-        <p className="subtitle">
-          Optional. Registered courses always appear at the top of the search on the check-in
-          screen while they&rsquo;re running, so you don&rsquo;t have to type anything to find
-          them.
-        </p>
+        <p className="subtitle">Optional. Register for your courses to easily find them.</p>
 
         {error && (
           <div style={{ marginTop: 14 }}>
@@ -109,7 +109,9 @@ export function CourseRegistrationScreen({ onBack }: { onBack: () => void }) {
             <LoadingGate message="Loading courses…" />
           ) : visible.length === 0 ? (
             <p className="course__none">
-              {trimmed ? `No course matches “${trimmed}”.` : 'No unarchived courses available.'}
+              {trimmed
+                ? `No course matches “${trimmed}”.`
+                : "You haven't registered any courses yet. Search to add one."}
             </p>
           ) : (
             visible.map((course) => (

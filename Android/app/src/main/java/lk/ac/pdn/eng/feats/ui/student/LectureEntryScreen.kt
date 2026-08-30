@@ -52,6 +52,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -173,12 +174,12 @@ fun LectureEntryScreen(
                         state.outcome == Outcome.Flagged -> OutcomeFlagged(vm)
                         state.courses.isEmpty() -> {
                             NoLecturesRunning(state.error)
-                            Spacer(Modifier.height(14.dp))
+                            Spacer(Modifier.height(4.dp))
                             RegisterCoursesLink(onClick = { showRegistration = true })
                         }
                         else -> {
                             CheckInBody(state, vm, begin)
-                            Spacer(Modifier.height(14.dp))
+                            Spacer(Modifier.height(4.dp))
                             RegisterCoursesLink(onClick = { showRegistration = true })
                         }
                     }
@@ -531,9 +532,14 @@ private fun CourseSearchDropdown(
 @Composable
 private fun RegisterCoursesLink(onClick: () -> Unit) {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        TextButton(onClick = onClick) {
-            Text("Register your courses", color = Palette.Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
+        Text(
+            "Register your courses",
+            color = Palette.BtMid,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            textDecoration = TextDecoration.Underline,
+            modifier = Modifier.clickable(onClick = onClick).padding(4.dp),
+        )
     }
 }
 

@@ -83,8 +83,7 @@ fun CourseRegistrationScreen(
                         fontWeight = FontWeight.ExtraBold,
                     )
                     Text(
-                        "Optional. Registered courses always appear at the top of the search on the " +
-                            "check-in screen while they're running, so you don't have to type anything to find them.",
+                        "Optional. Register for your courses to easily find them.",
                         color = Palette.Muted,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(top = 4.dp),
@@ -104,9 +103,13 @@ fun CourseRegistrationScreen(
                     )
                     Spacer(Modifier.height(12.dp))
 
+                    // At rest (no query), only registered courses show — this screen is for
+                    // managing that set, not for browsing the whole catalog. Searching looks
+                    // across every unarchived course, registered or not, so a course can
+                    // actually be added.
                     val trimmed = query.trim()
                     val visible = if (trimmed.isBlank()) {
-                        state.courses
+                        state.courses.filter { state.registeredIds.contains(it.id) }
                     } else {
                         state.courses.filter {
                             "${it.code} ${it.name} ${it.batch}".contains(trimmed, ignoreCase = true)
@@ -116,7 +119,11 @@ fun CourseRegistrationScreen(
                     when {
                         state.loading -> CircularProgressIndicator(color = Palette.Accent)
                         visible.isEmpty() -> Text(
-                            if (trimmed.isBlank()) "No unarchived courses available." else "No course matches \"$trimmed\".",
+                            if (trimmed.isBlank()) {
+                                "You haven't registered any courses yet. Search to add one."
+                            } else {
+                                "No course matches \"$trimmed\"."
+                            },
                             color = Palette.Muted,
                             fontSize = 12.sp,
                         )
