@@ -268,6 +268,10 @@ or CORS entry is involved.
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | GET | `/api/courses/running` | authenticated | running courses — identity only; the flow never branches |
+| GET | `/api/courses/catalog` | student | every unarchived course, campus-wide, ignoring session state — for the registration screen |
+| GET | `/api/courses/registered` | student | this student's registered course ids |
+| POST | `/api/courses/registered/:courseId` | student | register (idempotent; 404 if archived/unknown) |
+| DELETE | `/api/courses/registered/:courseId` | student | unregister (idempotent) |
 | GET | `/api/attendance-status?courseId=` | student | `{ status: present\|flagged\|none }` |
 | POST | `/api/attendance` | student | unified `{ courseId, token? | fix? | code?, canAdvertise }` |
 | GET | `/api/attendance/seed-token?sessionId=` | student | rotate/re-fetch owned live seed token |

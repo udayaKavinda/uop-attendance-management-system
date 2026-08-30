@@ -7,11 +7,13 @@ function CourseRow({
   course,
   selected,
   disabled,
+  registered,
   onClick,
 }: {
   course: RunningCourse;
   selected: boolean;
   disabled: boolean;
+  registered?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -24,6 +26,7 @@ function CourseRow({
     >
       <span style={{ flex: 1, minWidth: 0 }}>
         <span className="course__code">{course.code}</span>
+        {registered && <span className="course__badge">Registered</span>}
         <br />
         <span className="course__meta">{course.name}</span>
         <br />
@@ -40,16 +43,23 @@ function CourseRow({
  * Search-as-you-type picker over currently-running sessions only — the
  * campus-wide list has no enrolment filter, so this keeps it usable when many
  * courses are live at once instead of scrolling a plain list.
+ *
+ * Courses the student registered ahead of time (see CourseRegistrationScreen)
+ * are pinned above the field at rest, so a returning student never has to
+ * type to find their own lecture. Typing anything drops the pinned list and
+ * falls back to plain search, same as before registration existed.
  */
 export function CoursePicker({
   courses,
   selectedId,
   disabled,
+  registeredIds,
   onSelect,
 }: {
   courses: RunningCourse[];
   selectedId: string | null;
   disabled: boolean;
+  registeredIds: Set<string>;
   onSelect: (courseId: string | null) => void;
 }) {
   const [query, setQuery] = useState('');
@@ -70,6 +80,7 @@ export function CoursePicker({
   }
 
   const trimmed = query.trim();
+  const pinned = trimmed ? [] : courses.filter((c) => registeredIds.has(c._id));
   const matches = trimmed
     ? courses.filter((c) =>
         `${c.code} ${c.name} ${c.batch}`.toLowerCase().includes(trimmed.toLowerCase()),
@@ -87,8 +98,26 @@ export function CoursePicker({
         type="search"
         inputMode="search"
       />
-      {/* A true dropdown: nothing shows until the student actually searches,
-          rather than dumping the whole running-courses list under the field. */}
+      {!trimmed && pinned.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          {pinned.map((course) => (
+            <CourseRow
+              key={course._id}
+              course={course}
+              selected={false}
+              disabled={disabled}
+              registered
+              onClick={() => {
+                onSelect(course._id);
+                setQuery('');
+              }}
+            />
+          ))}
+        </div>
+      )}
+      {/* Otherwise a true dropdown: nothing shows until the student actually
+          searches, rather than dumping the whole running-courses list under
+          the field. */}
       {trimmed &&
         (matches.length === 0 ? (
           <p className="course__none">No running lecture matches “{trimmed}”.</p>

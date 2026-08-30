@@ -1,6 +1,8 @@
 import type {
   AttendanceStatusRes,
+  CourseCatalogRes,
   Me,
+  RegisteredCoursesRes,
   RunningCoursesRes,
   UnifiedAttendanceReq,
   UnifiedAttendanceRes,
@@ -75,6 +77,20 @@ export const api = {
   logout: () => request<{ success?: boolean }>('/api/logout', { method: 'POST' }),
 
   runningCourses: () => request<RunningCoursesRes>('/api/courses/running'),
+
+  courseCatalog: () => request<CourseCatalogRes>('/api/courses/catalog'),
+
+  registeredCourses: () => request<RegisteredCoursesRes>('/api/courses/registered'),
+
+  registerCourse: (courseId: string) =>
+    request<{ success?: boolean }>(`/api/courses/registered/${encodeURIComponent(courseId)}`, {
+      method: 'POST',
+    }),
+
+  unregisterCourse: (courseId: string) =>
+    request<{ success?: boolean }>(`/api/courses/registered/${encodeURIComponent(courseId)}`, {
+      method: 'DELETE',
+    }),
 
   attendanceStatus: (courseId: string) =>
     request<AttendanceStatusRes>(`/api/attendance-status?courseId=${encodeURIComponent(courseId)}`),

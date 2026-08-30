@@ -27,6 +27,8 @@ export interface CheckInState {
   helpError: string | null;
   error: string | null;
   checkingStatus: boolean;
+  /** Courses this student registered ahead of time — see useCourseRegistration usage in CoursePicker. */
+  registeredIds: Set<string>;
 }
 
 const INITIAL: CheckInState = {
@@ -41,6 +43,7 @@ const INITIAL: CheckInState = {
   helpError: null,
   error: null,
   checkingStatus: false,
+  registeredIds: new Set(),
 };
 
 const outcomeOf = (status: string | undefined): Outcome => {
@@ -128,6 +131,22 @@ export function useCheckIn() {
       window.clearInterval(id);
     };
   }, []);
+
+  // ── Course registration ────────────────────────────────────────────────────
+  // Registration is edited on a separate screen (CourseRegistrationScreen), so
+  // this hook only needs to (re)fetch the set — once on mount, and again
+  // whenever the student returns from that screen.
+
+  const refreshRegistered = useCallback(async () => {
+    const res = await api.registeredCourses();
+    if (res.ok) {
+      setState((s) => ({ ...s, registeredIds: new Set(res.data.items ?? []) }));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshRegistered();
+  }, [refreshRegistered]);
 
   // ── Selection ──────────────────────────────────────────────────────────────
 
@@ -333,5 +352,6 @@ export function useCheckIn() {
     submitHelpCode,
     markAnotherCourse,
     dismissError,
+    refreshRegistered,
   };
 }

@@ -52,6 +52,16 @@ reading its own user agent, which anyone can spoof. It does not need to be more:
 client uses only paths the Android app already exposes, so nothing is reachable through it
 that was not already reachable.
 
+### Course registration
+
+Optional on both clients: a student can register ahead of time for any unarchived course,
+campus-wide (`GET /api/courses/catalog`, ignoring session state entirely — unlike
+`/api/courses/running`). The registered set (`Person.registeredCourses`) has no effect on
+verification; it only changes what the check-in search shows at rest. A registered course
+that is also currently running pins to the top of the search without the student typing
+anything; a course that is registered but not running still cannot be picked, same as
+before registration existed. Typing anything drops the pinned list and searches normally.
+
 ## Decision table
 
 Distances are measured from the edge of the session's building polygon and are

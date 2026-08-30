@@ -44,6 +44,19 @@ interface ApiService {
     @GET("api/courses/running")
     suspend fun runningCourses(): RunningCoursesRes
 
+    // ── Course registration (student only) ──────────────────────────────────────
+    @GET("api/courses/catalog")
+    suspend fun courseCatalog(): CourseCatalogRes
+
+    @GET("api/courses/registered")
+    suspend fun registeredCourses(): RegisteredCoursesRes
+
+    @POST("api/courses/registered/{courseId}")
+    suspend fun registerCourse(@Path("courseId") courseId: String): SimpleSuccess
+
+    @DELETE("api/courses/registered/{courseId}")
+    suspend fun unregisterCourse(@Path("courseId") courseId: String): SimpleSuccess
+
     // ── Student attendance ──────────────────────────────────────────────────────────
     @GET("api/attendance-status")
     suspend fun attendanceStatus(@Query("courseId") courseId: String): AttendanceStatusDto

@@ -88,6 +88,14 @@ fun LectureEntryScreen(
     // straight on "You're marked present" without having done anything.
     vm: LectureEntryViewModel = viewModel(key = email),
 ) {
+    // Reached via the "Register your courses" link, not as a NavHost destination —
+    // this screen is itself composed directly from AppRoot's login branch.
+    var showRegistration by remember { mutableStateOf(false) }
+    if (showRegistration) {
+        CourseRegistrationScreen(onBack = { showRegistration = false; vm.refreshRegistered() })
+        return
+    }
+
     val state by vm.state.collectAsState()
     val context = LocalContext.current
 
@@ -163,8 +171,16 @@ fun LectureEntryScreen(
                     when {
                         state.outcome == Outcome.Present -> OutcomePresent(vm)
                         state.outcome == Outcome.Flagged -> OutcomeFlagged(vm)
-                        state.courses.isEmpty() -> NoLecturesRunning(state.error)
-                        else -> CheckInBody(state, vm, begin)
+                        state.courses.isEmpty() -> {
+                            NoLecturesRunning(state.error)
+                            Spacer(Modifier.height(14.dp))
+                            RegisterCoursesLink(onClick = { showRegistration = true })
+                        }
+                        else -> {
+                            CheckInBody(state, vm, begin)
+                            Spacer(Modifier.height(14.dp))
+                            RegisterCoursesLink(onClick = { showRegistration = true })
+                        }
                     }
                 }
             }
@@ -210,6 +226,7 @@ private fun CheckInBody(
         courses = state.courses,
         selectedId = state.selectedCourseId,
         enabled = !state.busy,
+        registeredIds = state.registeredIds,
         onSelect = vm::selectCourse,
     )
 
@@ -444,6 +461,7 @@ private fun CourseSearchDropdown(
     courses: List<RunningCourseDto>,
     selectedId: String?,
     enabled: Boolean,
+    registeredIds: Set<String>,
     onSelect: (String?) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
@@ -467,9 +485,27 @@ private fun CourseSearchDropdown(
         enabled = enabled,
     )
 
-    // A true dropdown: nothing shows until the student actually searches, rather than
-    // dumping the whole running-courses list under the field at rest.
-    if (query.isNotBlank()) {
+    // At rest (no query), pin courses the student registered ahead of time so
+    // they never have to type to find their own lecture. The moment they type
+    // anything this drops back to a true dropdown: nothing shows until the
+    // student actually searches, rather than dumping the whole running-courses
+    // list under the field.
+    if (query.isBlank()) {
+        val pinned = courses.filter { registeredIds.contains(it.id) }
+        if (pinned.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            pinned.forEach { course ->
+                CourseRow(
+                    course = course,
+                    selected = false,
+                    enabled = enabled,
+                    registered = true,
+                    onClick = { onSelect(course.id); query = "" },
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+        }
+    } else {
         val matches = courses.filter { "${it.code} ${it.name} ${it.batch}".contains(query, ignoreCase = true) }
         Spacer(Modifier.height(8.dp))
         if (matches.isEmpty()) {
@@ -493,10 +529,20 @@ private fun CourseSearchDropdown(
 }
 
 @Composable
+private fun RegisterCoursesLink(onClick: () -> Unit) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        TextButton(onClick = onClick) {
+            Text("Register your courses", color = Palette.Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
 private fun CourseRow(
     course: RunningCourseDto,
     selected: Boolean,
     enabled: Boolean,
+    registered: Boolean = false,
     onClick: () -> Unit,
 ) {
     Row(
@@ -515,7 +561,20 @@ private fun CourseRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(course.code, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = Palette.Ink)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(course.code, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = Palette.Ink)
+                if (registered) {
+                    Spacer(Modifier.width(6.dp))
+                    Box(
+                        Modifier
+                            .clip(AppShapes.Pill)
+                            .background(Palette.ChipBg)
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Text("Registered", color = Palette.AccentDark, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
             Text(course.name, color = Palette.Muted, fontSize = 12.sp)
             Text(course.batch, color = Palette.Muted, fontSize = 11.sp)
         }

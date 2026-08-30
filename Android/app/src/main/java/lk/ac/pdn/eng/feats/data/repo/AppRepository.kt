@@ -64,6 +64,19 @@ class AppRepository(private val api: ApiService) {
     suspend fun runningCourses(): ApiResult<List<RunningCourseDto>> =
         apiCall { api.runningCourses().items }
 
+    // ── Course registration (student only) ───────────────────────────────────────
+    suspend fun courseCatalog(): ApiResult<List<RunningCourseDto>> =
+        apiCall { api.courseCatalog().items }
+
+    suspend fun registeredCourses(): ApiResult<List<String>> =
+        apiCall { api.registeredCourses().items }
+
+    suspend fun registerCourse(courseId: String): ApiResult<Unit> =
+        apiCall { api.registerCourse(courseId); Unit }
+
+    suspend fun unregisterCourse(courseId: String): ApiResult<Unit> =
+        apiCall { api.unregisterCourse(courseId); Unit }
+
     suspend fun adminCourses(page: Int, lecturerId: String? = null): ApiResult<Page<CourseDto>> =
         apiCall {
             val res = api.adminCourses(page, ADMIN_LIST_PAGE_SIZE, lecturerId)

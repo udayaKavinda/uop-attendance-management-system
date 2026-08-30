@@ -37,6 +37,27 @@ export interface RunningCoursesRes {
   items: RunningCourse[];
 }
 
+/**
+ * Element of GET /api/courses/catalog — every unarchived course, campus-wide,
+ * ignoring session state entirely (unlike RunningCourse, which only exists
+ * while a session is actually live). Backs the registration screen.
+ */
+export interface CourseSummary {
+  _id: string;
+  code: string;
+  name: string;
+  batch: string;
+}
+
+export interface CourseCatalogRes {
+  items: CourseSummary[];
+}
+
+/** GET /api/courses/registered — the signed-in student's registered course ids. */
+export interface RegisteredCoursesRes {
+  items: string[];
+}
+
 /** GET /api/attendance-status — "present" | "flagged" | "none". */
 export interface AttendanceStatusRes {
   status?: string;

@@ -46,6 +46,8 @@ data class CheckInState(
     val helpError: String? = null,
     val error: String? = null,
     val checkingStatus: Boolean = false,
+    /** Courses this student registered ahead of time — see CourseRegistrationScreen. */
+    val registeredIds: Set<String> = emptySet(),
 ) {
     val busy: Boolean get() = phase != CheckInPhase.Idle || checkingStatus
     val running: Boolean get() = phase == CheckInPhase.Preparing || phase == CheckInPhase.Checking
@@ -75,6 +77,21 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         pollRunningCourses()
+        refreshRegistered()
+    }
+
+    // ── Course registration ──────────────────────────────────────────────────────
+    // Registration is edited on a separate screen (CourseRegistrationScreen), so
+    // this only needs to (re)fetch the set — once on init, and again whenever the
+    // student returns from that screen.
+
+    fun refreshRegistered() {
+        viewModelScope.launch {
+            when (val res = repo.registeredCourses()) {
+                is ApiResult.Success -> _state.update { it.copy(registeredIds = res.data.toSet()) }
+                is ApiResult.Error -> Unit
+            }
+        }
     }
 
     // ── Course list ──────────────────────────────────────────────────────────────

@@ -95,6 +95,17 @@ data class CoursesRes(
 )
 data class RunningCoursesRes(val items: List<RunningCourseDto>)
 
+/**
+ * GET /api/courses/catalog — every unarchived course, campus-wide, ignoring
+ * session state entirely (unlike RunningCourseDto, which only exists while a
+ * session is actually live). Same shape, so it is reused rather than
+ * duplicated. Backs the registration screen.
+ */
+data class CourseCatalogRes(val items: List<RunningCourseDto>)
+
+/** GET /api/courses/registered — the signed-in student's registered course ids. */
+data class RegisteredCoursesRes(val items: List<String>)
+
 data class CourseRes(val success: Boolean? = null, val course: CourseDto? = null)
 
 /** One Course document is created per batch; `courses` is present on both success and the partial-failure case. */

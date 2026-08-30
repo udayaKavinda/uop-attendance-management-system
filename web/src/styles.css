@@ -364,6 +364,18 @@ button {
   margin: 8px 0 0;
 }
 
+.course__badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--chip-bg);
+  color: var(--accent-dark);
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
 /* ── Running panel ────────────────────────────────────────────────────────── */
 
 .running {

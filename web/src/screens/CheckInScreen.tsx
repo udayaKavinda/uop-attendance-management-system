@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Card,
   EmptyState,
@@ -10,6 +11,7 @@ import { CoursePicker } from '../components/CoursePicker';
 import { HelpCodeDialog } from '../components/HelpCodeDialog';
 import { WINDOW_SECONDS, useCheckIn } from '../hooks/useCheckIn';
 import type { CheckInState } from '../hooks/useCheckIn';
+import { CourseRegistrationScreen } from './CourseRegistrationScreen';
 
 /**
  * One screen, one job: get this student marked present.
@@ -24,6 +26,18 @@ import type { CheckInState } from '../hooks/useCheckIn';
 export function CheckInScreen({ email, onSignOut }: { email: string; onSignOut: () => void }) {
   const checkIn = useCheckIn();
   const { state } = checkIn;
+  const [view, setView] = useState<'checkin' | 'register'>('checkin');
+
+  if (view === 'register') {
+    return (
+      <CourseRegistrationScreen
+        onBack={() => {
+          setView('checkin');
+          void checkIn.refreshRegistered();
+        }}
+      />
+    );
+  }
 
   return (
     <>
@@ -45,10 +59,22 @@ export function CheckInScreen({ email, onSignOut }: { email: string; onSignOut: 
               body="We couldn't verify that you were present in the lecture room. Your attendance is now pending review by the lecturer."
               onDone={checkIn.markAnotherCourse}
             />
-          ) : state.courses.length === 0 ? (
-            <NoLecturesRunning error={state.error} />
           ) : (
-            <CheckInBody checkIn={checkIn} />
+            <>
+              {state.courses.length === 0 ? (
+                <NoLecturesRunning error={state.error} />
+              ) : (
+                <CheckInBody checkIn={checkIn} />
+              )}
+              <button
+                type="button"
+                className="button--link"
+                style={{ display: 'block', margin: '14px auto 0' }}
+                onClick={() => setView('register')}
+              >
+                Register your courses
+              </button>
+            </>
           )}
         </Card>
       </Screen>
@@ -87,6 +113,7 @@ function CheckInBody({ checkIn }: { checkIn: ReturnType<typeof useCheckIn> }) {
           courses={state.courses}
           selectedId={state.selectedCourseId}
           disabled={busy}
+          registeredIds={state.registeredIds}
           onSelect={checkIn.selectCourse}
         />
       </div>

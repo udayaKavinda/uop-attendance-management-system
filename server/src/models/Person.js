@@ -11,6 +11,10 @@ const personSchema = new mongoose.Schema({
   phone: { type: String, default: '', trim: true },
   active: { type: Boolean, default: true },
   deleted: { type: Boolean, default: false },
+  /** Optional, student-only: courses picked ahead of time so their check-in
+   *  search surfaces them without typing. Registering is never required — an
+   *  empty list just means the search dropdown behaves as it always did. */
+  registeredCourses: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Course' }],
 }, { timestamps: true, collection: 'people' });
 
 personSchema.index({ role: 1, deleted: 1 });
