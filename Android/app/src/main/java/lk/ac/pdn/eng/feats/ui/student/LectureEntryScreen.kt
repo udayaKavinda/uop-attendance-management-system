@@ -193,7 +193,7 @@ private fun CheckInBody(
 ) {
     Text("Mark your attendance", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
     Text(
-        "Choose your lecture and hold still for a moment while we confirm you're in the room.",
+        "Choose your lecture and hold still for a moment while we confirm you're in the lecture room.",
         color = Palette.Muted,
         fontSize = 13.sp,
         modifier = Modifier.padding(top = 4.dp),
@@ -205,8 +205,6 @@ private fun CheckInBody(
     }
 
     Spacer(Modifier.height(18.dp))
-    Text("Your running lectures", style = MaterialTheme.typography.labelLarge)
-    Spacer(Modifier.height(8.dp))
 
     CourseSearchDropdown(
         courses = state.courses,
@@ -248,7 +246,7 @@ private fun RunningPanel(state: CheckInState, vm: LectureEntryViewModel) {
         PulsingDot()
         Spacer(Modifier.height(12.dp))
         Text(
-            if (state.phase == CheckInPhase.Preparing) "Getting ready…" else "Confirming you're in the room",
+            if (state.phase == CheckInPhase.Preparing) "Getting ready…" else "Confirming you're in the lecture room",
             fontWeight = FontWeight.Bold,
             fontSize = 15.sp,
             color = Palette.BtDeep,
@@ -302,7 +300,7 @@ private fun NeedsHelpPanel(vm: LectureEntryViewModel, onBegin: () -> Unit) {
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            "Move further inside the room and try once more, or ask your lecturer for the attendance code.",
+            "Move further inside the lecture room and try once more, or ask your lecturer for the attendance code.",
             color = Palette.WarnText.copy(alpha = 0.85f),
             fontSize = 12.sp,
             textAlign = TextAlign.Center,
@@ -400,8 +398,8 @@ private fun OutcomePresent(vm: LectureEntryViewModel) {
 private fun OutcomeFlagged(vm: LectureEntryViewModel) {
     OutcomeCard(
         emoji = "🕓",
-        title = "Not confirmed",
-        body = "We couldn't verify you were in the room. Speak to your lecturer if you think that's a mistake.",
+        title = "Under review",
+        body = "We couldn't verify you were in the lecture room, so your attendance is under lecturer review.",
         bg = Palette.WarnBg,
         ink = Palette.WarnText,
         vm = vm,
@@ -464,7 +462,7 @@ private fun CourseSearchDropdown(
     AppTextField(
         query,
         { query = it },
-        "Search your lecture",
+        "Search your Course",
         placeholder = "Course code or name…",
         enabled = enabled,
     )

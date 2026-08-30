@@ -79,7 +79,7 @@ export function CoursePicker({
   return (
     <>
       <TextField
-        label="Search your lecture"
+        label="Search your Course"
         value={query}
         onChange={setQuery}
         disabled={disabled}

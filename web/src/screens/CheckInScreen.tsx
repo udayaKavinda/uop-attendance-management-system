@@ -41,8 +41,8 @@ export function CheckInScreen({ email, onSignOut }: { email: string; onSignOut: 
             <Outcome
               variant="flagged"
               emoji="🕓"
-              title="Not confirmed"
-              body="We couldn't verify you were in the room. Speak to your lecturer if you think that's a mistake."
+              title="Under review"
+              body="We couldn't verify you were in the lecture room, so your attendance is under lecturer review."
               onDone={checkIn.markAnotherCourse}
             />
           ) : state.courses.length === 0 ? (
@@ -72,7 +72,8 @@ function CheckInBody({ checkIn }: { checkIn: ReturnType<typeof useCheckIn> }) {
     <>
       <h1 className="title">Mark your attendance</h1>
       <p className="subtitle">
-        Choose your lecture and hold still for a moment while we confirm you're in the room.
+        Choose your lecture and hold still for a moment while we confirm you're in the lecture
+        room.
       </p>
 
       {state.error && (
@@ -81,16 +82,14 @@ function CheckInBody({ checkIn }: { checkIn: ReturnType<typeof useCheckIn> }) {
         </div>
       )}
 
-      <p className="label" style={{ marginTop: 18 }}>
-        Your running lectures
-      </p>
-
-      <CoursePicker
-        courses={state.courses}
-        selectedId={state.selectedCourseId}
-        disabled={busy}
-        onSelect={checkIn.selectCourse}
-      />
+      <div style={{ marginTop: 18 }}>
+        <CoursePicker
+          courses={state.courses}
+          selectedId={state.selectedCourseId}
+          disabled={busy}
+          onSelect={checkIn.selectCourse}
+        />
+      </div>
 
       <div style={{ marginTop: 10 }}>
         {running ? (
@@ -128,7 +127,7 @@ function RunningPanel({ state, onCancel }: { state: CheckInState; onCancel: () =
         <div className="dot__inner" />
       </div>
       <div className="running__title">
-        {state.phase === 'preparing' ? 'Getting ready…' : "Confirming you're in the room"}
+        {state.phase === 'preparing' ? 'Getting ready…' : "Confirming you're in the lecture room"}
       </div>
       <div className="running__hint">
         Stay where you are. This takes up to {WINDOW_SECONDS} seconds.
@@ -169,8 +168,8 @@ function NeedsHelpPanel({
       </div>
       <div className="needshelp__title">We couldn't confirm you're in the lecture</div>
       <div className="needshelp__body">
-        Move further inside the room and try once more, or ask your lecturer for the attendance
-        code.
+        Move further inside the lecture room and try once more, or ask your lecturer for the
+        attendance code.
       </div>
       <div className="stack">
         <PrimaryButton text="Try again" variant="bluetooth" onClick={onTryAgain} />
