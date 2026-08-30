@@ -48,12 +48,18 @@ jobs:
       # The iOS web client is served by Express from web/dist (same origin as the
       # API — Safari blocks third-party cookies, so it cannot live anywhere else).
       # `git clean -fdx` above wipes the previous build, so it is rebuilt here on
-      # every deploy. Vite and TypeScript are devDependencies, hence no --omit=dev.
+      # every deploy.
+      #
+      # --include=dev is required, not optional: the job sets NODE_ENV=production,
+      # which makes npm skip devDependencies by default — and the entire build
+      # toolchain (typescript, vite, @vitejs/plugin-react) lives there. Only the
+      # built output is shipped, so nothing dev-only reaches the served bundle.
       - name: Build web client
         run: |
           cd "$APP_DIR"
-          PATH=/usr/bin:$PATH /usr/bin/npm --prefix web ci --no-audit --no-fund
+          PATH=/usr/bin:$PATH /usr/bin/npm --prefix web ci --include=dev --no-audit --no-fund
           PATH=/usr/bin:$PATH /usr/bin/npm --prefix web run build
+          test -f web/dist/index.html || { echo "web build produced no dist/index.html"; exit 1; }
 
       - name: Restart attendance service
         run: sudo /bin/systemctl restart attendance
@@ -73,7 +79,7 @@ jobs:
           PATH=/usr/bin:$PATH /usr/bin/npm --prefix server ci --omit=dev --no-audit --no-fund
           # web/dist is untracked, so the reset above leaves the failed deploy's
           # bundle in place; rebuild it so the client matches the rolled-back API.
-          PATH=/usr/bin:$PATH /usr/bin/npm --prefix web ci --no-audit --no-fund
+          PATH=/usr/bin:$PATH /usr/bin/npm --prefix web ci --include=dev --no-audit --no-fund
           PATH=/usr/bin:$PATH /usr/bin/npm --prefix web run build
           sudo /bin/systemctl restart attendance
           exit 1
