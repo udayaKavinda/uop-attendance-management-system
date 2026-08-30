@@ -26,6 +26,32 @@ whoever later reads the attendance export, not queued for anyone to act on.
 - In-memory nonce, GPS-fix, and attempt-verdict state assumes one server process. A
   shared store is required before horizontal scaling.
 
+## Clients
+
+Two student clients reach the same endpoints and the same verification logic:
+
+| | Android app | Web client (`/app`) |
+|---|---|---|
+| Bluetooth proximity | yes | **no — no iOS browser can read a BLE beacon** |
+| GPS geofence | yes | yes |
+| Lecturer's code | yes | yes |
+| Peer seeding | yes | never — see below |
+
+The web client exists because iPhone and iPad students have no native app yet. Nothing in
+this document changes for it: it submits the same `fix` and `code` payloads, gets the same
+deliberately ambiguous `collecting`, and is banded by the same server logic. It simply has
+one fewer way to pass, which is why it is offered to iOS only by default
+(`webAllowNonIos`) — Android users have a client that can also hear the beacon.
+
+Peer seeding is absent there by consequence, not omission: only students verified by a
+**primary** BLE token are ever selected as seeders, so a GPS-verified student is passed
+over on every platform, native app included.
+
+That platform gate is a UX decision, not a security boundary — the browser decides by
+reading its own user agent, which anyone can spoof. It does not need to be more: the web
+client uses only paths the Android app already exposes, so nothing is reachable through it
+that was not already reachable.
+
 ## Decision table
 
 Distances are measured from the edge of the session's building polygon and are
@@ -142,6 +168,7 @@ heard a token.
 | `farBufferLogic` | `accuracy_weighted_centroid` | Strategy deciding "within `farBufferM`" — see "Selectable geofence logic". |
 | `seedRate` | 0 | Target concurrent seeders; 0 disables seeding. |
 | `seedWindowMs` | 60000 | Seeder **and** decoy window length. |
+| `webAllowNonIos` | false | Whether the browser client at `/app` serves non-iOS devices. A UX gate only — see "Clients". |
 
 A note on the default: GPS is routinely accurate to only 20–50m indoors, so a tight
 `nearBufferM` pushes genuinely-present students into the code path. 50m is a deliberate
@@ -169,6 +196,11 @@ mid-lecture). The only place this becomes visible is the Excel attendance export
 `services/attendanceExport.service.js`): a flagged cell renders 'F' on a red fill with
 the reason attached as a cell comment. The on-screen matrix and the JSON API expose
 `status` only, same as `present`.
+
+The student is shown **"Under review"** for this outcome, worded as what to expect rather
+than as a workflow — their attendance is with the lecturer, and there is deliberately no
+invitation to dispute it, because nothing in the app can act on a dispute. Both clients
+use the same wording.
 
 **Raw GPS fixes never write anything for `suspicious`/`far`/`unknown`** — only an actual
 "get help" code submission does. A student whose GPS never passes and who never types a

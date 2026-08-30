@@ -18,13 +18,13 @@ or React client.
   method to choose. The running-course payload carries identity only.
 - On failure: **Try again** (another window) or **Get help**, which asks for the
   lecturer's 8-digit code.
-- Lands on exactly one of two outcomes, and only once one is actually reached: present
-  (automatic BLE/GPS pass, or a correct code), or not confirmed (a correct code submitted
-  from `far`/`unknown`). There's no queue — the lecturer never approves or rejects
-  anything; a not-confirmed attempt is simply visible, flagged, in the lecturer's
-  attendance export. A student who lets the window time out without ever trying **Get
-  help** reaches neither outcome and leaves no attendance record at all, same as one who
-  never opened the app.
+- Lands on exactly one of two outcomes, and only once one is actually reached: **You're
+  marked present** (automatic BLE/GPS pass, or a correct code), or **Under review** (a
+  correct code submitted from `far`/`unknown`). "Under review" describes what the student
+  should expect, not a workflow: there is no queue and the lecturer never approves or
+  rejects anything — the attempt is simply visible, flagged, in the attendance export. A
+  student who lets the window time out without ever trying **Get help** reaches neither
+  outcome and leaves no attendance record at all, same as one who never opened the app.
 - After acceptance, a capable/authorized device may receive a real or decoy peer-seeding
   window with indistinguishable UI.
 
@@ -46,8 +46,17 @@ Tabs: **Courses**, **Create session**, **Sessions**, **Lecturers**, **Geofences*
 lecturer directory, building polygons, the Bluetooth kill switch, the two distance
 thresholds, each band's independently selectable geofence logic (a dropdown per band —
 accuracy-weighted centroid, any/majority/all points within the buffer, median distance, or
-best-accuracy-fix-only), peer-seeding parameters, the student sign-in email domain, and
-the minimum app version that's allowed to run.
+best-accuracy-fix-only), peer-seeding parameters, the student sign-in email domain, the
+minimum app version that's allowed to run, and — under **Web client** — whether the
+browser client at `/app` serves non-iOS devices.
+
+That last switch is off by default and exists as an escape hatch for when this app is
+unavailable: iPhone and iPad students have no native app yet, so they check in through a
+GPS-only web page (no iOS browser can read a BLE beacon), and Android users are normally
+turned away from it because this app verifies over Bluetooth as well. It is a UX gate,
+not a security control — the browser decides by reading its own user agent. This
+dashboard is the only place it can be toggled, so a change to it needs an app release to
+reach admins; see [../web/README.md](../web/README.md).
 
 ### Courses, sessions, and lecturers at scale
 
@@ -256,8 +265,9 @@ lecturer, not just admins), course sessions, the JSON attendance matrix and its
 `.xlsx` export sibling, `/api/admin/sessions` (paged) with broadcast and lecturer-code
 actions (no review-queue endpoints — there is no queue), `/api/admin/lecturers`
 (paged, readable by any staff member for the Owners search — writes stay admin-only),
-`/api/admin/geofences`, and `/api/admin/settings` (now including `geofenceLogicOptions`,
-the fixed dropdown menu for the near/far buffer-logic settings).
+`/api/admin/geofences`, and `/api/admin/settings` (including `geofenceLogicOptions`,
+the fixed dropdown menu for the near/far buffer-logic settings, and `webAllowNonIos`
+behind the **Web client** switch).
 
 The server README is the authoritative request/response and access-control reference.
 

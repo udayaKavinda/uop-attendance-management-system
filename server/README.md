@@ -239,6 +239,7 @@ All JSON mutation requests require `X-Requested-With: fetch`. `student`, `staff`
 | GET | `/api/healthz` | public | process/database health |
 | GET | `/api/app-version` | public | `{ minSupportedVersionCode }` — client blocks below this |
 | GET | `/api/web-config` | public | `{ allowNonIos }` — whether the web client serves non-iOS devices |
+| GET | `/` | public | 302 to `/app/` — the client is mounted under a path, and the bare domain is what people type |
 | GET | `/privacy` | public | current privacy policy |
 | GET | `/delete` | public | account deletion instructions |
 | GET | `/app/*` | public | iOS web client (static bundle + SPA fallback) |
@@ -249,6 +250,9 @@ admin-only settings singleton should reach an anonymous caller. It reflects the
 `webAllowNonIos` setting, which is off by default and toggled by an admin from the
 Android dashboard. It is a UX gate, not a security control — the client decides by
 reading its own user agent, which anyone can spoof.
+
+The root redirect is deliberately temporary (302), not permanent: browsers cache a 301
+more or less forever, which would make giving `/` a page of its own later painful.
 
 `/app` serves the React student client from `web/dist` — see [../web/README.md](../web/README.md).
 It is mounted on this server's own origin because the session cookie above is httpOnly
