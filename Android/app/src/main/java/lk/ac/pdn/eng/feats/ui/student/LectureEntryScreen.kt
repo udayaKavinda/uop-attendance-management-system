@@ -89,7 +89,7 @@ fun LectureEntryScreen(
     // straight on "You're marked present" without having done anything.
     vm: LectureEntryViewModel = viewModel(key = email),
 ) {
-    // Reached via the "Register your courses" link, not as a NavHost destination —
+    // Reached via the "Register for courses" link, not as a NavHost destination —
     // this screen is itself composed directly from AppRoot's login branch.
     var showRegistration by remember { mutableStateOf(false) }
     if (showRegistration) {
@@ -533,7 +533,7 @@ private fun CourseSearchDropdown(
 private fun RegisterCoursesLink(onClick: () -> Unit) {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Text(
-            "Register your courses",
+            "Register for courses",
             color = Palette.BtMid,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,

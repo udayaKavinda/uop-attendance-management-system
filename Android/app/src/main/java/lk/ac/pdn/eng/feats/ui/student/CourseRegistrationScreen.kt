@@ -50,7 +50,7 @@ import lk.ac.pdn.eng.feats.ui.theme.Palette
  * course campus-wide — unlike the check-in picker, session state plays no
  * part here.
  *
- * Reached from LectureEntryScreen's "Register your courses" link, not as a
+ * Reached from LectureEntryScreen's "Register for courses" link, not as a
  * NavHost destination — same in-composable toggle pattern that screen uses.
  */
 @Composable
@@ -78,7 +78,7 @@ fun CourseRegistrationScreen(
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Register your courses",
+                        "Register for courses",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold,
                     )

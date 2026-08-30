@@ -78,7 +78,7 @@ export function CheckInScreen({ email, onSignOut }: { email: string; onSignOut: 
                 }}
                 onClick={() => setView('register')}
               >
-                Register your courses
+                Register for courses
               </button>
             </>
           )}

@@ -84,7 +84,7 @@ export function CourseRegistrationScreen({ onBack }: { onBack: () => void }) {
         >
           ← Back
         </button>
-        <h1 className="title">Register your courses</h1>
+        <h1 className="title">Register for courses</h1>
         <p className="subtitle">Optional. Register for your courses to easily find them.</p>
 
         {error && (

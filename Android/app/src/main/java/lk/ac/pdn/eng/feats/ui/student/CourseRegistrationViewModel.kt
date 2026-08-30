@@ -21,7 +21,7 @@ data class CourseRegistrationState(
     val error: String? = null,
 )
 
-/** Backs the optional "Register your courses" screen — see CourseRegistrationScreen. */
+/** Backs the optional "Register for courses" screen — see CourseRegistrationScreen. */
 class CourseRegistrationViewModel(app: Application) : AndroidViewModel(app) {
     private val repo get() = container.repository
 
