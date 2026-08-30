@@ -1,3 +1,5 @@
+const { WEB_APP_MOUNT_PATH } = require('../utils/constants');
+
 const CONTACT_EMAIL = 'udayakavindadev@gmail.com';
 const APP_NAME = 'UOP Attendance';
 const ORG_NAME = 'University of Peradeniya, Faculty of Engineering';
@@ -25,6 +27,18 @@ function layout(title, bodyHtml) {
 ${bodyHtml}
 </body>
 </html>`;
+}
+
+/**
+ * The domain root has no page of its own — the student client is mounted under
+ * WEB_APP_MOUNT_PATH — but the bare domain is the address people type and share,
+ * so send them there instead of answering 404.
+ *
+ * Deliberately a temporary redirect: browsers cache a 301 more or less forever,
+ * which would make it painful to ever give "/" a page of its own.
+ */
+function home(req, res) {
+  return res.redirect(302, `${WEB_APP_MOUNT_PATH}/`);
 }
 
 function privacy(req, res) {
@@ -123,4 +137,4 @@ why.</p>
   res.set('Content-Type', 'text/html; charset=utf-8').send(html);
 }
 
-module.exports = { privacy, deleteAccount };
+module.exports = { home, privacy, deleteAccount };

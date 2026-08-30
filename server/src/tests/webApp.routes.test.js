@@ -73,6 +73,14 @@ describe('iOS web client mount', () => {
     expect(manifest.headers['cache-control']).not.toMatch(/immutable/);
   });
 
+  test('the bare domain redirects to the client instead of 404ing', async () => {
+    const res = await request(app).get('/');
+    // Temporary on purpose — a cached 301 would make giving "/" its own page later
+    // very painful.
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe(`${WEB_APP_MOUNT_PATH}/`);
+  });
+
   test('does not shadow the public /privacy and /delete pages', async () => {
     for (const route of ['/privacy', '/delete']) {
       const res = await request(app).get(route);
