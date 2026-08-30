@@ -16,6 +16,18 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Attendance" />
+    <!--
+      Inter, as in the original React app the Android theme was mirrored from.
+      The server's CSP already allows fonts.googleapis.com / fonts.gstatic.com.
+      `display=swap` plus the system fallback in styles.css means text is never
+      invisible while it loads.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    />
     <link rel="manifest" href="/app/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/app/icon.svg" />
     <link rel="apple-touch-icon" href="/app/apple-touch-icon.png" />

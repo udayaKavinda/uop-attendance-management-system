@@ -1,30 +1,42 @@
-import { Card, Screen } from './components/Chrome';
+import { Card, LoadingGate, Screen } from './components/Chrome';
+import { usePlatformGate } from './hooks/usePlatformGate';
 import { useSession } from './hooks/useSession';
-import { isIosDevice } from './platform/ios';
 import { CheckInScreen } from './screens/CheckInScreen';
 import { LoginScreen } from './screens/LoginScreen';
 import { NotSupportedScreen } from './screens/NotSupportedScreen';
 import { StaffNoticeScreen } from './screens/StaffNoticeScreen';
 
-/**
- * Evaluated once, not on every render: the answer cannot change without a
- * reload, and re-running the sniff mid-session would only risk flicker.
- */
-const IS_IOS = isIosDevice();
-
 export function App() {
-  const { session, signIn, signOut } = useSession();
+  const gate = usePlatformGate();
 
-  if (!IS_IOS) return <NotSupportedScreen />;
+  switch (gate) {
+    case 'checking':
+      return (
+        <Screen>
+          <Card>
+            <LoadingGate />
+          </Card>
+        </Screen>
+      );
+    case 'blocked':
+      return <NotSupportedScreen />;
+    case 'allowed':
+      // Session handling lives in its own component so it only mounts once the
+      // device is actually allowed in — a blocked visitor should never probe
+      // /api/me, and hooks cannot be called conditionally.
+      return <AuthenticatedApp />;
+  }
+}
+
+function AuthenticatedApp() {
+  const { session, signIn, signOut } = useSession();
 
   switch (session.state) {
     case 'loading':
       return (
         <Screen>
           <Card>
-            <p className="subtitle" style={{ textAlign: 'center', margin: 0 }}>
-              Loading…
-            </p>
+            <LoadingGate />
           </Card>
         </Screen>
       );

@@ -607,6 +607,15 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         if (enabled) "Bluetooth turned on for every session." else "Bluetooth switched off. GPS still verifies attendance.",
     )
 
+    fun setWebAllowNonIos(allowed: Boolean) = patchSettings(
+        SettingsReq(webAllowNonIos = allowed),
+        if (allowed) {
+            "Anyone can now use the web client."
+        } else {
+            "The web client is iPhone and iPad only again."
+        },
+    )
+
     fun setNearBufferLogic(strategyId: String) = patchSettings(
         SettingsReq(nearBufferLogic = strategyId),
         "Near-buffer logic updated.",

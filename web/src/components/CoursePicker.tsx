@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { RunningCourse } from '../api/types';
+import { TextField } from './Chrome';
 
+/** CourseRow in LectureEntryScreen.kt. */
 function CourseRow({
   course,
   selected,
@@ -17,6 +19,7 @@ function CourseRow({
       type="button"
       className={`course${selected ? ' course--selected' : ''}`}
       disabled={disabled}
+      aria-pressed={selected}
       onClick={onClick}
     >
       <span style={{ flex: 1, minWidth: 0 }}>
@@ -24,7 +27,7 @@ function CourseRow({
         <br />
         <span className="course__meta">{course.name}</span>
         <br />
-        <span className="course__meta">{course.batch}</span>
+        <span className="course__meta course__meta--batch">{course.batch}</span>
       </span>
       <span className="course__tick" aria-hidden="true">
         {selected ? '✓' : ''}
@@ -75,14 +78,14 @@ export function CoursePicker({
 
   return (
     <>
-      <input
-        className="input"
-        type="search"
+      <TextField
+        label="Search your lecture"
         value={query}
+        onChange={setQuery}
         disabled={disabled}
         placeholder="Course code or name…"
-        aria-label="Search your lecture"
-        onChange={(e) => setQuery(e.target.value)}
+        type="search"
+        inputMode="search"
       />
       {/* A true dropdown: nothing shows until the student actually searches,
           rather than dumping the whole running-courses list under the field. */}

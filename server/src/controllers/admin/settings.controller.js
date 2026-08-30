@@ -15,6 +15,7 @@ const { STRATEGIES, DEFAULT_STRATEGY_ID } = require('../../services/geofenceLogi
 function shape(settings) {
   return {
     bleEnabled: settings.bleEnabled !== false,
+    webAllowNonIos: settings.webAllowNonIos === true,
     nearBufferM: settings.nearBufferM,
     farBufferM: settings.farBufferM,
     nearBufferLogic: settings.nearBufferLogic || DEFAULT_STRATEGY_ID,

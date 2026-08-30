@@ -238,9 +238,17 @@ All JSON mutation requests require `X-Requested-With: fetch`. `student`, `staff`
 | POST | `/api/logout` | authenticated | destroy session |
 | GET | `/api/healthz` | public | process/database health |
 | GET | `/api/app-version` | public | `{ minSupportedVersionCode }` — client blocks below this |
+| GET | `/api/web-config` | public | `{ allowNonIos }` — whether the web client serves non-iOS devices |
 | GET | `/privacy` | public | current privacy policy |
 | GET | `/delete` | public | account deletion instructions |
 | GET | `/app/*` | public | iOS web client (static bundle + SPA fallback) |
+
+`/api/web-config` is deliberately one boolean and unauthenticated: the web client decides
+whether to serve a non-iOS device *before* anyone has signed in, and nothing else from the
+admin-only settings singleton should reach an anonymous caller. It reflects the
+`webAllowNonIos` setting, which is off by default and toggled by an admin from the
+Android dashboard. It is a UX gate, not a security control — the client decides by
+reading its own user agent, which anyone can spoof.
 
 `/app` serves the React student client from `web/dist` — see [../web/README.md](../web/README.md).
 It is mounted on this server's own origin because the session cookie above is httpOnly

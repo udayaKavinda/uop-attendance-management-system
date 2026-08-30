@@ -162,6 +162,7 @@ describe('GET/PATCH /api/admin/settings', () => {
     const res = await request(app).get('/api/admin/settings').set(authHeader(admin));
     expect(res.body).toMatchObject({
       bleEnabled: expect.any(Boolean),
+      webAllowNonIos: expect.any(Boolean),
       nearBufferM: expect.any(Number),
       farBufferM: expect.any(Number),
       nearBufferLogic: expect.any(String),
@@ -181,6 +182,35 @@ describe('GET/PATCH /api/admin/settings', () => {
 
     const after = await request(app).get('/api/admin/settings').set(authHeader(admin));
     expect(after.body.bleEnabled).toBe(false);
+  });
+
+  test('admin can open the web client to non-iOS devices and it reads back', async () => {
+    const admin = makePerson({ role: 'admin' });
+
+    // Blocking is the shipped default — the switch only ever loosens it.
+    const before = await request(app).get('/api/admin/settings').set(authHeader(admin));
+    expect(before.body.webAllowNonIos).toBe(false);
+
+    const on = await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ webAllowNonIos: true });
+    expect(on.status).toBe(200);
+    expect(on.body.webAllowNonIos).toBe(true);
+
+    // The public endpoint the browser gate actually reads must agree.
+    const publicRes = await request(app).get('/api/web-config');
+    expect(publicRes.body).toEqual({ allowNonIos: true });
+
+    const off = await request(app).patch('/api/admin/settings').set(headers(admin))
+      .send({ webAllowNonIos: false });
+    expect(off.body.webAllowNonIos).toBe(false);
+    expect((await request(app).get('/api/web-config')).body).toEqual({ allowNonIos: false });
+  });
+
+  test('lecturers cannot open the web client to non-iOS devices', async () => {
+    const lecturer = makePerson({ role: 'lecturer' });
+    const res = await request(app).patch('/api/admin/settings').set(headers(lecturer))
+      .send({ webAllowNonIos: true });
+    expect(res.status).toBe(403);
   });
 
   test('admin can move the distance buffers', async () => {

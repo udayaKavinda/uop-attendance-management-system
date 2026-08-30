@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.PauseCircleOutline
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.PhoneIphone
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Schedule
@@ -1112,6 +1113,31 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
                         vm.setStudentEmailDomain(if (on) DEFAULT_STUDENT_EMAIL_DOMAIN else "")
                     },
                 )
+            }
+        }
+
+        item {
+            SettingsSection(
+                icon = Icons.Outlined.PhoneIphone,
+                title = "Web client",
+                subtitle = "iPhone and iPad students check in at /app in a browser. No iOS browser can " +
+                    "read a Bluetooth beacon, so that page verifies by GPS only, with the attendance " +
+                    "code as the way out.",
+            ) {
+                PolicySwitch(
+                    label = "Allow non-iPhone devices",
+                    detail = "Off: Android and desktop are turned away and told to use this app, which " +
+                        "also verifies over Bluetooth. Turn on only if this app is unavailable.",
+                    checked = settings.webAllowNonIos == true,
+                    onCheckedChange = vm::setWebAllowNonIos,
+                )
+                if (settings.webAllowNonIos == true) {
+                    Spacer(Modifier.height(10.dp))
+                    SessionNotice(
+                        "Anyone can use the web page right now. They will be verified by GPS alone, " +
+                            "so more of them will need the attendance code.",
+                    )
+                }
             }
         }
 

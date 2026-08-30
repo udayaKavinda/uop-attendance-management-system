@@ -28,6 +28,48 @@ only *after* an automatic attempt has actually failed. The client is never told 
 failed — the server answers `collecting` for both "still gathering fixes" and "you are
 too far away" — so it cannot leak a student's distance band.
 
+## Visual parity with the native app
+
+`src/styles.css` is not eyeballed against screenshots — every value is taken from the
+Compose sources, and each block names where it came from:
+
+| Web | Source |
+|---|---|
+| colour tokens | `ui/theme/Color.kt` |
+| radii (`--r-card` 22, `--r-panel` 16, `--r-input` 14, …) | `ui/theme/Shape.kt` |
+| font sizes and weights | `ui/theme/Type.kt` |
+| `Card`, `PrimaryButton`, `TextField`, `ErrorBanner`, `EmptyState`, `LoadingGate` | `ui/components/Components.kt` |
+| screen structure, panels, outcome cards, copy | `ui/student/LectureEntryScreen.kt` |
+
+Compose `dp`/`sp` map 1:1 to CSS pixels here. The background photograph is the same
+file the Android app ships (`res/drawable/app_background.jpg`) — byte-identical to the
+original React app's, so all three clients share it — under the same flat `#F7F8FA` wash
+at 58% alpha that `AppBackground` applies. The typeface is Inter, as in that React app;
+the server's CSP already allows Google Fonts.
+
+Two places intentionally differ because the platforms do, not because of drift: Compose
+disables a button by swapping its gradient for a flat `Muted` fill (mirrored here rather
+than fading opacity), and `background-attachment: fixed` is dropped on iOS, where WebKit
+renders it as a huge scrolling image instead of a stationary one.
+
+## The non-iOS kill switch
+
+`webAllowNonIos` in the settings singleton — off by default, toggled by an admin under
+**Web client** on the Android dashboard. Off, Android and desktop get the "use the
+Android app" notice; on, anyone may use the client. It exists as an operational escape
+hatch for when the Android app is unavailable.
+
+The client reads it from the public `GET /api/web-config` (see `usePlatformGate`), which
+has to be unauthenticated because the decision happens before sign-in. iOS never waits on
+that request — the common case is not gated behind a possibly-slow round trip — and for
+everyone else the request **fails closed**, so a flaky connection can never silently open
+the client up.
+
+It is a UX gate, not a security control: it reads the user agent, which anyone can spoof.
+It changes what ordinary users experience, not what is possible — and it does not need to
+do more, since this client only uses the GPS and lecturer-code paths the native app
+already exposes.
+
 ## Why it is served from the API's origin
 
 Authentication is the same httpOnly `attendance.sid` session cookie the native app uses.
@@ -87,9 +129,11 @@ bundle can never drift from the API it was built against. If the build is missin
 ```
 src/
   api/          fetch wrapper (credentials, CSRF header, ApiResult) and the JSON contract
+  assets/       the background photograph shared with the Android app
   geo/          watchPosition → throttled GPS fix stream
-  hooks/        useSession (OAuth + /api/me), useCheckIn (the 90-second window)
-  platform/     iOS / standalone detection
+  hooks/        usePlatformGate (the iOS gate), useSession (OAuth + /api/me),
+                useCheckIn (the 90-second window)
+  platform/     iOS / standalone detection, screen wake lock
   components/   shared chrome, course picker, code dialog
   screens/      check-in, login, staff notice, unsupported-platform
 ```

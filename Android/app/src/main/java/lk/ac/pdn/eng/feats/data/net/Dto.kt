@@ -237,6 +237,12 @@ data class GeofenceLogicOptionDto(
 data class SettingsDto(
     /** The one kill switch: off stops broadcasts, scanning and seeding. GPS has no equivalent. */
     val bleEnabled: Boolean? = null,
+    /**
+     * Whether the browser client at /app serves non-iOS devices. Off by default —
+     * Android users have this app, which also verifies over Bluetooth. An escape
+     * hatch for when this app is unavailable, not a security control.
+     */
+    val webAllowNonIos: Boolean? = null,
     /** Near-band threshold, meters from the building polygon. */
     val nearBufferM: Int? = null,
     /** Far-band threshold, meters. Beyond it (per the far-band logic) an attempt is flagged. */
@@ -260,6 +266,7 @@ data class SettingsDto(
 /** Body for PATCH /api/admin/settings — every field independently optional. */
 data class SettingsReq(
     val bleEnabled: Boolean? = null,
+    val webAllowNonIos: Boolean? = null,
     val nearBufferM: Int? = null,
     val farBufferM: Int? = null,
     val nearBufferLogic: String? = null,

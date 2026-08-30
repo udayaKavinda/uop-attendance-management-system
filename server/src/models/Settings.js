@@ -13,6 +13,23 @@ const settingsSchema = new mongoose.Schema({
   bleEnabled: { type: Boolean, default: true },
 
   /**
+   * Whether the browser client at /app serves non-iOS devices.
+   *
+   * Off by default: Android has the native app, which verifies over Bluetooth as
+   * well as GPS, so routing Android users to a GPS-only browser build is a
+   * downgrade. This exists as an operational escape hatch — if the Android app
+   * is broken or unavailable, an admin can open the web client to everyone
+   * without a release.
+   *
+   * It is a UX gate, not a security control: the client decides by reading its
+   * own user agent, which anyone can spoof. It changes what ordinary users
+   * experience, not what is possible — and it does not need to do more, because
+   * the web client only uses the GPS and lecturer-code paths the native app
+   * already exposes.
+   */
+  webAllowNonIos: { type: Boolean, default: false },
+
+  /**
    * Distance bands, in meters from the nearest active building polygon of the
    * session. `near` and `suspicious` both auto-pass; beyond `far` (or when the
    * fix is too inaccurate to band at all) a student is flagged instead — see

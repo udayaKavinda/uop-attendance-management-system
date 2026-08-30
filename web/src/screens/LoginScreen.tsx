@@ -1,4 +1,4 @@
-import { Card, ErrorBanner, Screen } from '../components/Chrome';
+import { Card, ErrorBanner, PrimaryButton, Screen } from '../components/Chrome';
 import { isStandalone } from '../platform/ios';
 
 export function LoginScreen({ error, onSignIn }: { error?: string; onSignIn: () => void }) {
@@ -22,9 +22,7 @@ export function LoginScreen({ error, onSignIn }: { error?: string; onSignIn: () 
             <ErrorBanner message={error} />
           </div>
         )}
-        <button type="button" className="button" onClick={onSignIn}>
-          Continue with Google
-        </button>
+        <PrimaryButton text="Continue with Google" onClick={onSignIn} />
         {showInstallHint && (
           <p className="subtitle" style={{ textAlign: 'center', marginTop: 16 }}>
             Tip: tap Share, then “Add to Home Screen” to open attendance in one tap next time.

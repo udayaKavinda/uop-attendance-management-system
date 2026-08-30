@@ -10,11 +10,13 @@ function validateSettingsBody(body) {
   const b = body || {};
   const result = {};
 
-  if ('bleEnabled' in b) {
-    if (typeof b.bleEnabled !== 'boolean') {
-      return { ok: false, status: 400, error: 'bleEnabled must be a boolean' };
+  for (const flag of ['bleEnabled', 'webAllowNonIos']) {
+    if (flag in b) {
+      if (typeof b[flag] !== 'boolean') {
+        return { ok: false, status: 400, error: `${flag} must be a boolean` };
+      }
+      result[flag] = b[flag];
     }
-    result.bleEnabled = b.bleEnabled;
   }
 
   for (const meters of ['nearBufferM', 'farBufferM']) {

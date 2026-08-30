@@ -1,7 +1,8 @@
 import { Card, Screen } from '../components/Chrome';
 
 /**
- * Shown to anything that is not an iPhone or iPad.
+ * Shown to anything that is not an iPhone or iPad, unless an admin has switched
+ * `webAllowNonIos` on (see usePlatformGate).
  *
  * Android has the native app, which verifies over Bluetooth as well as GPS — a
  * browser build can only do GPS, so sending Android users here would be a

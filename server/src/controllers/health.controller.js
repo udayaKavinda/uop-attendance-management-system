@@ -18,4 +18,17 @@ async function appVersion(req, res) {
   res.json({ minSupportedVersionCode: settings.minSupportedVersionCode || 0 });
 }
 
-module.exports = { healthz, appVersion };
+/**
+ * Public: the browser client reads this before deciding whether to serve a
+ * non-iOS device. It must be unauthenticated, because that decision is made
+ * before anyone has signed in.
+ *
+ * Deliberately narrow — one boolean. The rest of the settings singleton is
+ * admin-only, and nothing else here should leak to an anonymous caller.
+ */
+async function webConfig(req, res) {
+  const settings = await settingsService.getSettings();
+  res.json({ allowNonIos: settings.webAllowNonIos === true });
+}
+
+module.exports = { healthz, appVersion, webConfig };

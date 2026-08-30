@@ -1,4 +1,11 @@
-import { Card, EmptyState, ErrorBanner, Screen, TopBar } from '../components/Chrome';
+import {
+  Card,
+  EmptyState,
+  ErrorBanner,
+  PrimaryButton,
+  Screen,
+  TopBar,
+} from '../components/Chrome';
 import { CoursePicker } from '../components/CoursePicker';
 import { HelpCodeDialog } from '../components/HelpCodeDialog';
 import { WINDOW_SECONDS, useCheckIn } from '../hooks/useCheckIn';
@@ -8,9 +15,11 @@ import type { CheckInState } from '../hooks/useCheckIn';
  * One screen, one job: get this student marked present.
  *
  * The layout follows the attempt rather than the menu — pick a course, press one
- * button, watch a single progress bar, and land on exactly one of three
+ * button, watch a single progress surface, and land on exactly one of three
  * outcomes. The lecturer's code is deliberately not on the first screen: it only
  * appears once the automatic attempt has actually failed.
+ *
+ * Mirrors ui/student/LectureEntryScreen.kt.
  */
 export function CheckInScreen({ email, onSignOut }: { email: string; onSignOut: () => void }) {
   const checkIn = useCheckIn();
@@ -95,14 +104,12 @@ function CheckInBody({ checkIn }: { checkIn: ReturnType<typeof useCheckIn> }) {
             onGetHelp={checkIn.openHelp}
           />
         ) : (
-          <button
-            type="button"
-            className="button button--bluetooth"
+          <PrimaryButton
+            text="Check me in"
+            variant="bluetooth"
             disabled={!state.selectedCourseId || busy}
             onClick={checkIn.startCheckIn}
-          >
-            Check me in
-          </button>
+          />
         )}
       </div>
     </>
@@ -116,6 +123,7 @@ function RunningPanel({ state, onCancel }: { state: CheckInState; onCancel: () =
 
   return (
     <div className="running">
+      {/* Signals "we're listening" without implying which radio is doing the work. */}
       <div className="dot" aria-hidden="true">
         <div className="dot__inner" />
       </div>
@@ -156,7 +164,7 @@ function NeedsHelpPanel({
 }) {
   return (
     <div className="needshelp">
-      <div style={{ fontSize: 28 }} aria-hidden="true">
+      <div className="needshelp__emoji" aria-hidden="true">
         🤔
       </div>
       <div className="needshelp__title">We couldn't confirm you're in the lecture</div>
@@ -165,12 +173,8 @@ function NeedsHelpPanel({
         code.
       </div>
       <div className="stack">
-        <button type="button" className="button button--bluetooth" onClick={onTryAgain}>
-          Try again
-        </button>
-        <button type="button" className="button button--plain" onClick={onGetHelp}>
-          Get help
-        </button>
+        <PrimaryButton text="Try again" variant="bluetooth" onClick={onTryAgain} />
+        <PrimaryButton text="Get help" variant="plain" onClick={onGetHelp} />
       </div>
     </div>
   );
@@ -196,9 +200,7 @@ function Outcome({
       </div>
       <h1 className="outcome__title">{title}</h1>
       <p className={`outcome__body outcome__body--${variant}`}>{body}</p>
-      <button type="button" className="button" onClick={onDone}>
-        Mark another lecture
-      </button>
+      <PrimaryButton text="Mark another lecture" onClick={onDone} />
     </div>
   );
 }

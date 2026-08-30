@@ -99,6 +99,64 @@ describe('iOS web client mount', () => {
   });
 });
 
+describe('non-iOS kill switch', () => {
+  const settingsService = require('../services/settings.service');
+  const { validateSettingsBody } = require('../validators/settings.validator');
+
+  afterEach(() => jest.restoreAllMocks());
+
+  const getWebConfig = async (settings) => {
+    jest.spyOn(settingsService, 'getSettings').mockResolvedValue(settings);
+    return request(app).get('/api/web-config');
+  };
+
+  test('is public — the gate runs before anyone has signed in', async () => {
+    const res = await getWebConfig({ webAllowNonIos: false });
+    expect(res.status).toBe(200);
+  });
+
+  test('blocks by default, including when the field was never written', async () => {
+    for (const settings of [{}, { webAllowNonIos: false }, { webAllowNonIos: undefined }]) {
+      const res = await getWebConfig(settings);
+      expect(res.body).toEqual({ allowNonIos: false });
+    }
+  });
+
+  test('reports the open state once an admin switches it on', async () => {
+    const res = await getWebConfig({ webAllowNonIos: true });
+    expect(res.body).toEqual({ allowNonIos: true });
+  });
+
+  test('leaks nothing else from the settings singleton', async () => {
+    const res = await getWebConfig({
+      webAllowNonIos: false,
+      studentEmailDomain: 'eng.pdn.ac.lk',
+      seedRate: 3,
+      minSupportedVersionCode: 42,
+    });
+    expect(Object.keys(res.body)).toEqual(['allowNonIos']);
+  });
+
+  test('only accepts a real boolean from the admin PATCH', () => {
+    expect(validateSettingsBody({ webAllowNonIos: true })).toMatchObject({
+      ok: true,
+      webAllowNonIos: true,
+    });
+    expect(validateSettingsBody({ webAllowNonIos: false })).toMatchObject({
+      ok: true,
+      webAllowNonIos: false,
+    });
+    // A truthy string must not quietly open the client up.
+    expect(validateSettingsBody({ webAllowNonIos: 'true' })).toMatchObject({ ok: false, status: 400 });
+    expect(validateSettingsBody({ webAllowNonIos: 1 })).toMatchObject({ ok: false, status: 400 });
+  });
+
+  test('the existing bleEnabled flag still validates the same way', () => {
+    expect(validateSettingsBody({ bleEnabled: false })).toMatchObject({ ok: true, bleEnabled: false });
+    expect(validateSettingsBody({ bleEnabled: 'no' })).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
 describe('web client OAuth return base', () => {
   const ORIGINAL_APP_BASE_URL = process.env.APP_BASE_URL;
 

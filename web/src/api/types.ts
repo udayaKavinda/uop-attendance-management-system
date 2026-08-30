@@ -4,6 +4,16 @@
  * Android/…/data/net/Dto.kt, which mirrors the same endpoints for the native app.
  */
 
+/**
+ * GET /api/web-config — public, read before sign-in.
+ *
+ * `allowNonIos` is the admin's escape hatch for when the Android app is
+ * unavailable. Absent or false means this client serves iOS only.
+ */
+export interface WebConfig {
+  allowNonIos?: boolean;
+}
+
 /** GET /api/me */
 export interface Me {
   studentId: string;

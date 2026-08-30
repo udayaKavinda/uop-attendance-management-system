@@ -4,6 +4,7 @@ import type {
   RunningCoursesRes,
   UnifiedAttendanceReq,
   UnifiedAttendanceRes,
+  WebConfig,
 } from './types';
 
 /**
@@ -67,6 +68,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<ApiResu
 }
 
 export const api = {
+  webConfig: () => request<WebConfig>('/api/web-config'),
+
   me: () => request<Me>('/api/me'),
 
   logout: () => request<{ success?: boolean }>('/api/logout', { method: 'POST' }),

@@ -1,9 +1,17 @@
 /*
- * Palette mirrored from the native app's Compose theme
- * (Android/…/ui/theme/Color.kt), which in turn mirrors the original React
- * tokens — so the two clients stay visually one product.
+ * Visual parity with the native student screen.
+ *
+ * Every value here is taken from the Compose sources rather than eyeballed:
+ * colours from ui/theme/Color.kt, radii from Shape.kt, sizes and weights from
+ * Type.kt, and component structure from ui/components/Components.kt and
+ * ui/student/LectureEntryScreen.kt. Compose `dp`/`sp` map 1:1 to CSS px here.
+ *
+ * All three clients — this one, the Android app, and the original React app the
+ * Android theme was mirrored from — share the same palette and the same
+ * background photograph.
  */
 :root {
+  /* Color.kt */
   --app-bg: #f7f8fa;
   --card: #ffffff;
   --ink: #111827;
@@ -39,9 +47,14 @@
 
   --uop-maroon: #7a1414;
 
-  --radius-panel: 14px;
-  --radius-card: 20px;
-  --pill: 999px;
+  /* Shape.kt — Card 22, Panel 16, Input 14, Menu 12, Option 10, Pill 999 */
+  --r-card: 22px;
+  --r-panel: 16px;
+  --r-input: 14px;
+  --r-option: 10px;
+  --r-pill: 999px;
+
+  --shadow-card: 0 8px 32px rgba(15, 23, 42, 0.08);
 }
 
 * {
@@ -56,15 +69,40 @@ body,
 
 body {
   margin: 0;
-  background: var(--app-bg);
   color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, sans-serif;
+  /* Inter with a system fallback, as in the original React app. */
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, sans-serif;
   font-size: 15px;
   line-height: 1.5;
-  /* iOS bounces the whole document by default, which looks broken in standalone. */
   overscroll-behavior-y: none;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   -webkit-tap-highlight-color: transparent;
+
+  /*
+   * AppBackground in Components.kt: the same photograph under a flat
+   * #F7F8FA wash at 58% alpha. The background-color paints immediately, so the
+   * layout is never left transparent while the (large) photo loads.
+   */
+  background-color: var(--app-bg);
+  background-image:
+    linear-gradient(rgba(247, 248, 250, 0.58), rgba(247, 248, 250, 0.58)),
+    url('./assets/app-background.jpg');
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/*
+ * iOS ignores background-attachment: fixed and renders it as a huge scrolling
+ * image. Pinning the background to a fixed pseudo-element instead gives the
+ * same stationary wash that AppBackground produces on Android.
+ */
+@supports (-webkit-touch-callout: none) {
+  body {
+    background-attachment: scroll;
+  }
 }
 
 button {
@@ -83,6 +121,7 @@ button {
     env(safe-area-inset-left);
 }
 
+/* Centres the card vertically, matching the Spacer(weight=1) pair in Compose. */
 .app__body {
   flex: 1;
   display: flex;
@@ -98,7 +137,6 @@ button {
   gap: 10px;
   padding: 12px 16px;
   background: rgba(255, 255, 255, 0.92);
-  border-bottom: 1px solid var(--border);
 }
 
 .topbar__logo {
@@ -119,6 +157,7 @@ button {
 .topbar__title {
   font-weight: 800;
   font-size: 15px;
+  color: var(--ink);
 }
 
 .topbar__subtitle {
@@ -138,27 +177,36 @@ button {
   padding: 8px;
 }
 
+/* AppFooter */
 .footer {
   text-align: center;
   color: var(--muted);
-  font-size: 11px;
-  padding: 12px 16px 16px;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 16px;
+  padding: 12px 16px;
 }
 
+.footer a {
+  color: var(--muted);
+}
+
+/* AppCard: radius 22, 1px border, elevation 8 */
 .card {
   width: 100%;
   max-width: 480px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-card);
+  border-radius: var(--r-card);
   padding: 22px;
-  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04), 0 8px 24px rgba(17, 24, 39, 0.05);
+  box-shadow: var(--shadow-card);
 }
 
-/* ── Type ─────────────────────────────────────────────────────────────────── */
+/* ── Type (Type.kt) ───────────────────────────────────────────────────────── */
 
+/* titleMedium, ExtraBold as used by the screen heading */
 .title {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 800;
   margin: 0;
 }
@@ -169,18 +217,19 @@ button {
   margin: 4px 0 0;
 }
 
+/* labelLarge */
 .label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   margin: 0 0 8px;
 }
 
-/* ── Controls ─────────────────────────────────────────────────────────────── */
+/* ── Buttons (PrimaryButton) ──────────────────────────────────────────────── */
 
 .button {
   width: 100%;
   border: 0;
-  border-radius: var(--pill);
+  border-radius: var(--r-pill);
   padding: 14px 18px;
   font-size: 15px;
   font-weight: 700;
@@ -192,14 +241,17 @@ button {
   background: linear-gradient(95deg, var(--bt-deep), var(--bt-mid), var(--bt-light));
 }
 
+/* Compose swaps the gradient for a flat Muted fill rather than fading it out. */
+.button:disabled {
+  background: var(--muted);
+  cursor: default;
+}
+
+/* The white "Get help" pill inside the warning panel. */
 .button--plain {
   background: #fff;
   color: var(--warn-text);
-  border: 0;
-}
-
-.button:disabled {
-  opacity: 0.5;
+  padding: 13px 18px;
 }
 
 .button--link {
@@ -208,25 +260,42 @@ button {
   border: 0;
   color: var(--muted);
   font-size: 13px;
-  font-weight: 600;
   padding: 8px 12px;
+  margin-top: 12px;
+}
+
+/* AppTextField: label above a radius-14 outlined field */
+.field__label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 6px;
 }
 
 .input {
   width: 100%;
   border: 1px solid var(--input-border);
-  border-radius: 12px;
-  padding: 13px 14px;
+  border-radius: var(--r-input);
+  padding: 14px;
   /* Anything under 16px makes iOS Safari zoom the viewport on focus. */
   font-size: 16px;
-  background: #fff;
+  background: var(--card);
   color: var(--ink);
+}
+
+.input::placeholder {
+  color: var(--muted);
 }
 
 .input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.input:disabled {
+  background: var(--inactive-bg);
 }
 
 /* ── Course picker ────────────────────────────────────────────────────────── */
@@ -239,7 +308,7 @@ button {
   text-align: left;
   background: var(--inactive-bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-panel);
+  border-radius: var(--r-panel);
   padding: 14px;
   margin-bottom: 8px;
   color: inherit;
@@ -248,16 +317,27 @@ button {
 .course--selected {
   background: var(--chip-bg);
   border: 2px solid var(--accent);
+  /* Keep the row from shifting when the border thickens. */
+  padding: 13px;
+}
+
+.course:disabled {
+  opacity: 0.6;
 }
 
 .course__code {
   font-weight: 800;
   font-size: 15px;
+  color: var(--ink);
 }
 
 .course__meta {
   color: var(--muted);
   font-size: 12px;
+}
+
+.course__meta--batch {
+  font-size: 11px;
 }
 
 .course__tick {
@@ -269,6 +349,7 @@ button {
   display: grid;
   place-items: center;
   font-size: 13px;
+  font-weight: 700;
   color: #fff;
 }
 
@@ -280,6 +361,7 @@ button {
 .course__none {
   color: var(--muted);
   font-size: 12px;
+  margin: 8px 0 0;
 }
 
 /* ── Running panel ────────────────────────────────────────────────────────── */
@@ -287,7 +369,7 @@ button {
 .running {
   background: var(--bt-badge-bg);
   border: 1px solid var(--bt-badge-border);
-  border-radius: var(--radius-panel);
+  border-radius: var(--r-panel);
   padding: 18px;
   text-align: center;
 }
@@ -313,7 +395,7 @@ button {
 
 .progress {
   height: 6px;
-  border-radius: var(--pill);
+  border-radius: var(--r-pill);
   background: #fff;
   overflow: hidden;
 }
@@ -321,9 +403,10 @@ button {
 .progress__fill {
   height: 100%;
   background: var(--bt-mid);
-  transition: width 1s linear;
+  transition: width 0.5s linear;
 }
 
+/* PulsingDot */
 .dot {
   width: 54px;
   height: 54px;
@@ -339,21 +422,21 @@ button {
   height: 34px;
   border-radius: 17px;
   background: linear-gradient(90deg, var(--bt-deep), var(--bt-light));
-  animation: pulse 1.8s ease-in-out infinite;
+  animation: pulse 1.8s linear infinite alternate;
 }
 
 @keyframes pulse {
-  0%,
-  100% {
+  from {
     opacity: 0.55;
   }
-  50% {
+  to {
     opacity: 1;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dot__inner {
+  .dot__inner,
+  .spinner {
     animation: none;
   }
   .progress__fill {
@@ -365,15 +448,20 @@ button {
 
 .needshelp {
   background: var(--warn-bg);
-  border-radius: var(--radius-panel);
+  border-radius: var(--r-panel);
   padding: 18px;
   text-align: center;
+}
+
+.needshelp__emoji {
+  font-size: 28px;
 }
 
 .needshelp__title {
   font-weight: 700;
   font-size: 15px;
   color: var(--warn-text);
+  margin-top: 8px;
 }
 
 .needshelp__body {
@@ -409,6 +497,7 @@ button {
 .outcome__title {
   font-weight: 800;
   font-size: 19px;
+  color: var(--ink);
   margin: 0 0 8px;
 }
 
@@ -425,38 +514,92 @@ button {
   color: var(--warn-text);
 }
 
-/* ── Banners and empty states ─────────────────────────────────────────────── */
+/* ── Banners, empty and loading states ────────────────────────────────────── */
 
+/* ErrorBanner: radius 10 (Option), 14px text */
 .banner {
   background: var(--error-bg);
   border: 1px solid var(--error-border);
   color: var(--error-text);
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-size: 13px;
+  border-radius: var(--r-option);
+  padding: 10px 13px;
+  font-size: 14px;
 }
 
+/* EmptyState */
 .empty {
   text-align: center;
-  padding: 8px 0;
+  padding: 28px 16px;
 }
 
 .empty__icon {
-  font-size: 32px;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 10px;
+  border-radius: var(--r-panel);
+  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+  display: grid;
+  place-items: center;
+  font-size: 22px;
 }
 
 .empty__title {
+  font-size: 18px;
   font-weight: 700;
-  margin: 10px 0 6px;
+  color: var(--ink);
+  margin-bottom: 10px;
 }
 
 .empty__text {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   margin: 0;
 }
 
-/* ── Dialog ───────────────────────────────────────────────────────────────── */
+/* LoadingGate */
+.loading {
+  text-align: center;
+  padding: 24px;
+}
+
+.loading__title {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 10px 0 0;
+}
+
+.loading__text {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 10px 0 0;
+}
+
+.spinner {
+  width: 38px;
+  height: 38px;
+  margin: 0 auto;
+  border-radius: 50%;
+  border: 4px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+
+.spinner--small {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+  display: inline-block;
+  vertical-align: -3px;
+  margin-right: 8px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Dialog (AlertDialog) ─────────────────────────────────────────────────── */
 
 .dialog__scrim {
   position: fixed;
@@ -473,13 +616,14 @@ button {
   width: 100%;
   max-width: 400px;
   background: var(--card);
-  border-radius: var(--radius-card);
-  padding: 22px;
+  border-radius: 28px;
+  padding: 24px;
+  box-shadow: var(--shadow-card);
 }
 
 .dialog__title {
   font-weight: 800;
-  font-size: 17px;
+  font-size: 18px;
   margin: 0 0 8px;
 }
 
@@ -506,9 +650,10 @@ button {
 
 .dialog__action:disabled {
   opacity: 0.5;
+  cursor: default;
 }
 
-/* ── Login / blocked ──────────────────────────────────────────────────────── */
+/* ── Login / notices ──────────────────────────────────────────────────────── */
 
 .hero {
   text-align: center;
@@ -526,17 +671,18 @@ button {
 }
 
 .hero__title {
-  font-size: 20px;
+  font-size: 21px;
   font-weight: 800;
+  letter-spacing: -0.4px;
   margin: 0 0 6px;
 }
 
 .hero__body {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   margin: 0 0 22px;
 }
 
 .stack > * + * {
-  margin-top: 12px;
+  margin-top: 10px;
 }
