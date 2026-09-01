@@ -49,9 +49,10 @@ import lk.ac.pdn.eng.feats.ui.theme.AppShapes
 import lk.ac.pdn.eng.feats.ui.theme.Palette
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.CopyrightOverlay
 import org.osmdroid.views.overlay.MapEventsOverlay
@@ -67,6 +68,30 @@ import java.io.File
 private const val ENGINEERING_FACULTY_LAT = 7.25439
 private const val ENGINEERING_FACULTY_LNG = 80.59169
 private const val ENGINEERING_FACULTY_ZOOM = 17.5
+
+/**
+ * Satellite imagery instead of the OSM street layer: building footprints are far
+ * easier to trace accurately against actual roofs than against street-map
+ * outlines. Esri's World Imagery service is free and needs no API key, same as
+ * the OSM tiles it replaces.
+ *
+ * osmdroid's stock XYTileSource builds z/x/y URLs; Esri's tile REST API expects
+ * z/y/x, so this overrides getTileURLString rather than reusing it.
+ */
+private val SatelliteTileSource = object : OnlineTileSourceBase(
+    "EsriWorldImagery",
+    0,
+    19,
+    256,
+    "",
+    arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/"),
+    "Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+) {
+    override fun getTileURLString(pMapTileIndex: Long): String =
+        baseUrl + MapTileIndex.getZoom(pMapTileIndex) + "/" +
+            MapTileIndex.getY(pMapTileIndex) + "/" +
+            MapTileIndex.getX(pMapTileIndex)
+}
 
 /**
  * Admin Geofences tab. The map is **always visible** with every saved building
@@ -419,7 +444,7 @@ private fun GeofenceMapView(
             }
 
             MapView(context).apply {
-                setTileSource(TileSourceFactory.MAPNIK)
+                setTileSource(SatelliteTileSource)
                 setMultiTouchControls(true)
                 minZoomLevel = 3.0
                 maxZoomLevel = 20.0
