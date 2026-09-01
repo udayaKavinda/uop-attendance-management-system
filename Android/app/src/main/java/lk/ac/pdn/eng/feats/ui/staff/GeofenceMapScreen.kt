@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.GradientDrawable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -94,12 +95,13 @@ private val SatelliteTileSource = object : OnlineTileSourceBase(
 }
 
 /**
- * Admin Geofences tab. The map is **always visible** with every saved building
- * drawn on it; "Add building" switches the same map into draw mode rather than
- * opening a separate editor.
+ * Admin Geofences tab. The map is always visible, but a saved building's outline
+ * only draws when its card below is tapped — with many buildings mapped, drawing
+ * them all at once made the satellite view unreadable. "Add building" switches
+ * the same map into draw mode rather than opening a separate editor.
  *
- * The map is deliberately inline (not a Compose `Dialog`) so saved geofences stay
- * visible as context while a new building is drawn.
+ * The map is deliberately inline (not a Compose `Dialog`) so the selected
+ * building's outline stays visible as context while a new one is drawn.
  */
 @Composable
 fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
@@ -107,6 +109,7 @@ fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
     var pointCount by remember { mutableStateOf(0) }
     var name by remember { mutableStateOf("") }
     var mapController by remember { mutableStateOf<GeofenceMapController?>(null) }
+    var selectedGeofenceId by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 14.dp),
@@ -145,6 +148,7 @@ fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
                     // A native MapView still needs a bounded height inside LazyColumn.
                     GeofenceMapView(
                         geofences = state.geofences,
+                        selectedGeofenceId = selectedGeofenceId,
                         drawing = drawing,
                         onReady = { mapController = it },
                         onPointCountChanged = { pointCount = it },
@@ -157,7 +161,7 @@ fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
                                 if (state.geofences.isEmpty()) {
                                     "No buildings yet. Add one to enable GPS geofence sessions."
                                 } else {
-                                    "Saved buildings are outlined on the map."
+                                    "Tap a building below to see its outline on the map."
                                 },
                                 color = Palette.Muted,
                                 fontSize = 12.5.sp,
@@ -169,6 +173,7 @@ fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
                                     name = ""
                                     pointCount = 0
                                     drawing = true
+                                    selectedGeofenceId = null
                                     mapController?.setDrawing(true)
                                 },
                             )
@@ -236,24 +241,45 @@ fun GeofencesTab(state: StaffState, vm: StaffViewModel) {
             item { EmptyState("🏛️", "No buildings yet", "Add one above to enable geofence-based sessions.") }
         } else {
             items(state.geofences, key = { it.id ?: it.hashCode().toString() }) { g ->
-                GeofenceCard(g, onDelete = { g.id?.let(vm::deleteGeofence) })
+                GeofenceCard(
+                    g,
+                    selected = g.id != null && g.id == selectedGeofenceId,
+                    onClick = {
+                        if (drawing) return@GeofenceCard
+                        selectedGeofenceId = if (g.id == selectedGeofenceId) null else g.id
+                    },
+                    onDelete = {
+                        if (g.id == selectedGeofenceId) selectedGeofenceId = null
+                        g.id?.let(vm::deleteGeofence)
+                    },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun GeofenceCard(geofence: GeofenceDto, onDelete: () -> Unit) {
-    AppCard(Modifier.fillMaxWidth(), shape = AppShapes.Panel) {
+private fun GeofenceCard(
+    geofence: GeofenceDto,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    AppCard(
+        Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = AppShapes.Panel,
+        border = if (selected) Palette.Accent else Palette.Border,
+    ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Palette.ChipBg),
+                Modifier.size(34.dp).clip(RoundedCornerShape(10.dp))
+                    .background(if (selected) Palette.Accent else Palette.ChipBg),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     Icons.Outlined.LocationCity,
                     contentDescription = null,
-                    tint = Palette.AccentDark,
+                    tint = if (selected) Color.White else Palette.AccentDark,
                     modifier = Modifier.size(18.dp),
                 )
             }
@@ -281,7 +307,7 @@ private class GeofenceMapController(
     private val savedOverlays = mutableListOf<Overlay>()
     private val draftOverlays = mutableListOf<Overlay>()
     private var drawing = false
-    private var savedSignature: Int? = null
+    private var savedSignature: Pair<Int, String?>? = null
 
     private val eventOverlay = MapEventsOverlay(object : MapEventsReceiver {
         override fun singleTapConfirmedHelper(point: GeoPoint?): Boolean {
@@ -321,30 +347,35 @@ private class GeofenceMapController(
     /** Server polygon order is [longitude, latitude]. */
     fun polygon(): List<List<Double>> = points.map { listOf(it.longitude, it.latitude) }
 
-    fun renderSaved(geofences: List<GeofenceDto>) {
-        val signature = geofences.hashCode()
+    /** Only the selected building's outline draws — with many buildings mapped, all of
+     *  them at once made the satellite view unreadable. Selecting a different building
+     *  (or the same one again) always re-fits the camera, even if the list is unchanged. */
+    fun renderSaved(geofences: List<GeofenceDto>, selectedId: String?) {
+        val signature = geofences.hashCode() to selectedId
         if (signature == savedSignature) return
         savedSignature = signature
 
         map.overlays.removeAll(savedOverlays.toSet())
         savedOverlays.clear()
 
+        val selected = selectedId?.let { id -> geofences.firstOrNull { it.id == id } }
         val allPoints = mutableListOf<GeoPoint>()
-        geofences.forEach { geofence ->
-            val polygonPoints = geofence.polygon.orEmpty().mapNotNull { pair ->
+        if (selected != null) {
+            val polygonPoints = selected.polygon.orEmpty().mapNotNull { pair ->
                 if (pair.size < 2) null else GeoPoint(pair[1], pair[0])
             }
-            if (polygonPoints.size < 3) return@forEach
-            allPoints += polygonPoints
-            val polygon = Polygon(map).apply {
-                setPoints(polygonPoints)
-                title = geofence.name.orEmpty()
-                outlinePaint.color = AndroidColor.rgb(91, 76, 219)
-                outlinePaint.strokeWidth = context.dp(2f)
-                fillPaint.color = AndroidColor.argb(48, 123, 97, 255)
+            if (polygonPoints.size >= 3) {
+                allPoints += polygonPoints
+                val polygon = Polygon(map).apply {
+                    setPoints(polygonPoints)
+                    title = selected.name.orEmpty()
+                    outlinePaint.color = AndroidColor.rgb(91, 76, 219)
+                    outlinePaint.strokeWidth = context.dp(2f)
+                    fillPaint.color = AndroidColor.argb(48, 123, 97, 255)
+                }
+                savedOverlays += polygon
+                map.overlays += polygon
             }
-            savedOverlays += polygon
-            map.overlays += polygon
         }
 
         keepEventOverlayOnTop()
@@ -418,6 +449,7 @@ private class GeofenceMapController(
 @Composable
 private fun GeofenceMapView(
     geofences: List<GeofenceDto>,
+    selectedGeofenceId: String?,
     drawing: Boolean,
     onReady: (GeofenceMapController) -> Unit,
     onPointCountChanged: (Int) -> Unit,
@@ -447,7 +479,11 @@ private fun GeofenceMapView(
                 setTileSource(SatelliteTileSource)
                 setMultiTouchControls(true)
                 minZoomLevel = 3.0
-                maxZoomLevel = 20.0
+                // Esri's imagery only has real tiles up to native zoom 19 (see
+                // SatelliteTileSource above); osmdroid scales that last tile up to fill
+                // any level past it, so this still buys real extra magnification for
+                // tracing a building outline precisely, it just softens past 19.
+                maxZoomLevel = 22.0
                 controller.setZoom(ENGINEERING_FACULTY_ZOOM)
                 controller.setCenter(GeoPoint(ENGINEERING_FACULTY_LAT, ENGINEERING_FACULTY_LNG))
                 overlays += CopyrightOverlay(context)
@@ -455,13 +491,13 @@ private fun GeofenceMapView(
 
                 val mapController = GeofenceMapController(context, this, onPointCountChanged)
                 mapState = mapController
-                mapController.renderSaved(geofences)
+                mapController.renderSaved(geofences, selectedGeofenceId)
                 mapController.setDrawing(drawing)
                 onReady(mapController)
             }
         },
         update = {
-            mapState?.renderSaved(geofences)
+            mapState?.renderSaved(geofences, selectedGeofenceId)
             mapState?.setDrawing(drawing)
         },
     )

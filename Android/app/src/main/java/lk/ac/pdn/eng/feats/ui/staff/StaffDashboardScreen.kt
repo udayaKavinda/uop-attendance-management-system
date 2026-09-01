@@ -1779,6 +1779,12 @@ private fun LecturersTab(state: StaffState, vm: StaffViewModel) {
     var lemail by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf<LecturerDto?>(null) }
+    var query by remember { mutableStateOf("") }
+
+    // Below 2 characters searchLecturers() no-ops (see StaffViewModel), so the
+    // loaded/paginated list stays visible until there is enough to search on.
+    val searching = query.trim().length >= 2
+    val visible = if (searching) state.lecturerSearchResults else state.lecturers
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 14.dp),
@@ -1803,10 +1809,34 @@ private fun LecturersTab(state: StaffState, vm: StaffViewModel) {
                 }
             }
         }
-        if (state.lecturers.isEmpty()) {
-            item { EmptyState("👤", "No lecturers", "Add a lecturer above.") }
+        item {
+            AppTextField(
+                query,
+                {
+                    query = it
+                    vm.searchLecturers(it)
+                },
+                "Search lecturers",
+                placeholder = "Name or email…",
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = Palette.Muted) },
+            )
+        }
+        if (searching && state.lecturerSearchLoading) {
+            item {
+                Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Palette.Accent)
+                }
+            }
+        } else if (visible.isEmpty()) {
+            item {
+                if (searching) {
+                    EmptyState("👤", "No matches", "No lecturer matches \"${query.trim()}\".")
+                } else {
+                    EmptyState("👤", "No lecturers", "Add a lecturer above.")
+                }
+            }
         } else {
-            items(state.lecturers, key = { it.id ?: it.hashCode().toString() }) { lect ->
+            items(visible, key = { it.id ?: it.hashCode().toString() }) { lect ->
                 AppCard(Modifier.fillMaxWidth(), shape = AppShapes.Panel) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -1821,7 +1851,7 @@ private fun LecturersTab(state: StaffState, vm: StaffViewModel) {
                     }
                 }
             }
-            if (state.lecturersHasMore) {
+            if (!searching && state.lecturersHasMore) {
                 item { LoadMoreRow(loading = state.lecturersLoadingMore, onClick = vm::loadMoreLecturers) }
             }
         }
