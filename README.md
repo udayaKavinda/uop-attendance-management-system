@@ -112,4 +112,6 @@ by hand after publishing a release that must not be skipped.
 
 "Delete" on a course or lecturer hides it rather than destroying data — the same as
 disabling — and hidden entries sort to the bottom of admin lists instead of disappearing
-outright.
+outright. Deleting a lecturer never assigns a substitute owner: it's refused outright if it
+would leave an active course with no lecturer, but an already-archived course is allowed to
+end up ownerless.

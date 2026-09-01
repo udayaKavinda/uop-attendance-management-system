@@ -49,37 +49,34 @@ async function createOrUpdateLecturer({ name, email, phone }) {
   return { ok: true, lecturer: p };
 }
 
+/**
+ * Removing a lecturer never invents a substitute owner. A course left with zero
+ * lecturers is only acceptable while it's archived (`active: false`) — archived
+ * courses don't run sessions or take attendance, so an empty owner list there is
+ * inert. An active course would silently lose all lecturer access, so the whole
+ * delete is refused up front (before any course is touched) if it would leave
+ * one ownerless.
+ */
 async function deleteLecturer(lecturerId) {
   const lec = await Person.findOne({ _id: lecturerId, role: 'lecturer', deleted: false });
   if (!lec) return { ok: false, status: 404, error: 'Lecturer not found' };
 
-  const affectedCourses = await Course.find({ lecturers: lec._id }).select('_id lecturers');
-  let fallbackLecturerId = null;
-  const needsFallback = affectedCourses.some((courseDoc) => {
+  const affectedCourses = await Course.find({ lecturers: lec._id }).select('_id lecturers active');
+  const blockedByActiveCourse = affectedCourses.some((courseDoc) => {
     const remaining = (courseDoc.lecturers || []).filter((id) => String(id) !== String(lec._id));
-    return remaining.length === 0;
+    return remaining.length === 0 && courseDoc.active;
   });
-  if (needsFallback) {
-    const fallbackLecturer = await Person.findOne({
-      _id: { $ne: lec._id },
-      role: 'lecturer',
-      deleted: false,
-    }).sort({ createdAt: 1 }).select('_id');
-    if (!fallbackLecturer) {
-      return {
-        ok: false,
-        status: 400,
-        error: 'Cannot remove this lecturer because one or more courses would have no assigned lecturer.',
-      };
-    }
-    fallbackLecturerId = fallbackLecturer._id;
+  if (blockedByActiveCourse) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Cannot remove this lecturer because one or more active courses would have no assigned '
+        + 'lecturer. Archive those courses first, or assign another lecturer.',
+    };
   }
 
   for (const courseDoc of affectedCourses) {
-    const nextLecturers = (courseDoc.lecturers || []).filter((id) => String(id) !== String(lec._id));
-    courseDoc.lecturers = nextLecturers.length > 0
-      ? nextLecturers
-      : [fallbackLecturerId];
+    courseDoc.lecturers = (courseDoc.lecturers || []).filter((id) => String(id) !== String(lec._id));
     await courseDoc.save();
   }
 

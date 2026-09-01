@@ -69,7 +69,9 @@ multiple batches at once (one Course document per batch, sharing the same name/o
 Creating a course whose code+batch already exists is rejected with the existing owner's
 name so the lecturer knows who to ask. "Delete" on a course or lecturer hides it (same as
 disabling a course) rather than destroying data, and hidden entries sort to the bottom of
-their list; the old separate hard-delete button no longer exists.
+their list; the old separate hard-delete button no longer exists. Deleting a lecturer who
+is the last owner of an active course is refused rather than reassigning them elsewhere;
+the same situation on an already-archived course is allowed.
 
 ## Attendance flow
 

@@ -327,6 +327,11 @@ becomes visible to staff is the Excel export under `/api/admin/courses`.
 | `POST/PATCH/DELETE /api/admin/geofences/:id?` | admin | building polygon management |
 | `GET/POST/DELETE /api/admin/lecturers/:id?` | admin | lecturer directory — `GET ?q=&page=&limit=`; `DELETE` hides (soft-deletes) rather than destroying |
 
+Deleting a lecturer never invents a substitute owner for their courses. If removing them
+would leave an *active* course with zero lecturers, the whole delete is refused (400) before
+anything is touched; an *archived* course is allowed to end up ownerless, since it runs no
+sessions and takes no attendance.
+
 ## Background jobs and caches
 
 - Non-recurring session expiry.
