@@ -315,7 +315,14 @@ async function recordAttendance(studentPk, courseId, {
  */
 async function getAttendanceMatrixRaw(course) {
   const sessionIds = await Attendance.distinct('session', { course: course._id });
+  // Only the five fields the matrix and the .xlsx export actually read. The rest of
+  // the document — method, band, the centroid subdoc, seedRelayed, courseCode,
+  // lectureCode — is server-internal provenance that both builders discard, and on a
+  // 500-student course that is thousands of hydrated subdocuments built to be thrown
+  // away. `reason` is not optional here: the export reads it for the flagged cell's
+  // comment.
   const attendanceDocs = await Attendance.find({ course: course._id, session: { $in: sessionIds } })
+    .select('student session status attendanceDate reason')
     .populate('student', 'studentId email');
   const sessionMinDate = new Map();
   attendanceDocs.forEach((doc) => {
