@@ -183,6 +183,12 @@ occurrence needs its own explicit Collect tap.
 Name, active/deleted state, and an ordered polygon of `[lng, lat]` vertices. Only
 `active: true, deleted: false` buildings are listed, selectable, or accepted.
 
+Deleting a building is refused while any live session still references it, whether or
+not that session lists other buildings alongside it — the polygon is part of how the
+session decides who is present, so it has to be taken off the sessions deliberately
+first. Sessions that are themselves soft-deleted don't count, since they never run
+again.
+
 ### Attendance
 
 Student/course/session references, stable course/lecture labels, local attendance date,
@@ -324,7 +330,7 @@ becomes visible to staff is the Excel export under `/api/admin/courses`.
 | `GET /api/admin/settings` | staff | current policies |
 | `PATCH /api/admin/settings` | admin | BLE kill switch, distance buffers, per-band geofence-logic strategy, seeding, student email domain, minimum app version |
 | `GET /api/admin/geofences` | staff | active selectable buildings |
-| `POST/PATCH/DELETE /api/admin/geofences/:id?` | admin | building polygon management |
+| `POST/PATCH/DELETE /api/admin/geofences/:id?` | admin | building polygon management; `DELETE` is refused (400) while any live session still uses the building |
 | `GET/POST/DELETE /api/admin/lecturers/:id?` | admin | lecturer directory — `GET ?q=&page=&limit=`; `DELETE` hides (soft-deletes) rather than destroying |
 
 Deleting a lecturer never invents a substitute owner for their courses. If removing them

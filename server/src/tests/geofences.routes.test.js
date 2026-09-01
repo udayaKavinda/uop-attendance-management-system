@@ -14,6 +14,8 @@ jest.mock('connect-mongo', () => ({
 const mongoose = require('mongoose');
 
 let mockStore = [];
+let mockSessions = [];
+
 jest.mock('../models/Geofence', () => {
   const actualMongoose = jest.requireActual('mongoose');
   return {
@@ -41,6 +43,16 @@ jest.mock('../models/Geofence', () => {
   };
 });
 
+jest.mock('../models/LectureSession', () => ({
+  countDocuments: jest.fn((filter = {}) => {
+    const building = filter.buildings ? String(filter.buildings) : null;
+    return Promise.resolve(mockSessions.filter(
+      (s) => s.deleted === filter.deleted
+        && (!building || (s.buildings || []).map(String).includes(building)),
+    ).length);
+  }),
+}));
+
 jest.mock('../models/Person', () => ({ findById: jest.fn(), findOne: jest.fn() }));
 
 const request = require('supertest');
@@ -62,7 +74,23 @@ function headers(person) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockStore = [];
+  mockSessions = [];
 });
+
+/** Seeds a live building straight into the store, bypassing the create route. */
+function seedBuilding(overrides = {}) {
+  const doc = {
+    _id: new mongoose.Types.ObjectId().toHexString(),
+    name: 'Block A',
+    polygon: [[80.59, 7.25], [80.60, 7.25], [80.60, 7.26]],
+    active: true,
+    deleted: false,
+    save: jest.fn(function save() { return Promise.resolve(this); }),
+    ...overrides,
+  };
+  mockStore.push(doc);
+  return doc;
+}
 
 describe('GET/POST/PATCH/DELETE /api/admin/geofences', () => {
   test('401 when not authenticated', async () => {
@@ -149,5 +177,76 @@ describe('GET/POST/PATCH/DELETE /api/admin/geofences', () => {
 
     const list = await request(app).get('/api/admin/geofences').set(authHeader(admin));
     expect(list.body.items).toEqual([]);
+  });
+});
+
+/** A building in use by a live session is not the admin's to remove out from under it. */
+describe('DELETE /api/admin/geofences/:id — in-use guard', () => {
+  const admin = () => makePerson({ role: 'admin' });
+
+  test('refuses while a live session references the building', async () => {
+    const building = seedBuilding();
+    mockSessions.push({ _id: 's1', buildings: [building._id], deleted: false });
+
+    const res = await request(app)
+      .delete(`/api/admin/geofences/${building._id}`)
+      .set(headers(admin()));
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/1 session still uses it/);
+    expect(building.save).not.toHaveBeenCalled();
+    expect(building.deleted).toBe(false);
+  });
+
+  test('pluralises the refusal across several sessions', async () => {
+    const building = seedBuilding();
+    mockSessions.push(
+      { _id: 's1', buildings: [building._id], deleted: false },
+      { _id: 's2', buildings: [building._id], deleted: false },
+    );
+
+    const res = await request(app)
+      .delete(`/api/admin/geofences/${building._id}`)
+      .set(headers(admin()));
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/2 sessions still use it/);
+  });
+
+  test('refuses even when the session lists other buildings alongside it', async () => {
+    const building = seedBuilding({ name: 'Block A' });
+    const spare = seedBuilding({ name: 'Block B' });
+    mockSessions.push({ _id: 's1', buildings: [building._id, spare._id], deleted: false });
+
+    const res = await request(app)
+      .delete(`/api/admin/geofences/${building._id}`)
+      .set(headers(admin()));
+
+    expect(res.status).toBe(400);
+    expect(building.deleted).toBe(false);
+  });
+
+  test('allows the delete when only soft-deleted sessions reference the building', async () => {
+    const building = seedBuilding();
+    mockSessions.push({ _id: 'gone', buildings: [building._id], deleted: true });
+
+    const res = await request(app)
+      .delete(`/api/admin/geofences/${building._id}`)
+      .set(headers(admin()));
+
+    expect(res.status).toBe(200);
+    expect(building.deleted).toBe(true);
+    expect(building.active).toBe(false);
+  });
+
+  test('an unused building still deletes', async () => {
+    const building = seedBuilding();
+
+    const res = await request(app)
+      .delete(`/api/admin/geofences/${building._id}`)
+      .set(headers(admin()));
+
+    expect(res.status).toBe(200);
+    expect(building.deleted).toBe(true);
   });
 });
