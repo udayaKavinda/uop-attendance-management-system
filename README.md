@@ -5,6 +5,7 @@ Peradeniya Faculty of Engineering, backed by an Express/MongoDB API.
 
 ## How attendance is verified
 
+
 Every session works the same way — there is no policy to pick. A student's check-in runs
 one 90-second window in which **Bluetooth and GPS are tried together**, and the first to
 succeed marks them present:
