@@ -240,7 +240,7 @@ Requirements: Android Studio/JDK 17 and an Android SDK with compile SDK 36.
 ```
 
 App configuration: application id `lk.ac.pdn.eng.feats`, min SDK 24, target SDK 37,
-version `1.7.0` (`versionCode 7`). The server's `minSupportedVersionCode` setting is
+version `1.8.0` (`versionCode 8`). The server's `minSupportedVersionCode` setting is
 compared against this `versionCode` on every launch.
 
 For a signed release, create the ignored `keystore.properties` described in the root
