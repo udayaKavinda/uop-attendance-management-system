@@ -14,9 +14,8 @@ const sessionSameSite = sessionCookieSecure ? 'none' : 'lax';
  * forever — it never rejects — so without this a Mongo outage produced *hung*
  * sign-in requests rather than fast failures: req.logIn() awaited a session
  * write that would never land, connections piled up, and the load balancer saw
- * no errors to act on. (The same hang is why two tests in googleIdToken.test.js
- * failed by timing out rather than by asserting.) Rejecting instead lets
- * connect-mongo raise a store error, which Express turns into a 503.
+ * no errors to act on. Rejecting instead lets connect-mongo raise a store
+ * error, which Express turns into a 503.
  */
 const STORE_CONNECT_TIMEOUT_MS = 10_000;
 

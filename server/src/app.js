@@ -28,9 +28,12 @@ if (process.env.NODE_ENV === 'test') {
   app.use(testAuth);
 }
 
-app.use(csrf);
-// Before the routes so it sees every request, including the ones a guard rejects.
+// Before every guard, not just the routes: `csrf` answers 403 without calling
+// next(), so an audit middleware mounted after it never registered its `finish`
+// listener and CSRF rejections — exactly the burst pattern worth finding
+// later — went unrecorded. Passport runs earlier, so req.user is still populated.
 app.use(auditLog);
+app.use(csrf);
 registerRoutes(app);
 app.use(errorHandler);
 

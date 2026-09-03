@@ -37,8 +37,9 @@ const studentRecordLimiter = rateLimit({
  * budget that streaming GPS fixes can no longer consume. 10/min makes a blind
  * guess hopeless while leaving a student who mistypes plenty of room.
  *
- * Applied by the controller rather than the router, because only one of the
- * three submission shapes on POST /api/attendance is a code.
+ * Applied by a small router-level wrapper rather than to the whole route,
+ * because only one of the three submission shapes on POST /api/attendance is
+ * a code — see limitHelpCode in routes/attendance.routes.js.
  */
 const helpCodeLimiter = rateLimit({
   windowMs: 60 * 1000,

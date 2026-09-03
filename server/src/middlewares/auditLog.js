@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const AuditLog = require('../models/AuditLog');
 
 /**
@@ -74,6 +75,12 @@ function auditLog(req, res, next) {
   res.on('finish', () => {
     const status = res.statusCode;
     if (!isAudited(method, path, status)) return;
+
+    // No connection means Mongoose would buffer this insert for bufferTimeoutMS
+    // (10 s by default) and then fail anyway. During an outage that is one parked
+    // timer per audited request for no gain, so drop the row instead of queueing
+    // it — the same reasoning as the session store's connect timeout.
+    if (mongoose.connection.readyState !== 1) return;
 
     // req.auth is set by the requireAuth guards, req.user by Passport. Both are
     // absent on a 401, which is itself the thing worth recording.
