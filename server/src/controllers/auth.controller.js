@@ -4,7 +4,6 @@ const oauthService = require('../services/oauth.service');
 const googleIdentityService = require('../services/googleIdentity.service');
 const { validateExchangeCode, validateGoogleIdToken } = require('../validators/oauth.validator');
 const { respondError } = require('../middlewares/errorHandler');
-const { NATIVE_OAUTH_RETURN_BASES } = require('../utils/constants');
 
 function googleNotConfigured(req, res) {
   res.status(503).json({
@@ -27,20 +26,18 @@ function googleAuth(req, res, next) {
 }
 
 function nativeReturn(req, res) {
-  const target = String(req.query.target || '');
-  const allowed = NATIVE_OAUTH_RETURN_BASES.some((base) => target.startsWith(base));
-  if (!allowed) {
+  // Exact structural validation, not a prefix match — see parseNativeReturnTarget.
+  const parsed = oauthService.parseNativeReturnTarget(req.query.target);
+  if (!parsed) {
     return res.status(400).send('Invalid return target');
   }
-  // The global CSP (script-src 'self') would block the inline redirect script in
-  // production. Relax CSP for this tiny bounce page only so the auto-return to the
-  // native app fires without requiring a manual tap.
-  res.setHeader(
-    'Content-Security-Policy',
-    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
-  );
+  // The page carries no script of its own any more (the redirect is a meta
+  // refresh), so this can be the strictest policy there is rather than the
+  // `script-src 'unsafe-inline'` the old inline redirect needed — which was what
+  // made the target-injection bug executable in the first place.
+  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(oauthService.buildNativeReturnHtml(target));
+  res.send(oauthService.buildNativeReturnHtml(parsed));
 }
 
 function googleCallback(req, res, next) {

@@ -109,20 +109,70 @@ async function removeToken(sessionId) {
 
 // ── Seed tokens (peer seeding) ──────────────────────────────────────────────────
 
-/** Mints (or resets) one student's seeder token for a session, with a lease. */
-async function mintSeedToken(sessionId, ownerId, leaseUntil) {
+/**
+ * Atomically takes one of the session's `maxSeeders` seeder slots and mints that
+ * seeder's token, or returns null when every slot is already held by a live
+ * lease. Replaces the old count-then-mint pair, which was a check-then-act race:
+ * see the `slot` field on the BleToken model for the measured effect.
+ *
+ * A slot is claimed by upserting on `{sessionId, role:'seed', slot}` with a
+ * filter that only matches a free or expired row. Concurrent claimants for the
+ * same slot therefore all attempt an insert and the unique index picks exactly
+ * one winner; every loser gets E11000 and tries the next slot. The cap holds no
+ * matter how many students are accepted in the same millisecond.
+ */
+async function claimSeedSlot(sessionId, ownerId, leaseUntil, maxSeeders, now = Date.now()) {
   const key = String(sessionId || '').trim();
   const owner = String(ownerId || '').trim();
   if (!key || !owner) throw new Error('sessionId and ownerId required');
-  const token = crypto.randomBytes(8).toString('hex');
-  const doc = await getModel().findOneAndUpdate(
-    { sessionId: key, owner, role: 'seed' },
-    {
-      token, prevToken: null, generatedAt: Date.now(), leaseUntil, updatedAt: new Date(),
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
-  );
-  return { token: doc.token, leaseUntil: doc.leaseUntil };
+  if (!Number.isFinite(maxSeeders) || maxSeeders <= 0) return null;
+  const Model = getModel();
+
+  // Already holding a slot (a re-accept within the same lecture): refresh that
+  // row rather than consuming a second slot.
+  const existing = await Model.findOne({ sessionId: key, owner, role: 'seed' });
+  if (existing) {
+    existing.token = crypto.randomBytes(8).toString('hex');
+    existing.prevToken = null;
+    existing.generatedAt = now;
+    existing.leaseUntil = leaseUntil;
+    existing.updatedAt = new Date();
+    await existing.save();
+    return { token: existing.token, leaseUntil: existing.leaseUntil, slot: existing.slot };
+  }
+
+  for (let slot = 0; slot < maxSeeders; slot += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const doc = await Model.findOneAndUpdate(
+        {
+          sessionId: key,
+          role: 'seed',
+          slot,
+          $or: [{ leaseUntil: null }, { leaseUntil: { $lte: now } }],
+        },
+        {
+          $set: {
+            owner,
+            token: crypto.randomBytes(8).toString('hex'),
+            prevToken: null,
+            generatedAt: now,
+            leaseUntil,
+            updatedAt: new Date(),
+          },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+      return { token: doc.token, leaseUntil: doc.leaseUntil, slot };
+    } catch (err) {
+      // Slot taken between the filter and the insert, or held by a live lease so
+      // the filter never matched and the upsert became an insert. Either way the
+      // slot is not ours — try the next one.
+      if (err && (err.code === 11000 || err.code === 11001)) continue;
+      throw err;
+    }
+  }
+  return null;
 }
 
 /**
@@ -166,17 +216,6 @@ async function removeSeedToken(sessionId, ownerId) {
   await getModel().deleteOne({ sessionId: key, owner, role: 'seed' });
 }
 
-/** Live (non-expired) seeder count for a session, for the seeder-selection algorithm. */
-async function countLiveSeeders(sessionId, now = Date.now()) {
-  const key = String(sessionId || '').trim();
-  if (!key) return 0;
-  return getModel().countDocuments({
-    sessionId: key,
-    role: 'seed',
-    $or: [{ leaseUntil: null }, { leaseUntil: { $gt: now } }],
-  });
-}
-
 /** Bulk-removes every expired-lease seeder row across all sessions — the background sweep. */
 async function removeExpiredSeedTokens(now = Date.now()) {
   return getModel().deleteMany({ role: 'seed', leaseUntil: { $ne: null, $lte: now } });
@@ -188,9 +227,8 @@ module.exports = {
   getToken,
   verifyToken,
   removeToken,
-  mintSeedToken,
+  claimSeedSlot,
   getSeedToken,
   removeSeedToken,
-  countLiveSeeders,
   removeExpiredSeedTokens,
 };

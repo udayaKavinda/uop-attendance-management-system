@@ -129,7 +129,14 @@ fun StaffDashboardScreen(
     email: String,
     onLogout: () -> Unit,
     onOpenMatrix: (String) -> Unit,
-    vm: StaffViewModel = viewModel(),
+    // Keyed on email for the same reason LectureEntryScreen is: this screen resolves
+    // its ViewModel from the Activity's store, which outlives sign-out, so without a
+    // key a lecturer who signs out and a different one who signs in on the same phone
+    // share one StaffViewModel — the second sees the first's courses, sessions and
+    // lecturer-search results. AppRoot's `key(email)` wrapper does NOT cover this:
+    // Compose's key() changes composition identity, not the ViewModelStore lookup,
+    // so the key has to be passed to viewModel() itself.
+    vm: StaffViewModel = viewModel(key = email),
 ) {
     val state by vm.state.collectAsState()
     var tab by remember { mutableIntStateOf(0) }

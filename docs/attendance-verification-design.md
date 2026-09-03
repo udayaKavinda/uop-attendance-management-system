@@ -127,10 +127,12 @@ the whole attempt, so a student who never left the room can still be flagged. It
 for small, very tight geofences only, and its description in the admin dropdown says so.
 
 Accuracy is normalised once (`normalizedAccuracy`) before either weighting or best-fix
-selection. Android's `Location.getAccuracy()` returns `0.0` when `hasAccuracy()` is false,
-so `0` means "unknown", never "perfect" — it is treated as a pessimistic 50 m in both
-places. Without that, an accuracy-unknown fix was simultaneously the least-trusted input
-to the centroid and "the most precise fix we have" for `best_accuracy_fix`.
+selection — the rule itself is in [server/README.md](../server/README.md#gps-validation).
+It is done in one place because it was once done in two: the weighting mapped an
+accuracy-unknown fix to a pessimistic default while best-fix selection compared the raw
+value, so the same fix was simultaneously the least-trusted input to the centroid and
+"the most precise fix we have" for `best_accuracy_fix`. Any new consumer of `accuracy`
+must go through `normalizedAccuracy` for that reason.
 
 ## Verdict retention
 
@@ -195,17 +197,18 @@ A session has no verification field. What the lecturer chooses is:
 
 ## Flagged records
 
-There is no lecturer review queue and no approve/reject action anywhere in the app. A
-`far`/`unknown` **code submission** is written as `status: 'flagged'` directly — it is
-neither present nor silently absent, just a record with a `reason` string
-(`services/attendance.service.js`'s `reasonForFlag`) explaining why: a distance
-("GPS location is 2.1km from the nearest session building.") for `far`, or a fixed
-message for `unknown` (no usable fix, or every session building was deleted/deactivated
-mid-lecture). The only place this becomes visible is the Excel attendance export
-(`GET /admin/courses/:courseId/attendance-matrix.xlsx`,
-`services/attendanceExport.service.js`): a flagged cell renders 'F' on a red fill with
-the reason attached as a cell comment. The on-screen matrix and the JSON API expose
-`status` only, same as `present`.
+*What* a flagged record is, and where it surfaces, is specified in
+[server/README.md](../server/README.md#verification-contract). This section is about why
+it was built that way.
+
+There is no lecturer review queue and no approve/reject action anywhere in the app, and
+that is the decision, not an omission. A review queue implies someone will work through
+it; with one lecturer and several hundred students per course, nobody would, and an
+unworked queue is worse than no queue — it looks like due process while delivering none.
+So a `far`/`unknown` code submission is written as a record with a `reason` and left
+there: the lecturer sees it in the export, in context, next to everything else about that
+student, and decides for themselves whether it matters. The `reason` string exists to
+make that judgement possible without exposing the raw position.
 
 The student is shown **"Under review"** — "We couldn't verify that you were present in the
 lecture room. Your attendance is now pending review by the lecturer." — worded as what to
@@ -213,18 +216,23 @@ expect rather than as a workflow — their attendance is with the lecturer, and 
 deliberately no invitation to dispute it, because nothing in the app can act on a dispute.
 Both clients use the same wording.
 
-**Raw GPS fixes never write anything for `suspicious`/`far`/`unknown`** — only an actual
-"get help" code submission does. A student whose GPS never passes and who never types a
-code leaves **no record at all**, exactly like a student who never checked in; nothing is
-visible in the export for an attempt that was never escalated to the code.
+Raw GPS fixes deliberately write nothing for `suspicious`/`far`/`unknown`; only a code
+submission does. The reason is that a failed attempt is not evidence of anything. A
+student can be 200 m away because they are in the canteen, or because the building's
+GPS is bad, or because they opened the app on the walk over and gave up. Recording all
+three identically would fill the export with rows that mean nothing and invite exactly
+the false accusation the design is trying to avoid. Submitting the code is the moment the
+student makes a claim, and a claim is worth recording.
 
 ## What stays server-internal
 
-`method`, `band`, `seedRelayed`, and `centroid` are audit fields. They never appear in
-the on-screen attendance matrix, the JSON API, or any student-facing payload. The matrix
-exposes `status` only (`present` / `flagged`). `reason` is the one exception: it exists
-specifically to be shown, but only inside the Excel export's cell comments — never in the
-on-screen matrix or the JSON API.
+Which fields are audit-only is listed with the model in
+[server/README.md](../server/README.md#attendance). They are withheld for one reason: a
+student who learns their own `band` or `centroid` learns exactly how far they can be from
+the room and still pass, and can then calibrate. This is also why the API answers
+`collecting` for both "still gathering fixes" and "gathered enough, not passing" — the
+ambiguity is the point, and any future field added to a student-facing payload has to be
+checked against it.
 
 ## Known limits
 
@@ -235,6 +243,19 @@ on-screen matrix or the JSON API.
 - BLE range is extended deliberately by seeding, so "BLE == in the room" is approximate.
   Restricting seeding to primary-verified students bounds the chain to one hop.
 - All in-memory stores block horizontal scaling.
+- **GPS position is asserted by the client.** The server validates that a fix is a
+  plausible coordinate, not that it came from a real GPS chip, so a caller holding a
+  valid student session can submit fabricated fixes at a building and be marked present.
+  Android refuses to submit a fix the platform flags as mocked — it closes the app (see
+  `location/GpsLocationSource.kt`) — but that is a client-side deterrent against the easy
+  case, not a boundary: a modified build can suppress the flag, and the server never
+  treats its absence as evidence. Closing this properly means not letting a GPS-only
+  attempt reach `present` on its own.
+- **A BLE token is a bearer secret.** Nothing binds it to the device that heard it, so a
+  token forwarded out of the room over any messaging app is accepted from anywhere inside
+  the ~23-second validity window and is stored indistinguishably from a genuine in-room
+  check-in. Relay cannot be fully solved over an out-of-band HTTP channel; requiring a
+  non-`far` GPS band alongside the token would bound it to the building.
 
 ## No guess cap on the "get help" code
 
@@ -244,5 +265,13 @@ service capped it at 5 tries / 5 minutes before a 2-minute lockout
 (`manualCode.service.js`'s `verifyAttempt`), but that has been removed entirely; only
 `verifyCode` remains, a pure code check with no attempt state. Brute-forcing an 8-digit
 code (100 million possibilities) inside a session's schedule window remains the practical
-mitigation, alongside code rotation and the general endpoint rate limiter shared by the
-rest of the API.
+mitigation, alongside code rotation.
+
+The code path does, however, carry its **own** rate limit now (10/min per student),
+separate from the 180/min budget every attendance submission shares. The two were one
+60/min budget, which was the worst of both: a 90-second GPS attempt streams ~30 fixes, so
+two attempts exhausted it and a student retrying in a weak-signal room was refused as
+though they were abusing the endpoint — while 60 guesses a minute was no meaningful
+obstacle to brute force either. Splitting them means streaming fixes can no longer eat
+the code budget, and the guessable secret is the only thing held to a tight limit.
+See `config/rateLimit.js`.

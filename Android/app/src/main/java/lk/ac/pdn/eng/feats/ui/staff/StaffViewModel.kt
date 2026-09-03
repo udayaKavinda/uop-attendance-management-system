@@ -294,21 +294,32 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
     private fun pollRunning() {
         viewModelScope.launch {
             while (isActive) {
-                refreshRunningNow()
+                // Stops on 401 for the same reason the student poll does: this
+                // ViewModel is resolved from the Activity's store and outlives
+                // sign-out, so an un-stopped loop keeps polling forever afterwards,
+                // and a stale poll's 401 can land after a fresh sign-in and force
+                // that new session straight back out. See LectureEntryViewModel.
+                if (!refreshRunningNow()) return@launch
                 delay(10_000)
             }
         }
     }
 
-    /** Out-of-cycle running-set refresh, so a just-activated session doesn't wait for the next poll tick. */
-    private suspend fun refreshRunningNow() {
+    /**
+     * Out-of-cycle running-set refresh, so a just-activated session doesn't wait for
+     * the next poll tick. Returns false when the session is gone (401) and polling
+     * should stop.
+     */
+    private suspend fun refreshRunningNow(): Boolean {
         when (val res = repo.runningSessions()) {
             is ApiResult.Success ->
                 _state.value = _state.value.copy(
                     running = res.data.associateBy { it.sessionId ?: "" }.filterKeys { it.isNotEmpty() },
                 )
-            is ApiResult.Error -> Unit // keep last known running set
+            // Any other error keeps the last known running set, as before.
+            is ApiResult.Error -> if (res.code == 401) return false
         }
+        return true
     }
 
     // ── Courses ────────────────────────────────────────────────────────────────────

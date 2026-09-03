@@ -48,8 +48,8 @@ android {
         applicationId = "lk.ac.pdn.eng.feats"
         minSdk = 24
         targetSdk = 37
-        versionCode = 6
-        versionName = "1.5.0"
+        versionCode = 7
+        versionName = "1.7.0"
 
         // Fixed production server. Must match the server's APP_BASE_URL so the
         // native OAuth return is allowed.

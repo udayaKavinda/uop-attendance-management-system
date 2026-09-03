@@ -35,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +61,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import lk.ac.pdn.eng.feats.ble.BlePermissions
 import lk.ac.pdn.eng.feats.data.net.RunningCourseDto
+import lk.ac.pdn.eng.feats.ui.auth.findActivity
 import lk.ac.pdn.eng.feats.ui.components.AppCard
 import lk.ac.pdn.eng.feats.ui.components.AppFooter
 import lk.ac.pdn.eng.feats.ui.components.AppTextField
@@ -99,6 +101,17 @@ fun LectureEntryScreen(
 
     val state by vm.state.collectAsState()
     val context = LocalContext.current
+
+    // A mocked GPS fix means the device is manufacturing its position, so there is
+    // no honest attendance left to take here: shut the app down rather than carry
+    // on. finishAndRemoveTask() drops the task from Recents too, so the next launch
+    // starts clean instead of resuming this screen.
+    val mockLocationDetected by vm.mockLocationDetected.collectAsState()
+    LaunchedEffect(mockLocationDetected) {
+        if (mockLocationDetected) {
+            context.findActivity()?.finishAndRemoveTask()
+        }
+    }
 
     // A screen timeout would silently stop BLE scan callbacks and surface as a
     // false "no signal", so hold the display on for the duration of the window.

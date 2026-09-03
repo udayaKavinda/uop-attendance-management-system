@@ -7,6 +7,7 @@ const BleToken = require('../models/BleToken');
 const ManualCode = require('../models/ManualCode');
 const Settings = require('../models/Settings');
 const Geofence = require('../models/Geofence');
+const AuditLog = require('../models/AuditLog');
 const { mongoUri, isProd } = require('./env');
 
 async function connectDatabase() {
@@ -30,6 +31,7 @@ async function syncAllIndexes() {
     await ManualCode.syncIndexes();
     await Settings.syncIndexes();
     await Geofence.syncIndexes();
+    await AuditLog.syncIndexes();
   } catch (e) {
     // A failed sync means queries may run without their expected indexes (full
     // collection scans under load) — surface loudly and refuse to run in prod.

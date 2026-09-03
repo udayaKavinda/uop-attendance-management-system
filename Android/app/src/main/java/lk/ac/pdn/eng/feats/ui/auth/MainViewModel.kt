@@ -89,6 +89,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *
      * On [GoogleSignInResult.Unavailable] the caller is expected to offer the
      * browser fallback — the login screen keeps that option visible at all times.
+     * This never launches it automatically: an unexpected browser tab is more
+     * disorienting than a visible error the user can act on themselves.
      */
     fun signInWithGoogle(activity: Activity) {
         if (_authBusy.value) return

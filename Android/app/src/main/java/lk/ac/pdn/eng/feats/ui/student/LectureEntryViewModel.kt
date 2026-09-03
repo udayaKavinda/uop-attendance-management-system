@@ -23,6 +23,7 @@ import lk.ac.pdn.eng.feats.data.net.GpsFixDto
 import lk.ac.pdn.eng.feats.data.net.RunningCourseDto
 import lk.ac.pdn.eng.feats.data.net.SeedingDto
 import lk.ac.pdn.eng.feats.location.GpsLocationSource
+import lk.ac.pdn.eng.feats.location.MockLocationException
 import lk.ac.pdn.eng.feats.location.LocationPermissions
 import lk.ac.pdn.eng.feats.ui.container
 
@@ -72,6 +73,14 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(CheckInState())
     val state: StateFlow<CheckInState> = _state.asStateFlow()
 
+    /**
+     * Latches true the moment the platform reports a mocked fix. The screen
+     * observes this and closes the app; it is one-way on purpose, so nothing that
+     * happens afterwards can clear it before the shutdown lands.
+     */
+    private val _mockLocationDetected = MutableStateFlow(false)
+    val mockLocationDetected: StateFlow<Boolean> = _mockLocationDetected.asStateFlow()
+
     private var windowJob: Job? = null
     private var seedingJob: Job? = null
 
@@ -111,7 +120,20 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
                             needsHelp = if (stillRunning) s.needsHelp else false,
                         )
                     }
-                    is ApiResult.Error -> _state.update { it.copy(error = res.message) }
+                    is ApiResult.Error -> {
+                        // 401 means the session is gone, and this ViewModel outlives
+                        // sign-out: it is resolved from the Activity's ViewModelStore,
+                        // which is only cleared when the Activity is destroyed, not
+                        // when the screen leaves composition. Left running, this loop
+                        // polled every 10s indefinitely after logout (confirmed in the
+                        // server access log), and every one of those 401s fires
+                        // SessionEvents.notifyUnauthorized() -> forceLoggedOut(). That
+                        // is not just wasted battery: a stale poll dispatched before a
+                        // fresh sign-in can land *after* it and wipe the new session,
+                        // bouncing the user straight back to the login screen. Stop.
+                        if (res.code == 401) return@launch
+                        _state.update { it.copy(error = res.message) }
+                    }
                 }
                 delay(10_000)
             }
@@ -272,6 +294,11 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
                         canAdvertise = canAdvertise,
                     )
                 }
+        } catch (e: MockLocationException) {
+            // Not a failure to recover from: the device is reporting a manufactured
+            // position, so end the whole attempt and let the screen close the app.
+            cancelCheckIn()
+            _mockLocationDetected.value = true
         } catch (e: Exception) {
             // No provider, permission revoked mid-window, etc. Bluetooth may still win.
         }

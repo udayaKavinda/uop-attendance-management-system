@@ -94,10 +94,21 @@ One flow, both radios, 90 seconds:
    often the other room's and is rejected; giving up on it would drop the student to
    GPS-only for the rest of the attempt. A token is retried only if the request never
    reached the server — a real rejection is final for that token.
-4. **First success ends the window** — a student in the front row is not made to wait.
-5. Anything other than `accepted` is treated as "keep trying", including the server's
+4. **A mocked GPS fix ends the app, not the window.** If Android reports a fix as coming
+   from a mock provider (`Location.isMock`, or `isFromMockProvider()` below API 31), the
+   attempt is cancelled and the activity calls `finishAndRemoveTask()` — the app closes
+   and drops out of Recents, with no message. Attendance is a claim about where the
+   student physically is, and the OS has just said the claim is manufactured; a warning
+   would only tell whoever set the mock up what to hide next.
+
+   This is a deterrent, not a boundary. It stops the easy case — a mock-location app
+   installed from the Play Store — and a modified build can suppress the flag entirely,
+   so the server never treats its absence as evidence of anything. See
+   `location/GpsLocationSource.kt`.
+5. **First success ends the window** — a student in the front row is not made to wait.
+6. Anything other than `accepted` is treated as "keep trying", including the server's
    deliberately ambiguous `collecting`. The client is never told its distance band.
-6. When the window elapses, offer Try again / Get help.
+7. When the window elapses, offer Try again / Get help.
 
 If neither radio is usable at all, the app skips straight to the help path rather than
 failing silently.
@@ -229,7 +240,7 @@ Requirements: Android Studio/JDK 17 and an Android SDK with compile SDK 36.
 ```
 
 App configuration: application id `lk.ac.pdn.eng.feats`, min SDK 24, target SDK 37,
-version `1.4.0` (`versionCode 5`). The server's `minSupportedVersionCode` setting is
+version `1.7.0` (`versionCode 7`). The server's `minSupportedVersionCode` setting is
 compared against this `versionCode` on every launch.
 
 For a signed release, create the ignored `keystore.properties` described in the root

@@ -10,25 +10,17 @@ authoritative server reference for the implemented system.
   lecturers/admins provisioned by an admin are never subject to it).
 - Browser Google OAuth fallback with a single-use native exchange code.
 - Mongo-backed authenticated sessions, role checks, CSRF protection, CORS, Helmet, and
-  endpoint rate limits.
+  two-tier attendance rate limits (see "Rate limits" below).
+- An append-only audit log of every staff/admin mutation and every rejected
+  authentication or authorization attempt (see "Audit log" below).
 - A public app-version check the client uses to enforce an admin-set minimum Android
   `versionCode`, blocking outdated installs with a mandatory update prompt.
 - Staff course/session administration with lecturer ownership enforcement; any existing
   owner (not just an admin) may add and remove co-owners on their own course, same as an
   admin can on any course.
-- One verification model for every session: Bluetooth and GPS together, with a
-  lecturer-read code as the escalation path. There is no lecturer review queue — a
-  `far`/`unknown` code submission is written as a `flagged` record directly, visible only
-  in the Excel attendance export.
-- Selectable GPS geofence logic: the near and far distance bands each independently pick
-  a strategy (accuracy-weighted centroid, any/majority/all points within the buffer,
-  median distance, or best-accuracy-fix-only) for deciding "is this student within the
-  buffer" — see `services/geofenceLogic.service.js`.
-- Peer BLE seeding with rotating tokens, bounded leases, and decoy windows.
+- One verification model for every session, with selectable per-band geofence logic and
+  peer BLE seeding — see "Verification contract" below, which is the specification.
 - Active-building geofence administration and system policy settings.
-- Attendance records preserve verification provenance internally; matrices report
-  present / flagged / absent only. The downloadable Excel export additionally red-fills
-  and comments flagged cells with a plain-language reason.
 
 Students see campus-wide sessions that are running now. There is no enrolment data model
 in this repository; do not describe these as membership-filtered “their courses.”
@@ -139,7 +131,10 @@ Times are strictly validated as zero-padded 24-hour `HH:mm` values.
 ### Person
 
 `email`, stable external `studentId`, `role` (`student|lecturer|admin`), `name`, `phone`,
-`active`, and `deleted`.
+`active`, `deleted`, and `registeredCourses` — an optional, student-only list of courses
+picked ahead of time so the check-in search surfaces them without typing. Registering is
+never required and is **not** an enrolment gate: an empty list only means the picker
+behaves as it always did, and `POST /api/attendance` does not consult it.
 
 ### Course
 
@@ -152,14 +147,16 @@ course rather than destroying its data; disabled courses sort after active ones 
 
 ### LectureSession
 
-Course reference, weekday, start/end, `recurring`, `occurrenceDate`, building references,
-active/deleted state, BLE broadcast/heartbeat, and code-rotation configuration.
+`course`, `lectureDay` (`MON`…`SUN`), `startTime`/`endTime` (`HH:mm`), `recurring`,
+`occurrenceDate`, `buildings`, `active`, `deleted`, `broadcasting`,
+`lastBroadcastSeenAt` (the BLE heartbeat), and the code-rotation pair
+`manualCodeRotationMode` (`none|interval`) / `manualCodeRotationSeconds`.
 `occurrenceDate` is required for one-time sessions and null for recurring sessions.
 `buildings` requires at least one entry — GPS runs for every session and needs a polygon
 to measure against. There is no `verification` field.
 
 **`active` means "collecting attendance right now"** — created `false` always, and the
-*only* way it becomes `true` is `PATCH /:id/activate` ("Collect"/"Join" client-side),
+*only* way it becomes `true` is `PATCH /:sessionId/activate` ("Collect"/"Join" client-side),
 which itself requires being inside the session's own scheduled window
 (`isScheduledNow`) — collecting outside class time is rejected, not just hidden client-side.
 Three states fall out of `active` combined with the window:
@@ -191,8 +188,9 @@ again.
 
 ### Attendance
 
-Student/course/session references, stable course/lecture labels, local attendance date,
-timestamp, and:
+Student/course/session references, `courseCode` and `lectureCode` (stable
+human-readable labels for the course and the lecture occurrence, so a row stays readable
+after either is renamed), `attendanceDate` (local `YYYY-MM-DD`), `timestamp`, and:
 
 ```text
 status = present | flagged                     ← the only field the lecturer sees
@@ -208,27 +206,41 @@ leave the server. The unique index `{ student, session, attendanceDate }` makes 
 path idempotent; a genuine automatic pass upgrades an existing `flagged` row to
 `present`, and a fresh `flagged` verdict from a repeat code submission overwrites an
 existing `flagged` one so the stored reason/distance reflects the latest evidence rather
-than freezing on the first submission. **Raw GPS fixes never write anything to
-`Attendance` for `suspicious`/`far`/`unknown`** — only an actual "get help" code
-submission does (see `recordHelpCodeAttendance`); a student who never falls back to the
-code leaves no record at all, same as a student who never checked in.
+than freezing on the first submission. Which bands write a row at all is specified under
+"Verification contract" above.
 
 ### BleToken / ManualCode / Settings
 
-- `BleToken` stores primary or student-seed rotating tokens and seed `leaseUntil`.
-  `verifyToken` reports which row matched, because only a primary match may seed.
-- `ManualCode` stores the rotating/paused 8-digit lecturer code; it is never merged with
-  the high-entropy BLE token pool. Every session has one.
+- `BleToken`: `sessionId`, `owner` (null for the primary row), `role` (`primary|seed`),
+  `token`, `prevToken` (the value still accepted during the rotation grace),
+  `generatedAt`, `leaseUntil` (seed rows), `slot`, and `updatedAt` — which also drives a
+  1-hour TTL index as a safety net if a teardown is ever missed.
+  `verifyToken` reports which row matched, because only a primary match may seed. Seed
+  rows also carry a `slot` (0-based, below `Settings.seedRate`) under a unique partial
+  index: the cap is enforced by claiming a numbered slot, not by counting live seeders
+  and then minting. Counting first was a check-then-act race — a lecture's worth of
+  students accepted in the same instant all read a count under the cap and all minted,
+  measured at 28 seeders against a `seedRate` of 5 — which widened the effective BLE
+  radius that "hearing the beacon proves you are in the room" depends on.
+- `ManualCode`: `session`, `code`, `prevCode` (accepted for 2 s after an automatic
+  rotation, and left null after a forced regenerate so the old code dies at once),
+  `generatedAt`, and `paused`. Deliberately not merged into the BLE token pool —
+  different entropy, different lifecycle. Every session has one.
 - `Settings` stores the Bluetooth kill switch, the two distance buffers, the
   independently selectable near/far buffer-logic strategy ids (`nearBufferLogic`,
   `farBufferLogic`, default `accuracy_weighted_centroid` — see
-  `services/geofenceLogic.service.js`), the seeding parameters, the student sign-in email
+  `services/geofenceLogic.service.js`), the seeding parameters (`seedRate`, and
+  `seedWindowMs` — the window length given identically to real seeders and decoys so the
+  two are indistinguishable), the student sign-in email
   domain (`studentEmailDomain`, empty disables the check), and the minimum Android
   `versionCode` (`minSupportedVersionCode`, `0` disables the check).
 
 ## API reference
 
-All JSON mutation requests require `X-Requested-With: fetch`. `student`, `staff`, and
+All JSON mutation requests must carry an `X-Requested-With` header. Any non-empty value
+is accepted — the guard tests for presence, not content (Android sends
+`attendance-android`, the web client sends `XMLHttpRequest`); what stops a cross-site
+form POST is that HTML forms cannot set the header at all. `student`, `staff`, and
 `admin` below refer to server-derived session roles, never trusted client headers.
 
 ### Authentication and public routes
@@ -241,7 +253,7 @@ All JSON mutation requests require `X-Requested-With: fetch`. `student`, `staff`
 | GET | `/auth/google/callback` | public/rate-limited | OAuth callback |
 | POST | `/api/auth/exchange-code` | public/rate-limited | consume native fallback exchange code |
 | GET | `/api/me` | authenticated | current account and role |
-| POST | `/api/logout` | authenticated | destroy session |
+| POST | `/api/logout` | public | destroy session — deliberately ungated, so it is idempotent and can never fail; with no session it is a no-op returning `{ success: true }`. The CSRF header is still required. |
 | GET | `/api/healthz` | public | process/database health |
 | GET | `/api/app-version` | public | `{ minSupportedVersionCode }` — client blocks below this |
 | GET | `/api/web-config` | public | `{ allowNonIos }` — whether the web client serves non-iOS devices |
@@ -312,12 +324,12 @@ Base path: `/api/admin/sessions` (owner/admin session guard applies).
 |---|---|
 | `GET /?page=&limit=` | list accessible sessions, soonest/currently-running first. Omitting `limit` returns everything; passing it pages (`{ items, total, page, limit, hasMore }`) |
 | `GET /running` | sessions whose scheduled window is open right now, **not** filtered by `active` — `{ sessionId, active, broadcasting }` per entry, refreshed on a faster cadence than the full list so a client can tell Within-session apart from Collecting without a full reload |
-| `PATCH /:id/activate` / `deactivate` | "Collect"/"Join" and "Deactivate" client-side — `activate` requires being inside the session's own window right now (see LectureSession above) |
-| `DELETE /:id` | soft-delete and revoke secrets |
-| `PATCH /:id/broadcast` | set `{ on }`; 403 while the global BLE switch is off |
-| `GET /:id/broadcast` | staff token poll/heartbeat and live counts |
-| `GET /:id/manual-code` | current staff-only lecturer code/status |
-| `PATCH /:id/manual-code` | pause, resume, rotate, or regenerate (no enable flag) |
+| `PATCH /:sessionId/activate` / `deactivate` | "Collect"/"Join" and "Deactivate" client-side — `activate` requires being inside the session's own window right now (see LectureSession above) |
+| `DELETE /:sessionId` | soft-delete and revoke secrets |
+| `PATCH /:sessionId/broadcast` | set `{ on }`; 403 while the global BLE switch is off |
+| `GET /:sessionId/broadcast` | staff token poll/heartbeat and live counts |
+| `GET /:sessionId/manual-code` | current staff-only lecturer code/status |
+| `PATCH /:sessionId/manual-code` | pause, resume, rotate, or regenerate (no enable flag) |
 
 There is no reviews endpoint — a `far`/`unknown` code submission is written directly as a
 `flagged` `Attendance` record (see "Verification contract" above); the only place it
@@ -331,12 +343,98 @@ becomes visible to staff is the Excel export under `/api/admin/courses`.
 | `PATCH /api/admin/settings` | admin | BLE kill switch, distance buffers, per-band geofence-logic strategy, seeding, student email domain, minimum app version |
 | `GET /api/admin/geofences` | staff | active selectable buildings |
 | `POST/PATCH/DELETE /api/admin/geofences/:id?` | admin | building polygon management; `DELETE` is refused (400) while any live session still uses the building |
-| `GET/POST/DELETE /api/admin/lecturers/:id?` | admin | lecturer directory — `GET ?q=&page=&limit=`; `DELETE` hides (soft-deletes) rather than destroying |
+| `GET /api/admin/lecturers?q=&page=&limit=` | staff | lecturer directory — readable by any staff member on purpose, so an owner can find a co-owner to add to their own course |
+| `POST/DELETE /api/admin/lecturers/:id?` | admin | create, or hide (soft-delete) rather than destroy |
 
 Deleting a lecturer never invents a substitute owner for their courses. If removing them
 would leave an *active* course with zero lecturers, the whole delete is refused (400) before
 anything is touched; an *archived* course is allowed to end up ownerless, since it runs no
 sessions and takes no attendance.
+
+## Things that are easy to miss
+
+Deliberate behaviour that is not obvious from reading the routes, and that a reviewer
+should know about before concluding anything.
+
+- **There is a test-only authentication bypass.** When `NODE_ENV=test`, `middlewares/testAuth.js`
+  is mounted and an `x-test-user` header injects an arbitrary `req.user` — any role, no
+  password, no session. It is what the route tests use instead of standing up Google
+  OAuth. It is gated at mount time in `app.js`, so it does not exist in a production
+  process, but **never run this server with `NODE_ENV=test` on a reachable host.**
+- **There is a hardcoded bootstrap admin.** `BOOTSTRAP_ADMIN_EMAIL` in
+  `utils/constants.js` is created if absent and, on **every boot**, force-reset to
+  `role: 'admin'`, `deleted: false`, `active: true`. A system needs a first admin before
+  anyone can grant admin, so this is the break-glass account — but it also means demoting
+  or deleting it does not stick past the next restart, and whoever controls that mailbox
+  has permanent admin. Change the constant before deploying an installation you do not
+  control that address for.
+- **`SESSION_SECRET` has a development fallback** (`'dev-only-secret'`). Production cannot
+  start without a real one — `config/env.js` exits at boot — but a non-production process
+  will happily run with a publicly known signing key.
+- **Request bodies are capped at 256 kb** (`app.js`), which is the limit behind the 413 in
+  the error table below.
+- **`trust proxy` is set to 1**, so `req.ip`, the rate-limiter key, and the secure-cookie
+  decision all come from `X-Forwarded-*`. That is correct behind the one nginx hop this
+  deploys with, and wrong — spoofable — if the app is ever exposed directly.
+- **Session cookies last 7 days** (`attendance.sid`, httpOnly, `SameSite=None; Secure` in
+  production), with the store TTL matched to it and touched at most hourly.
+- **A broadcast goes stale after 30 s** without a token poll (`BROADCAST_STALE_MS`). The
+  broadcasting phone polls every ~5 s, so that is six missed polls before students are
+  refused at read time and the sweep flips the flag off.
+
+## Audit log
+
+
+Every staff/admin mutation and every rejected authentication or authorization attempt is
+appended to the **`auditlogs`** collection in the same MongoDB database as everything
+else — there is no separate log file and nothing is written to stdout. Query it with the
+same `MONGO_URI` the server uses:
+
+```js
+db.auditlogs.find().sort({ at: -1 }).limit(50)               // most recent activity
+db.auditlogs.find({ target: "<sessionId>" }).sort({ at: 1 })  // what happened to one object
+db.auditlogs.find({ actorEmail: "x@eng.pdn.ac.lk" })          // what one person did
+db.auditlogs.find({ outcome: "denied" }).sort({ at: -1 })     // rejected attempts
+```
+
+Each row records `actor` (Person id), `actorEmail`/`actorRole` (denormalised so the entry
+stays readable after the person is deleted), `action` (`DELETE /api/admin/sessions/:id` —
+object ids collapsed so rows group), `target` (the ids from the path), `status`,
+`outcome` (`allowed`/`denied`), `ip`, and `at`.
+
+What is kept, and what is not:
+
+- **Kept:** every successful mutating request under `/api/admin/*`; sign-in via
+  `/api/auth/google-id-token` and `/api/auth/exchange-code`; every 401/403 on an admin
+  route or on any mutation anywhere.
+- **Not kept:** ordinary reads, student check-ins, and polling. Attendance already has
+  its own permanent record with full provenance, and the polls would bury everything else.
+
+Rows expire automatically after two years (a TTL index on `at`) — past any academic
+appeal window, and short enough that the collection never needs managing.
+
+Writes happen after the response has been sent, and a failure is logged and swallowed:
+losing an audit row is bad, but failing a lecturer's session delete because the audit
+write failed is worse. `middlewares/auditLog.js` reads the path from `req.originalUrl`,
+not `req.path`, because Express rewrites `req.url` while a request is inside a mounted
+sub-router and the `finish` event fires while that rewrite is still in effect.
+
+## Rate limits
+
+Two separate budgets on `POST /api/attendance`, both keyed per signed-in student (falling
+back to a normalised IP subnet):
+
+| Path | Limit | Why |
+|---|---|---|
+| any submission | 180/min | A 90 s GPS attempt streams a fix every 3 s (~30 requests), so this leaves room for roughly six honest attempts a minute. |
+| `code` submissions only | 10/min | The 8-digit code is the only guessable secret in the system. |
+
+The split exists because a single shared budget of 60/min was both too loose to stop
+brute-forcing and tight enough to break honest use: two attempts filled the quota and a
+third — the one a student in a weak-signal room actually needs — was refused as abuse.
+Streaming GPS fixes can no longer consume the code budget.
+
+`/auth/*` and the sign-in endpoints keep their own 20/min limiter.
 
 ## Background jobs and caches
 
@@ -357,14 +455,16 @@ sessions and takes no attendance.
 npm test -- --runInBand
 ```
 
-251 tests across 17 suites, covering authentication, route access, BLE rotation and
+314 tests across 21 suites, covering authentication, route access, BLE rotation and
 broadcasting (including the previous-token grace vs. the broadcaster poll interval),
-distance banding, the accuracy ceiling and accuracy-unknown normalisation, outlier
-trimming, the code-escalation outcomes for every band, flag-reason rendering,
-the geofence-logic strategy registry, the flagged-record Excel export,
-running-course DTO contracts, strict schedules/one-time dates, GPS geometry and fix
-filtering, active geofences, seeder eligibility, pages, and unified attendance. Keep
-Android and server contract tests aligned whenever a response changes.
+seeder slot claiming and the cap under contention, distance banding, the accuracy ceiling
+and accuracy-unknown normalisation, outlier trimming, the code-escalation outcomes for
+every band, flag-reason rendering, the geofence-logic strategy registry, the
+flagged-record Excel export, running-course DTO contracts, strict schedules/one-time
+dates, GPS geometry and fix filtering, active geofences, the geofence delete guard,
+seeder eligibility, the `/auth/native-return` target allow-list and its escaping,
+body-parser error classification, pages, and unified attendance. Keep Android and server
+contract tests aligned whenever a response changes.
 
 Not yet covered by a dedicated test: multi-batch course creation, the lecturer-owner path
 through `assign-lecturer` (as opposed to the admin path), pagination on the three admin

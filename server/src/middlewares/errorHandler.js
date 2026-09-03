@@ -5,6 +5,17 @@ const { isProd } = require('../config/env');
  * and don't leak driver internals.
  */
 function respondError(res, err, fallbackStatus = 500) {
+  // body-parser rejections are client mistakes, not server faults. Without this
+  // a truncated JSON body or an oversized payload fell through to the 500 branch,
+  // which told a caller the server had broken when the caller was at fault — and
+  // filled error monitoring with false alarms. `err.status` is set by body-parser
+  // itself (400 for entity.parse.failed, 413 for entity.too.large).
+  if (err && err.type && String(err.type).startsWith('entity.')) {
+    const status = Number(err.status) || 400;
+    return res.status(status).json({
+      error: status === 413 ? 'Request body is too large' : 'Malformed request body',
+    });
+  }
   if (err && err.name === 'CastError') {
     return res.status(400).json({ error: 'Invalid identifier' });
   }

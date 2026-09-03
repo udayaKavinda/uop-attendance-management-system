@@ -10,7 +10,7 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import lk.ac.pdn.eng.feats.BuildConfig
 
@@ -41,8 +41,9 @@ sealed interface GoogleSignInResult {
  * the same Web client id. The server then sets the ordinary `attendance.sid` session
  * cookie, so everything downstream of sign-in is unchanged.
  *
- * [GetSignInWithGoogleOption] always shows the account chooser, matching the previous
- * flow's `prompt=select_account` behaviour.
+ * [GetGoogleIdOption] with filtering and auto-select both off always shows the
+ * account chooser, matching the previous flow's `prompt=select_account` behaviour.
+ * See signIn() for why it is this option type and not GetSignInWithGoogleOption.
  */
 object GoogleAuth {
 
@@ -64,8 +65,27 @@ object GoogleAuth {
             )
         }
 
-        val option = GetSignInWithGoogleOption
-            .Builder(BuildConfig.GOOGLE_WEB_CLIENT_ID)
+        // GetGoogleIdOption, NOT GetSignInWithGoogleOption. The two look
+        // interchangeable but run through different Play services components, and
+        // the difference is what made sign-in fail intermittently on this app:
+        //
+        // GetSignInWithGoogleOption (the "Sign in with Google button" flow) routes
+        // through GMS's *assisted sign-in* path. Captured on-device, that path
+        // launched com.google.android.gms.auth.api.credentials.assistedsignin.ui
+        // .GoogleSignInActivity — an interactive account re-verification screen —
+        // on top of the account picker, then tore it back down 954ms later via
+        // Dialog.dismissDialog with no user input, and the whole request came back
+        // as "[16] Account reauth failed" wrapped in a *cancellation* exception.
+        // Sign-in succeeded only when that screen happened not to appear.
+        //
+        // GetGoogleIdOption returns the ID token from the picker directly without
+        // that re-verification step, so there is no interactive screen to race.
+        // filterByAuthorizedAccounts=false + autoSelectEnabled=false keeps the
+        // "always show the chooser" behaviour the assisted flow was chosen for.
+        val option = GetGoogleIdOption.Builder()
+            .setServerClientId(BuildConfig.GOOGLE_WEB_CLIENT_ID)
+            .setFilterByAuthorizedAccounts(false)
+            .setAutoSelectEnabled(false)
             .setNonce(nonce)
             .build()
 
@@ -90,7 +110,27 @@ object GoogleAuth {
                 GoogleSignInResult.Failure("Unexpected credential type returned by Google.")
             }
         } catch (e: GetCredentialCancellationException) {
-            GoogleSignInResult.Cancelled
+            // Play Services wraps a genuine user dismissal AND real, recoverable
+            // failures in this exact same exception type. Confirmed on-device: one
+            // occurrence carried "[16] Account reauth failed." — a real background
+            // failure, not a dismissal — and a later occurrence carried a message
+            // that didn't match that specific text, so a keyword check for "reauth"
+            // alone isn't reliable; Play Services doesn't use one fixed string here.
+            //
+            // What's actually distinguishing is presence of a message at all: a
+            // genuine tap-outside-the-sheet dismissal carries no explanation (null
+            // or blank message), while every wrapped failure we've observed carries
+            // one. So: blank message = real dismissal, stay silent; any message =
+            // something actually went wrong, and the user gets told so they can
+            // reach for the browser link rather than face a button that did nothing.
+            if (e.message.isNullOrBlank()) {
+                GoogleSignInResult.Cancelled
+            } else {
+                GoogleSignInResult.Unavailable(
+                    "Google sign-in couldn't complete on this device. "
+                        + "Try again, or use \"Sign in with your browser\" below.",
+                )
+            }
         } catch (e: NoCredentialException) {
             GoogleSignInResult.Unavailable(
                 "No Google account is available on this device. Add one in Settings, or sign in with the browser.",

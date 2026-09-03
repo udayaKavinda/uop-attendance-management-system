@@ -11,7 +11,9 @@ const {
   applyPassport,
 } = require('./config');
 const registerRoutes = require('./routes');
-const { csrf, testAuth, errorHandler } = require('./middlewares');
+const {
+  csrf, testAuth, auditLog, errorHandler,
+} = require('./middlewares');
 
 const app = express();
 
@@ -27,6 +29,8 @@ if (process.env.NODE_ENV === 'test') {
 }
 
 app.use(csrf);
+// Before the routes so it sees every request, including the ones a guard rejects.
+app.use(auditLog);
 registerRoutes(app);
 app.use(errorHandler);
 

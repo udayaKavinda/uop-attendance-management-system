@@ -28,6 +28,18 @@ jest.mock('../models/Person', () => ({
   create: jest.fn(),
 }));
 
+// So is the settings singleton. upsertGooglePerson reads it to apply the
+// student email-domain rule, and only on the branch that creates a brand-new
+// Person — so without this mock the two tests that create an account were the
+// only ones that touched a real Mongoose model. With no connection those queries
+// sit in Mongoose's buffer for its 10s default, which is exactly Jest's own
+// timeout, so both failed as "Exceeded timeout" rather than as an assertion.
+jest.mock('../services/settings.service', () => ({
+  getSettings: jest.fn().mockResolvedValue({ studentEmailDomain: 'eng.pdn.ac.lk' }),
+  isBleEnabled: jest.fn().mockResolvedValue(true),
+  buffers: jest.fn(() => ({ nearBufferM: 50, farBufferM: 100 })),
+}));
+
 process.env.GOOGLE_CLIENT_ID = 'test-web-client-id.apps.googleusercontent.com';
 process.env.GOOGLE_CLIENT_SECRET = 'test-secret';
 

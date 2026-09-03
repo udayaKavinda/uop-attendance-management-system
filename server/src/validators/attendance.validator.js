@@ -14,10 +14,21 @@ function validateBluetoothToken(token) {
   return { ok: true, token: token.trim().toLowerCase() };
 }
 
+/**
+ * Deliberately rejects anything that is not already a JSON number rather than
+ * coercing. `Number(null)` is 0 — a valid latitude — so a client that omitted a
+ * field, or sent null, used to be accepted as a fix at 0N 0E instead of being
+ * told what was wrong. Strings are refused for the same reason: silent coercion
+ * turns a client bug into a mysterious "not verified" 90 seconds later.
+ */
 function validateGpsFix(fix) {
-  const lat = Number(fix?.lat);
-  const lng = Number(fix?.lng);
-  const accuracy = Number(fix?.accuracy);
+  if (!fix || typeof fix !== 'object' || Array.isArray(fix)) {
+    return { ok: false, status: 400, error: 'Invalid fix' };
+  }
+  const { lat, lng, accuracy } = fix;
+  if (typeof lat !== 'number' || typeof lng !== 'number' || typeof accuracy !== 'number') {
+    return { ok: false, status: 400, error: 'fix.lat, fix.lng and fix.accuracy must be numbers' };
+  }
   if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
     return { ok: false, status: 400, error: 'Invalid fix.lat' };
   }

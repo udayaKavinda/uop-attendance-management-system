@@ -5,39 +5,26 @@ Peradeniya Faculty of Engineering, backed by an Express/MongoDB API.
 
 ## How attendance is verified
 
+Every session works the same way — there is no policy to pick. A check-in runs one
+90-second window in which **Bluetooth and GPS are tried together**, and the first to
+succeed marks the student present. If neither does, they can ask the lecturer for an
+8-digit code; how far out their GPS put them decides whether that code marks them present
+or records a `flagged` row instead. A student who never passes and never submits the code
+leaves no record at all.
 
-Every session works the same way — there is no policy to pick. A student's check-in runs
-one 90-second window in which **Bluetooth and GPS are tried together**, and the first to
-succeed marks them present:
+Two supporting mechanisms: **peer seeding**, where a few students who heard the lecturer
+directly rebroadcast the token to extend range, and admin-tunable **distance bands** with
+a selectable geofence strategy per band.
 
-- **Bluetooth** — a lecturer phone broadcasts a rotating BLE token. Hearing it is proof
-  of being in the room, and passes outright. If the student's Bluetooth is off, the app
-  fires the system "turn on Bluetooth?" prompt (on the first attempt and every **Try
-  again**) while GPS keeps running regardless of what they pick.
-- **GPS geofence** — the phone streams precise fixes; whether the result counts as
-  "within the near/far buffer" is decided by an admin-selectable strategy per band
-  (accuracy-weighted centroid by default, or any/majority/all points within the buffer,
-  median distance, or best-accuracy-fix-only) — see `services/geofenceLogic.service.js`.
+The Android app closes itself rather than submitting a GPS fix the platform reports as
+mocked ([Android/README.md](Android/README.md#attendance-flow)), and every staff mutation
+and rejected sign-in is appended to an audit collection
+([server/README.md](server/README.md#audit-log)).
 
-If neither succeeds, the student gets **Try again** (another window) or **Get help**,
-which asks for the 8-digit code the lecturer reads out. How far away they were decides
-what the code does: near the building (including the suspicious band, which always
-passes on a correct code) it marks them present; beyond the far buffer, it's written as a
-`flagged` record with a reason instead — there is no lecturer review queue and nobody
-approves or rejects anything. A student whose GPS/Bluetooth never resolved and who never
-submits the code leaves **no record at all**, same as one who never checked in — only
-`inside`/`near` (auto-pass) and an actual code submission ever write an attendance row.
-
-Two supporting mechanisms:
-
-- **Peer seeding** — a few students who heard the lecturer directly rebroadcast the token
-  to extend range; they cannot tell whether they were really picked.
-- **Distance bands** — the near/far radii and each band's geofence-logic strategy are
-  admin settings.
-
-Attendance records retain the method, band, and position internally for auditing. The
-on-screen matrix shows only presence/flagged; the downloadable Excel export additionally
-red-fills a flagged cell and attaches the reason as a cell comment.
+That is the whole shape of it. The exact bands, what each one writes, and the rules the
+server enforces are in **[server/README.md](server/README.md#verification-contract)** —
+that document is the contract. **[docs/attendance-verification-design.md](docs/attendance-verification-design.md)**
+explains why the rules are what they are, and what the model's known limits are.
 
 ## Repository layout
 
@@ -53,17 +40,11 @@ Express also serves the public `/privacy` and `/delete` pages.
 
 ### Why there is a web client, and why it is iOS-only
 
-Android has the native app, which verifies over Bluetooth *and* GPS. No iOS browser
-can read a Bluetooth beacon — Safari has no Web Bluetooth — so `web/` is GPS-only and
-exists to give iPhone users a way in ahead of a native iOS app. Sending Android users
-to it would be a downgrade, so it shows them a "use the Android app" notice instead.
-That gate is a UX guard, not a security boundary: nothing about it is enforced
-server-side, and it needs no server enforcement, because the GPS and lecturer-code
-paths it uses are the same ones the Android app already exposes.
-
-It is served from the API's own origin on purpose. Authentication is an httpOnly
-session cookie and Safari blocks third-party cookies outright, so a separately-hosted
-client would be signed out on every request. See [web/README.md](web/README.md).
+No iOS browser can read a Bluetooth beacon, so `web/` is a GPS-only client that gives
+iPhone users a way in ahead of a native iOS app; Android users get the notice to use the
+native app instead. It is served from the API's own origin because the session cookie is
+httpOnly and Safari blocks third-party cookies. [web/README.md](web/README.md) has the
+reasoning and the platform gate's limits.
 
 ## Quick start
 
@@ -87,6 +68,8 @@ cd Android
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
+Server tests: 314 across 21 suites.
+
 The API defaults to `http://localhost:5000`; the Android production base is
 `https://attendance.eng.pdn.ac.lk`.
 
@@ -96,23 +79,16 @@ Android details are in [server/README.md](server/README.md) and
 
 ## Access model
 
-Students discover the courses that have sessions running right now — a searchable
-picker, not a scrolling list, since campus-wide "running now" can be a lot of sessions
-at once. The repository does not contain an enrolment/registration data source, so it
-does not claim or attempt student-to-course membership filtering. Recording attendance
-still requires a valid server-enforced session method and physical/manual proof.
-New student accounts must sign in with an admin-configured email domain (default
-`eng.pdn.ac.lk`; empty disables the check) — existing accounts and lecturers/admins
-provisioned directly by an admin are never subject to it. Lecturer actions are restricted
-to owned courses, though any owner may add a co-owner; admins may manage the whole
-installation, including reassigning or removing owners outright.
+Students discover the courses that have sessions running right now — a searchable picker,
+not a scrolling list, since campus-wide "running now" can be a lot of sessions at once.
+**The repository has no enrolment data source**, so it does not attempt student-to-course
+membership filtering; recording attendance still requires server-enforced evidence.
 
-An admin-set minimum Android `versionCode` blocks the app with a full-screen, non-dismissible
-update prompt below that version — there is no live Play Store lookup, so this is bumped
-by hand after publishing a release that must not be skipped.
+Lecturers act only on courses they own (any owner may add a co-owner); admins manage the
+whole installation. New student accounts are gated on an admin-configured email domain,
+and an admin-set minimum Android `versionCode` blocks outdated installs. "Delete" hides
+rather than destroys, everywhere.
 
-"Delete" on a course or lecturer hides it rather than destroying data — the same as
-disabling — and hidden entries sort to the bottom of admin lists instead of disappearing
-outright. Deleting a lecturer never assigns a substitute owner: it's refused outright if it
-would leave an active course with no lecturer, but an already-archived course is allowed to
-end up ownerless.
+Each of those rules — who may do what, what "delete" does to sessions, courses, lecturers
+and buildings, and what happens to a course whose last owner is removed — is specified in
+[server/README.md](server/README.md).

@@ -28,18 +28,42 @@ MONGO_URI=mongodb://127.0.0.1:27017/attendance
 APP_BASE_URL=https://attendance.eng.pdn.ac.lk
 CORS_ORIGINS=https://localhost
 SESSION_SECRET=replace-with-a-long-random-value
-BLE_SECRET=replace-with-a-long-random-value
 GOOGLE_CLIENT_ID=replace-me
 GOOGLE_CLIENT_SECRET=replace-me
 SESSION_EXPIRE_JOB_MS=60000
 ```
 
-- `SESSION_SECRET` and `BLE_SECRET` are mandatory in production.
+- `SESSION_SECRET` is mandatory in production; the process exits at boot without it.
 - `TZ` controls every weekly window and attendance date. The server safely defaults to
   `Asia/Colombo`, but production should set it explicitly.
 - `APP_BASE_URL` builds the Google OAuth callback.
-- `CORS_ORIGINS` is a comma-separated browser-origin allowlist. Native Android requests
-  normally have no `Origin` header.
+- `MONGO_URI` above is only the local-development shape. **Production points at a
+  MongoDB Atlas cluster, not the VM's own `mongod`** — that box also runs a local
+  MongoDB, so anyone inspecting `mongodb://127.0.0.1:27017/attendance` there is reading
+  a different, near-empty database and drawing the wrong conclusion. Read the live
+  `MONGO_URI` from `/opt/attendance/app/.env` before touching production data.
+- `CORS_ORIGINS` is an **optional** comma-separated browser-origin allowlist; production
+  does not currently set it, and `config/cors.js` falls back to `APP_BASE_URL` when it is
+  absent. Set it only when a browser origin other than the app's own must be allowed.
+  Native Android requests normally carry no `Origin` header at all.
+- `SESSION_SECRET` has a development fallback (`'dev-only-secret'`), so a non-production
+  process will start with a publicly known signing key. Production cannot: `config/env.js`
+  exits at boot if it is unset.
+- `FRONTEND_URL` and `REACT_APP_API_BASE` are present in the live `.env` and **read by
+  nothing** — leftovers from the React SPA that was removed (see the nginx note at the top
+  of this file). Safe to delete; kept here so the next person to read that file knows they
+  are dead rather than assuming they matter.
+- `CSP_REPORT_ONLY=1` downgrades the Content-Security-Policy to report-only. Useful for
+  a few hours after a client change, to see violations in the browser console without
+  breaking anything — but **production must not run with it set**, and it once sat there
+  long enough that the carefully written policy was being ignored entirely. Unset it and
+  restart to enforce; confirm with
+  `curl -sI http://127.0.0.1:5000/api/healthz | grep -i content-security-policy`, which
+  must print `Content-Security-Policy:` and not `-Report-Only`.
+- `BLE_SECRET` is **no longer used and must not be re-added**. It was required at boot
+  and read by nothing: BLE tokens are 8 random bytes from `crypto.randomBytes`, so they
+  are unforgeable because they are unpredictable and checked against a live pool, not
+  because anything is signed. Existing deployments can drop the line.
 
 Keep `.env`, Android `local.properties`, `keystore.properties`, and signing keystores out
 of Git.

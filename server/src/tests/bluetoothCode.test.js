@@ -186,13 +186,56 @@ describe('bluetoothCode', () => {
   });
 
   describe('seed tokens', () => {
-    it('mintSeedToken creates a row scoped to (sessionId, owner, role: seed)', async () => {
+    it('claimSeedSlot takes the first free slot and mints that seeder token', async () => {
+      mockModel.findOne.mockResolvedValue(null);
       mockModel.findOneAndUpdate.mockResolvedValue({ token: 'seed1234seed5678', leaseUntil: 12345 });
-      const result = await bluetoothCode.mintSeedToken('session1', 'student1', 12345);
+      const result = await bluetoothCode.claimSeedSlot('session1', 'student1', 12345, 3);
+      expect(result.slot).toBe(0);
       expect(result.token).toHaveLength(16);
       const [filter, update] = mockModel.findOneAndUpdate.mock.calls[0];
-      expect(filter).toEqual({ sessionId: 'session1', owner: 'student1', role: 'seed' });
-      expect(update.leaseUntil).toBe(12345);
+      expect(filter.sessionId).toBe('session1');
+      expect(filter.role).toBe('seed');
+      expect(filter.slot).toBe(0);
+      expect(update.$set.owner).toBe('student1');
+      expect(update.$set.leaseUntil).toBe(12345);
+    });
+
+    it('claimSeedSlot moves to the next slot when it loses the race for one', async () => {
+      mockModel.findOne.mockResolvedValue(null);
+      const duplicate = Object.assign(new Error('E11000'), { code: 11000 });
+      mockModel.findOneAndUpdate
+        .mockRejectedValueOnce(duplicate)
+        .mockRejectedValueOnce(duplicate)
+        .mockResolvedValue({ token: 'c'.repeat(16), leaseUntil: 999 });
+      const result = await bluetoothCode.claimSeedSlot('session1', 'student1', 999, 4);
+      expect(result.slot).toBe(2);
+      expect(mockModel.findOneAndUpdate).toHaveBeenCalledTimes(3);
+    });
+
+    it('claimSeedSlot returns null once every slot is held - this is the cap', async () => {
+      mockModel.findOne.mockResolvedValue(null);
+      mockModel.findOneAndUpdate.mockRejectedValue(Object.assign(new Error('E11000'), { code: 11000 }));
+      const result = await bluetoothCode.claimSeedSlot('session1', 'student1', 999, 3);
+      expect(result).toBeNull();
+      // Exactly seedRate attempts - it never invents a slot beyond the cap.
+      expect(mockModel.findOneAndUpdate).toHaveBeenCalledTimes(3);
+    });
+
+    it('claimSeedSlot refreshes an existing holder instead of consuming a second slot', async () => {
+      const existing = {
+        token: 'old', prevToken: null, generatedAt: 0, leaseUntil: 1, slot: 2, save: jest.fn(),
+      };
+      mockModel.findOne.mockResolvedValue(existing);
+      const result = await bluetoothCode.claimSeedSlot('session1', 'student1', 5555, 3);
+      expect(result.slot).toBe(2);
+      expect(existing.leaseUntil).toBe(5555);
+      expect(existing.save).toHaveBeenCalled();
+      expect(mockModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('claimSeedSlot mints nothing when seeding is disabled (seedRate 0)', async () => {
+      expect(await bluetoothCode.claimSeedSlot('session1', 'student1', 1, 0)).toBeNull();
+      expect(mockModel.findOne).not.toHaveBeenCalled();
     });
 
     it('getSeedToken returns null once the lease has expired', async () => {
@@ -218,14 +261,6 @@ describe('bluetoothCode', () => {
       mockModel.deleteOne.mockResolvedValue({ deletedCount: 1 });
       await bluetoothCode.removeSeedToken('session1', 'student1');
       expect(mockModel.deleteOne).toHaveBeenCalledWith({ sessionId: 'session1', owner: 'student1', role: 'seed' });
-    });
-
-    it('countLiveSeeders counts only non-expired seed rows', async () => {
-      mockModel.countDocuments.mockResolvedValue(2);
-      const count = await bluetoothCode.countLiveSeeders('session1');
-      expect(count).toBe(2);
-      const filter = mockModel.countDocuments.mock.calls[0][0];
-      expect(filter.role).toBe('seed');
     });
   });
 });

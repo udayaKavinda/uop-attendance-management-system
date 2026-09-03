@@ -8,7 +8,7 @@ const settingsService = require('./settings.service');
  *   else if not accepted via a PRIMARY token: role = none
  *   else if seeding is switched off:          role = none
  *   else if not student.canAdvertise:         role = decoy
- *   else if liveSeederCount < seedRate:       role = seeder; mint
+ *   else if a seeder slot can be claimed:     role = seeder
  *   else:                                     role = decoy
  *
  * Only primary-BLE-verified students are eligible. A GPS-passed student can sit
@@ -46,13 +46,19 @@ async function selectSeedingRole(sessionItem, studentId, canAdvertise, bleRole =
     return { role: 'decoy', durationMs };
   }
 
-  const liveCount = await bluetoothCode.countLiveSeeders(String(sessionItem._id));
-  if (liveCount >= seedRate) {
+  // One atomic step, not a count followed by a mint: the two-step version let a
+  // whole lecture's worth of simultaneous accepts each read a count below the cap
+  // and each mint, blowing past seedRate by several times over. claimSeedSlot
+  // returns null when every slot is genuinely taken, which is the decoy case.
+  const leaseUntil = Date.now() + durationMs;
+  const claim = await bluetoothCode.claimSeedSlot(
+    String(sessionItem._id), String(studentId), leaseUntil, seedRate,
+  );
+  if (!claim) {
     return { role: 'decoy', durationMs };
   }
 
-  const leaseUntil = Date.now() + durationMs;
-  const { token } = await bluetoothCode.mintSeedToken(String(sessionItem._id), String(studentId), leaseUntil);
+  const { token } = claim;
   return {
     // sessionId lets the client re-fetch its rotating seeder token via
     // GET /api/attendance/seed-token?sessionId= without needing it from elsewhere.
