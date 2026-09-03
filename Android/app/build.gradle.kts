@@ -62,6 +62,11 @@ android {
         // Mirrors NATIVE_OAUTH_RETURN_BASES in server/src/utils/constants.js.
         manifestPlaceholders["oauthScheme"] = "lk.ac.pdn.eng.attendance"
         manifestPlaceholders["oauthHost"] = "oauth"
+
+        // On-device (instrumentation) tests. See app/src/androidTest — the
+        // mock-location guard can only be exercised against a real platform
+        // LocationManager, so it lives there rather than in the JVM suite.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -152,4 +157,11 @@ dependencies {
 
     // Testing
     testImplementation(libs.junit)
+
+    // On-device tests
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
 }
