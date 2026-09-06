@@ -3,6 +3,7 @@
 Native Android attendance administration and student attendance for the University of
 Peradeniya Faculty of Engineering, backed by an Express/MongoDB API.
 
+
 ## How attendance is verified
 
 Every session works the same way — there is no policy to pick. A check-in runs one
