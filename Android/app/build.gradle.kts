@@ -94,6 +94,33 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+
+        /**
+         * Debug is signed with the **release/upload** key, not the per-machine
+         * `~/.android/debug.keystore`.
+         *
+         * Credential Manager authorises native Google sign-in by package name
+         * *plus signing-certificate SHA-1*, matched against an Android OAuth
+         * client in the Cloud project. A debug keystore is generated afresh on
+         * every developer machine, so after a machine change its SHA-1 is no
+         * longer the registered one, `GetGoogleIdOption` returns no credential,
+         * and the app reports the misleading "No Google account is available on
+         * this device" — with the browser fallback still working, because web
+         * OAuth checks a redirect URI rather than a signature.
+         *
+         * Signing debug with the upload key gives one stable fingerprint that
+         * survives machine changes. Registered SHA-1s for lk.ac.pdn.eng.feats:
+         *   76:0E:… upload key   — these local builds
+         *   C6:4E:… Play signing — Play-delivered installs (Google re-signs)
+         *
+         * Falls back to the default debug keystore when keystore.properties is
+         * absent, so a fresh clone still builds (native sign-in just won't work).
+         */
+        debug {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     compileOptions {
