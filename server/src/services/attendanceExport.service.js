@@ -3,7 +3,7 @@ const attendanceService = require('./attendance.service');
 const { studentDisplayIdFromEmail, formatAttendanceTableColumnLabel } = require('../utils/attendanceLabels');
 
 // Soft red so the sheet still reads fine printed in black and white — the cell
-// text ('F') and comment carry the actual information either way.
+// stays 'P' either way, so the fill and comment carry the actual information.
 const FLAG_FILL = {
   type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8D7DA' },
 };
@@ -16,10 +16,13 @@ function sheetNameFor(course) {
 
 /**
  * Builds the downloadable Excel report: one row per student, one column per
- * session, 'P' for present. A `flagged` record ('far'/'unknown' GPS verdict
- * that never passed) gets a red-filled 'F' cell with the reason as a cell
- * comment — this is the only place that reason is ever surfaced; nobody
- * "reviews" it, it's just visible context for whoever reads the export.
+ * session — 'P' for anyone with a record, '-' for no attempt at all. A
+ * `flagged` record (a correct manual code accepted from a 'far'/'unknown' GPS
+ * verdict — see recordHelpCodeAttendance) is a genuine present, not a separate
+ * outcome: the lecturer read the code out, so treat it as attendance, but a
+ * red-filled cell with the reason as a note flags it for a second look — this
+ * is the only place that reason is ever surfaced; nobody "reviews" it, it's
+ * just visible context for whoever reads the export.
  */
 async function buildAttendanceWorkbook(course) {
   const { sessions, attendanceDocs, sessionMinDate } = await attendanceService.getAttendanceMatrixRaw(course);
@@ -55,7 +58,7 @@ async function buildAttendanceWorkbook(course) {
     const values = { studentId: row.displayId };
     sessions.forEach((s) => {
       const doc = row.cells.get(String(s._id));
-      values[String(s._id)] = doc?.status === 'present' ? 'P' : doc?.status === 'flagged' ? 'F' : '';
+      values[String(s._id)] = doc?.status === 'present' || doc?.status === 'flagged' ? 'P' : '-';
     });
     const sheetRow = sheet.addRow(values);
     sessions.forEach((s) => {

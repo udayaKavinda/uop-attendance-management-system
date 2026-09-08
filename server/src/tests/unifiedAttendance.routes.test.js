@@ -446,7 +446,7 @@ describe('POST /api/attendance — "get help" lecturer code', () => {
 
     expect(res.body.status).toBe('flagged');
     expect(Attendance.create).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'flagged', band: 'unknown' }),
+      expect.objectContaining({ status: 'flagged', band: 'unknown', reason: 'Could not verify location.' }),
     );
   });
 

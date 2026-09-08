@@ -14,7 +14,7 @@ function session(id, overrides = {}) {
 }
 
 describe('buildAttendanceWorkbook', () => {
-  test('present cells show P with no fill; flagged cells show F, a red fill, and the reason as a note', async () => {
+  test('present and flagged cells both show P; flagged additionally gets a red fill and the reason as a note', async () => {
     const course = {
       _id: 'course-1', code: 'CS101', batch: 'E23', name: 'Intro to CS',
     };
@@ -46,7 +46,7 @@ describe('buildAttendanceWorkbook', () => {
     const [, flaggedRow, presentRow] = rows;
 
     const flaggedCell = flaggedRow.getCell(sessionId);
-    expect(flaggedCell.value).toBe('F');
+    expect(flaggedCell.value).toBe('P');
     expect(flaggedCell.fill).toMatchObject({ type: 'pattern', pattern: 'solid' });
     expect(flaggedCell.note).toMatch(/2\.1km/);
 
@@ -56,7 +56,7 @@ describe('buildAttendanceWorkbook', () => {
     expect(presentCell.note).toBeUndefined();
   });
 
-  test('a student with no record for a session gets a blank cell, not "F"', async () => {
+  test('a student with no record for a session gets "-", not "P"', async () => {
     const course = { _id: 'course-1', code: 'CS101', batch: null };
     const sessionId = 'sess-1';
     attendanceService.getAttendanceMatrixRaw.mockResolvedValue({
@@ -76,6 +76,6 @@ describe('buildAttendanceWorkbook', () => {
     const rows = [];
     sheet.eachRow({ includeEmpty: false }, (row) => rows.push(row));
     const dataRow = rows[1];
-    expect(dataRow.getCell(sessionId).value).toBe('');
+    expect(dataRow.getCell(sessionId).value).toBe('-');
   });
 });

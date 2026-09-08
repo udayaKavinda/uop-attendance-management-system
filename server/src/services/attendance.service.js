@@ -122,7 +122,7 @@ async function upsertAttendance({
  */
 function reasonForFlag(band, distanceM) {
   if (band !== 'far') {
-    return 'No usable GPS fix (denied, no signal, or too inaccurate to verify).';
+    return 'Could not verify location.';
   }
   if (!Number.isFinite(distanceM)) {
     return 'GPS put this student outside the allowed range, but the exact distance could not be measured.';
