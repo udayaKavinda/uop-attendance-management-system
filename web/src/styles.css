@@ -131,6 +131,12 @@ button {
   padding: 12px 16px;
 }
 
+/* See Screen's `align` prop in Chrome.tsx. Only the vertical axis changes —
+ * `align-items: center` stays, so cards keep their horizontal centering. */
+.app__body--top {
+  justify-content: flex-start;
+}
+
 .topbar {
   display: flex;
   align-items: center;

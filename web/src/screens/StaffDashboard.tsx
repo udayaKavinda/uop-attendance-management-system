@@ -36,20 +36,6 @@ export function StaffDashboard({ onSignOut }: { onSignOut: () => void }) {
     return () => window.clearTimeout(timer);
   }, [flash, clearFlash]);
 
-  /**
-   * Switching tabs (or opening/closing the attendance matrix) swaps the whole
-   * view in place — the page itself never navigates, so nothing resets scroll on
-   * its own. Without this, scrolling down a tall tab (Create session) and then
-   * tapping a short one (Sessions, empty) leaves the browser at its old scroll
-   * offset: the new, shorter content renders starting from that same offset, so
-   * the topbar and tab row end up pushed far down the viewport instead of at the
-   * top. Every tab should open at its top, same as a fresh Compose scroll
-   * container does natively.
-   */
-  useEffect(() => {
-    window.scrollTo(0, 0);
-  }, [tab, matrixCourseId]);
-
   if (matrixCourseId != null) {
     return (
       <AttendanceMatrixScreen courseId={matrixCourseId} onBack={() => setMatrixCourseId(null)} />
@@ -57,7 +43,7 @@ export function StaffDashboard({ onSignOut }: { onSignOut: () => void }) {
   }
 
   return (
-    <Screen top={<StaffTopBar onSignOut={onSignOut} />}>
+    <Screen top={<StaffTopBar onSignOut={onSignOut} />} align="top">
       <Tabs tabs={TABS} active={tab} onSelect={setTab} />
 
       {flash && (

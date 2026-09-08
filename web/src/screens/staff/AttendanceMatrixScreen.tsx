@@ -39,6 +39,7 @@ export function AttendanceMatrixScreen({
 
   return (
     <Screen
+      align="top"
       top={
         <div className="topbar">
           <button type="button" className="topbar__back" onClick={onBack}>

@@ -40,11 +40,32 @@ export function Card({ children }: { children: ReactNode }) {
   return <div className="card">{children}</div>;
 }
 
-export function Screen({ children, top }: { children: ReactNode; top?: ReactNode }) {
+/**
+ * `align` picks how `.app__body` positions short content:
+ *
+ *  - `'center'` (default) — a single card vertically centered on a tall
+ *    viewport. Right for a one-card screen (Login, notices, check-in) where
+ *    there is nothing else on the page to stay anchored to.
+ *  - `'top'` — content starts immediately below `top` and never moves. Required
+ *    for anything with its own persistent navigation below `top` (StaffDashboard's
+ *    tab row, AttendanceMatrixScreen's back link): centering would otherwise
+ *    drag that navigation down the page whenever the active view is short —
+ *    e.g. an empty Sessions tab centering "Search sessions" mid-viewport and
+ *    pushing the tab row down with it, while a fuller tab stays put.
+ */
+export function Screen({
+  children,
+  top,
+  align = 'center',
+}: {
+  children: ReactNode;
+  top?: ReactNode;
+  align?: 'center' | 'top';
+}) {
   return (
     <div className="app">
       {top}
-      <div className="app__body">{children}</div>
+      <div className={`app__body${align === 'top' ? ' app__body--top' : ''}`}>{children}</div>
       <Footer />
     </div>
   );
