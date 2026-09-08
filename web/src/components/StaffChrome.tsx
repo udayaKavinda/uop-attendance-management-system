@@ -7,10 +7,10 @@ import type { ReactNode } from 'react';
 
 /**
  * StaffTopBar. Shows the role rather than the address — the native bar takes an
- * `email` parameter but never renders it, and the identity that matters on a
- * dashboard is which hat you are wearing.
+ * `email` parameter but never renders it. Always "Lecturer" here: an admin never
+ * reaches this dashboard (see AdminNoticeScreen).
  */
-export function StaffTopBar({ role, onSignOut }: { role: string; onSignOut: () => void }) {
+export function StaffTopBar({ onSignOut }: { onSignOut: () => void }) {
   return (
     <div className="topbar">
       <div className="topbar__logo" aria-hidden="true">
@@ -18,7 +18,7 @@ export function StaffTopBar({ role, onSignOut }: { role: string; onSignOut: () =
       </div>
       <div className="topbar__titles">
         <div className="topbar__title">Attendance administration</div>
-        <div className="topbar__subtitle">{role === 'admin' ? 'Administrator' : 'Lecturer'}</div>
+        <div className="topbar__subtitle">Lecturer</div>
       </div>
       <button type="button" className="topbar__signout" onClick={onSignOut}>
         Sign out

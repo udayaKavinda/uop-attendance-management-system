@@ -1,6 +1,7 @@
 import { Card, LoadingGate, Screen } from './components/Chrome';
 import { usePlatformGate } from './hooks/usePlatformGate';
 import { useSession } from './hooks/useSession';
+import { AdminNoticeScreen } from './screens/AdminNoticeScreen';
 import { CheckInScreen } from './screens/CheckInScreen';
 import { LoginScreen } from './screens/LoginScreen';
 import { NotSupportedScreen } from './screens/NotSupportedScreen';
@@ -45,22 +46,24 @@ function AuthenticatedApp() {
       return <LoginScreen error={session.error} onSignIn={signIn} />;
 
     case 'loggedIn':
-      return session.user.role === 'student' ? (
+      // Three roles, three screens. Admins deliberately get a notice rather than
+      // the dashboard: administration is Android-only (see AdminNoticeScreen).
+      if (session.user.role === 'student') {
         // Keyed on identity: one phone is genuinely passed between students at
         // "get help", and without this the next signed-in account would inherit
         // the previous student's check-in state — including a settled "you're
         // marked present" they never earned. Remounting on email change throws
         // that state away. The native app does the same (see AppRoot.kt).
-        <CheckInScreen key={session.user.email} email={session.user.email} onSignOut={signOut} />
-      ) : (
+        return (
+          <CheckInScreen key={session.user.email} email={session.user.email} onSignOut={signOut} />
+        );
+      }
+      if (session.user.role === 'lecturer') {
         // Keyed for the same reason: a staff browser is shared too, and one
         // lecturer's courses, sessions and owner-search results must not survive
         // into the next lecturer's session.
-        <StaffDashboard
-          key={session.user.email}
-          role={session.user.role}
-          onSignOut={signOut}
-        />
-      );
+        return <StaffDashboard key={session.user.email} onSignOut={signOut} />;
+      }
+      return <AdminNoticeScreen email={session.user.email} onSignOut={signOut} />;
   }
 }

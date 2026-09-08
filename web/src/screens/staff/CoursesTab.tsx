@@ -7,7 +7,7 @@ import {
   SectionHeader,
   StatusBadge,
 } from '../../components/StaffChrome';
-import { isAdmin, type StaffApi } from '../../hooks/useStaffDashboard';
+import type { StaffApi } from '../../hooks/useStaffDashboard';
 
 /** Course code: capital letters and numbers only, typed lowercase becomes capital. */
 function sanitizeCourseCode(input: string): string {
@@ -105,11 +105,6 @@ export function CoursesTab({
   const batchIncomplete = hasIncompleteBatch(batchText);
   const visibleCourses = sortedForDisplay(state.courses);
 
-  // An admin must name the lecturer a course belongs to (the server rejects the
-  // create otherwise), and that picker lives in the Android Courses tab. Every
-  // other action on this tab works for admins exactly as it does for lecturers.
-  const canAddCourse = !isAdmin(state);
-
   return (
     <div className="stack">
       <Card>
@@ -137,15 +132,9 @@ export function CoursesTab({
           onChange={setName}
           placeholder="Intro to Computing"
         />
-        {!canAddCourse && (
-          <p className="hint hint--warn">
-            Creating a course for another lecturer needs the lecturer picker — use the UOP
-            Attendance app on Android.
-          </p>
-        )}
         <PrimaryButton
           text="Add course"
-          disabled={!canAddCourse || batches.length === 0 || batchIncomplete}
+          disabled={batches.length === 0 || batchIncomplete}
           onClick={() => {
             void staff.createCourse(code, batches, name);
             setCode('');

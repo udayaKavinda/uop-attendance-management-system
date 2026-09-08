@@ -11,20 +11,20 @@ import { SessionsTab } from './staff/SessionsTab';
  * Web counterpart of ui/staff/StaffDashboardScreen.kt, with the same tabs in the
  * same order and the same copy.
  *
- * Two things the native dashboard has are deliberately absent:
+ * This is the LECTURER dashboard, and only that. Two things the native dashboard
+ * has are deliberately absent:
  *
- *  - the admin-only tabs (Lecturers, Geofences, Settings). Drawing a building
- *    polygon needs a map surface, and the rest is rarely-used configuration, so
- *    all of it stays on Android. An admin signing in here gets the same three
- *    lecturer tabs rather than a locked door — they own courses too.
+ *  - everything administrative — the Lecturers, Geofences and Settings tabs, and
+ *    admins themselves, who get AdminNoticeScreen instead of this. Administration
+ *    is Android-only.
  *  - anything that starts a Bluetooth broadcast. See the staff block in
  *    api/client.ts for why claiming a radio this client does not have would be
  *    worse than simply not having one.
  */
 const TABS = ['Courses', 'Create session', 'Sessions'];
 
-export function StaffDashboard({ role, onSignOut }: { role: string; onSignOut: () => void }) {
-  const staff = useStaffDashboard(role);
+export function StaffDashboard({ onSignOut }: { onSignOut: () => void }) {
+  const staff = useStaffDashboard();
   const [tab, setTab] = useState(0);
   const [matrixCourseId, setMatrixCourseId] = useState<string | null>(null);
   const { flash, error } = staff.state;
@@ -43,7 +43,7 @@ export function StaffDashboard({ role, onSignOut }: { role: string; onSignOut: (
   }
 
   return (
-    <Screen top={<StaffTopBar role={role} onSignOut={onSignOut} />}>
+    <Screen top={<StaffTopBar onSignOut={onSignOut} />}>
       <Tabs tabs={TABS} active={tab} onSelect={setTab} />
 
       {flash && (

@@ -34,7 +34,6 @@ import type {
 export type SessionStage = 'inactive' | 'withinSession' | 'collecting';
 
 export interface StaffState {
-  role: string;
   courses: Course[];
   coursesPage: number;
   coursesHasMore: boolean;
@@ -59,7 +58,6 @@ export interface StaffState {
 }
 
 const INITIAL: StaffState = {
-  role: 'lecturer',
   courses: [],
   coursesPage: 1,
   coursesHasMore: false,
@@ -108,16 +106,16 @@ export function isBroadcastingOnServer(state: StaffState, session: StaffSession)
   return live?.broadcasting ?? session.broadcasting === true;
 }
 
-export function isAdmin(state: StaffState): boolean {
-  return state.role === 'admin';
-}
-
 export function bleEnabled(state: StaffState): boolean {
   return state.settings?.bleEnabled !== false;
 }
 
-export function useStaffDashboard(role: string) {
-  const [state, setState] = useState<StaffState>({ ...INITIAL, role });
+/**
+ * Lecturers only — administration is Android-only, so there is no admin branch
+ * anywhere below (see AdminNoticeScreen).
+ */
+export function useStaffDashboard() {
+  const [state, setState] = useState<StaffState>(INITIAL);
 
   const patch = useCallback((next: Partial<StaffState>) => {
     setState((s) => ({ ...s, ...next }));
