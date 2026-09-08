@@ -4,7 +4,7 @@ import { useSession } from './hooks/useSession';
 import { CheckInScreen } from './screens/CheckInScreen';
 import { LoginScreen } from './screens/LoginScreen';
 import { NotSupportedScreen } from './screens/NotSupportedScreen';
-import { StaffNoticeScreen } from './screens/StaffNoticeScreen';
+import { StaffDashboard } from './screens/StaffDashboard';
 
 export function App() {
   const gate = usePlatformGate();
@@ -53,7 +53,14 @@ function AuthenticatedApp() {
         // that state away. The native app does the same (see AppRoot.kt).
         <CheckInScreen key={session.user.email} email={session.user.email} onSignOut={signOut} />
       ) : (
-        <StaffNoticeScreen email={session.user.email} onSignOut={signOut} />
+        // Keyed for the same reason: a staff browser is shared too, and one
+        // lecturer's courses, sessions and owner-search results must not survive
+        // into the next lecturer's session.
+        <StaffDashboard
+          key={session.user.email}
+          role={session.user.role}
+          onSignOut={signOut}
+        />
       );
   }
 }

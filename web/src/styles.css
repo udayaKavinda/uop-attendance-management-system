@@ -698,3 +698,721 @@ button {
 .stack > * + * {
   margin-top: 10px;
 }
+
+/* ── Staff dashboard ──────────────────────────────────────────────────────────
+ *
+ * Same provenance rule as the rest of this file: values come from the Compose
+ * sources (ui/staff/StaffDashboardScreen.kt, ui/theme/Color.kt) rather than
+ * being eyeballed, so the two dashboards render as one product.
+ */
+:root {
+  --success-border: #86efac;
+  --running-border: #c4b5fd;
+  --enabled-border: #bbf7d0;
+  --danger-text: #991b1b;
+  --danger-bg: #fee2e2;
+  --pill-ink: #374151;
+  --code-panel-bg: #f8f7ff;
+}
+
+.stack--tight > * + * {
+  margin-top: 6px;
+}
+
+/* Tabs — ScrollableTabRow. */
+.tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 0 2px 8px;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tabs__tab {
+  flex: 0 0 auto;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 10px 12px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--accent-dark);
+  white-space: nowrap;
+}
+
+.tabs__tab--active {
+  font-weight: 700;
+  border-bottom-color: var(--accent);
+}
+
+.flash {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--success-bg);
+  color: var(--success-text);
+  border: 0;
+  border-radius: var(--r-panel);
+  padding: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.banner--button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 8px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.section-header__icon {
+  font-size: 17px;
+}
+
+.section-header__title {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--ink);
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.hint--warn {
+  color: var(--warn-text);
+}
+
+.rule {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 14px 0;
+}
+
+.field {
+  display: block;
+}
+
+.field-row {
+  display: flex;
+  gap: 8px;
+}
+
+.field-row > .field {
+  flex: 1;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  padding: 6px 0;
+}
+
+.checkbox input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.building-list {
+  border: 1px solid var(--border);
+  border-radius: var(--r-input);
+  padding: 4px 10px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.disclosure {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  color: var(--muted);
+}
+
+.seconds-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.input--narrow {
+  width: 90px;
+}
+
+.load-more {
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--input-border);
+  border-radius: var(--r-input);
+  padding: 12px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--accent-dark);
+}
+
+.badge {
+  border-radius: var(--r-pill);
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.badge--warning {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.badge--success {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.badge--accent {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.badge--neutral {
+  background: var(--inactive-bg);
+  color: var(--pill-ink);
+}
+
+.badge--danger {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.pill-button {
+  border-radius: var(--r-pill);
+  padding: 8px 15px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.pill-button--accent {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.pill-button--success {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border-color: var(--success-border);
+}
+
+.pill-button--warning {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.pill-button--neutral {
+  background: var(--card);
+  color: var(--pill-ink);
+  border-color: var(--input-border);
+}
+
+.pill-button--danger {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+/* ── Course card ──────────────────────────────────────────────────────────── */
+
+.course-card {
+  background: var(--card);
+  border: 1px solid var(--enabled-border);
+  border-radius: var(--r-panel);
+  padding: 14px;
+  box-shadow: var(--shadow-card);
+}
+
+.course-card--archived {
+  border-color: var(--border);
+}
+
+.course-card__head {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.course-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.course-card__title {
+  flex: 1;
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.course-card__name {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.course-card__owners {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.course-card__actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+/* ── Session card ─────────────────────────────────────────────────────────── */
+
+.session-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.session-card--collecting {
+  border-color: var(--success-border);
+}
+
+.session-card--withinSession {
+  border-color: var(--running-border);
+}
+
+.session-card__head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.session-card__icon {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 13px;
+  background: var(--accent-soft);
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+}
+
+.session-card__icon--live {
+  background: var(--success-bg);
+}
+
+.session-card__titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-card__code {
+  font-weight: 800;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.session-card__meta {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-card__schedule {
+  margin-top: 14px;
+  background: var(--inactive-bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.session-card__when {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.session-card__when strong {
+  margin-right: 10px;
+}
+
+.session-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--pill-ink);
+}
+
+.state-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: var(--r-pill);
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.state-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+.state-pill--collecting {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.state-pill--withinSession {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.state-pill--inactive {
+  background: var(--inactive-bg);
+  color: var(--muted);
+}
+
+.session-notice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  background: var(--inactive-bg);
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.collecting {
+  margin-top: 12px;
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  border-radius: 14px;
+  padding: 13px;
+}
+
+.collecting__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--success-text);
+  font-weight: 800;
+  font-size: 12px;
+}
+
+/* The at-a-glance "attendance is live" cue — LiveDot in the native card. */
+.collecting__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--error-text);
+  animation: live-dot 1.4s linear infinite alternate;
+}
+
+@keyframes live-dot {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .collecting__dot {
+    animation: none;
+  }
+}
+
+.collecting__body {
+  color: var(--success-text);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.collecting__foot {
+  color: var(--success-text);
+  opacity: 0.8;
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+.session-card__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.action-button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 12px;
+  padding: 11px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid;
+}
+
+.action-button--primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.action-button--neutral {
+  background: var(--card);
+  color: var(--pill-ink);
+  border-color: var(--input-border);
+}
+
+.action-button--success {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border-color: var(--success-border);
+}
+
+.action-button--danger {
+  background: var(--error-bg);
+  color: var(--danger-text);
+  border-color: var(--error-border);
+}
+
+.action-button:disabled {
+  background: var(--inactive-bg);
+  color: var(--muted);
+  border-color: var(--border);
+}
+
+/* ── Attendance code panel ────────────────────────────────────────────────── */
+
+.code-panel {
+  margin-top: 12px;
+  background: var(--code-panel-bg);
+  border: 1px solid var(--accent-soft);
+  border-radius: 14px;
+  padding: 13px;
+}
+
+.code-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.code-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 11px 13px;
+}
+
+.code-box__value {
+  flex: 1;
+}
+
+.code-box__digits {
+  font-weight: 800;
+  font-size: 24px;
+  letter-spacing: 3px;
+  color: var(--accent-dark);
+}
+
+.code-box__status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.code-box__status--paused {
+  color: var(--warn-text);
+}
+
+.code-box__regen {
+  background: none;
+  border: 0;
+  font-size: 20px;
+  padding: 4px;
+  color: var(--accent-dark);
+}
+
+.code-panel .action-button {
+  margin-top: 9px;
+}
+
+/* ── Owners dialog ────────────────────────────────────────────────────────── */
+
+.dialog__body {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 0 0 12px;
+}
+
+.owner-list {
+  margin-bottom: 10px;
+}
+
+.owner-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.owner-row__name {
+  flex: 1;
+  font-size: 14px;
+}
+
+.owner-row__remove {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 14px;
+  padding: 4px 8px;
+}
+
+.search-results {
+  border: 1px solid var(--border);
+  border-radius: var(--r-option);
+  margin-top: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.search-result {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+}
+
+.search-result:last-child {
+  border-bottom: 0;
+}
+
+.search-result__name {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.search-result__email {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ── Attendance matrix ────────────────────────────────────────────────────── */
+
+.topbar__back {
+  background: none;
+  border: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-dark);
+  padding: 8px;
+}
+
+.matrix-scroll {
+  overflow-x: auto;
+}
+
+.matrix {
+  border-collapse: collapse;
+  font-size: 13px;
+  width: 100%;
+}
+
+.matrix th,
+.matrix td {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.matrix thead th {
+  background: var(--inactive-bg);
+  color: var(--pill-ink);
+  font-size: 12px;
+}
+
+.matrix tbody th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.matrix__cell--present {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.matrix__cell--flagged {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
