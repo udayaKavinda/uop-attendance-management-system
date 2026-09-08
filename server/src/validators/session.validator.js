@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
-const { toMinutes, hasScheduleOverlap, ymd } = require('../utils/schedule');
+const { toMinutes, hasScheduleOverlap } = require('../utils/schedule');
+const { localYmd } = require('../utils/date');
 const { MIN_ROTATION_SECONDS, MAX_ROTATION_SECONDS } = require('../services/manualCode.service');
 
 const ALLOWED_DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
@@ -76,7 +77,7 @@ async function checkSessionOverlap(LectureSession, courseId, day, startTime, end
     lectureDay: day,
     deleted: false,
   });
-  const today = ymd();
+  const today = localYmd();
   const relevant = sameDaySessions.filter(
     (session) => session.recurring || session.occurrenceDate >= today,
   );

@@ -290,7 +290,6 @@ module.exports = {
   activateSession,
   deactivateSession,
   listAllForStaff,
-  assertCanBroadcastNow,
   closeBroadcast,
   setBroadcasting,
   getBroadcast,

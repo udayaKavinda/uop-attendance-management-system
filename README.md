@@ -72,7 +72,7 @@ cd Android
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-Server tests: 314 across 21 suites.
+Server tests: 359 across 26 suites.
 
 The API defaults to `http://localhost:5000`; the Android production base is
 `https://attendance.eng.pdn.ac.lk`.

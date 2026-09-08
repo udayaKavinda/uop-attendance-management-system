@@ -31,8 +31,8 @@ const settingsSchema = new mongoose.Schema({
 
   /**
    * Distance bands, in meters from the nearest active building polygon of the
-   * session. `near` and `suspicious` both auto-pass; beyond `far` (or when the
-   * fix is too inaccurate to band at all) a student is flagged instead — see
+   * session. `near` and `suspicious` both auto-pass; beyond `far` (or when no
+   * usable GPS fix exists at all) a student is flagged instead — see
    * `geofenceLogic.service.js` for what "within a buffer" means for each band.
    */
   nearBufferM: { type: Number, default: 50, min: 0 },

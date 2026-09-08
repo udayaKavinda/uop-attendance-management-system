@@ -269,6 +269,159 @@ describe('POST /api/attendance — GPS band decisions', () => {
     expect(res.body.status).toBe('collecting');
     expect(Attendance.create).not.toHaveBeenCalled();
   });
+
+  test('never becomes ready on fewer than MIN_FIXES (3) distinct submissions, however many times sent', async () => {
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    // 5 submissions, but every one refreshes the *same* single fix (evaluateFix
+    // only appends real fixes sent by the client) — send exactly 2 distinct fixes,
+    // repeated, and confirm it never crosses the 3-fix threshold on its own.
+    const last = await streamFixes(student, course._id, INSIDE, 2);
+    expect(last.body).toEqual({ status: 'collecting' });
+    expect(Attendance.create).not.toHaveBeenCalled();
+  });
+
+  test('GPS attendance is unaffected by the global Bluetooth kill switch', async () => {
+    mockSettingsStore.bleEnabled = false;
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const last = await streamFixes(student, course._id, INSIDE);
+    expect(last.body.status).toBe('accepted');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'gps', status: 'present', band: 'inside' }),
+    );
+  });
+});
+
+describe('POST /api/attendance — admin-configurable geofence settings', () => {
+  test('raising nearBufferM turns a suspicious-distance fix into an automatic near pass', async () => {
+    mockSettingsStore.nearBufferM = 100; // SUSPICIOUS sits ~78m out — now within near
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const last = await streamFixes(student, course._id, SUSPICIOUS);
+    expect(last.body.status).toBe('accepted');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'gps', status: 'present', band: 'near' }),
+    );
+  });
+
+  test('lowering farBufferM turns a suspicious-distance fix into far (never an automatic pass)', async () => {
+    mockSettingsStore.farBufferM = 50; // SUSPICIOUS sits ~78m out — now beyond far too
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const last = await streamFixes(student, course._id, SUSPICIOUS);
+    expect(last.body).toEqual({ status: 'collecting' });
+    expect(Attendance.create).not.toHaveBeenCalled();
+
+    // Confirm it lands as `far`, not `suspicious`, via the code-escalation outcome.
+    mockManualCodeDoc = { code: '12345678', mode: 'static' };
+    const codeRes = await request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, code: '12345678' });
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'flagged', band: 'far' }),
+    );
+    expect(codeRes.status).toBe(200);
+  });
+
+  test('nearBufferLogic "any_point_within" passes when it would otherwise stay suspicious under the default strategy', async () => {
+    // Three fixes walking away from the building (0m, ~67m, ~189m) — the
+    // accuracy-weighted centroid (default) lands at ~67m, outside the 50m near
+    // buffer, but "any_point_within" only needs the single closest fix (0m) inside it.
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+    const walk = [
+      { lat: 6.9005, lng: 79.8005, accuracy: 5 },
+      { lat: 6.8994, lng: 79.8005, accuracy: 5 },
+      { lat: 6.8983, lng: 79.8005, accuracy: 5 },
+    ];
+
+    let last;
+    // eslint-disable-next-line no-await-in-loop
+    for (const fix of walk) last = await request(app).post('/api/attendance').set(headers(student)).send({ courseId: course._id, fix });
+    expect(last.body).toEqual({ status: 'collecting' }); // default strategy: centroid ~67m, outside near buffer
+    expect(Attendance.create).not.toHaveBeenCalled();
+
+    mockSettingsStore.nearBufferLogic = 'any_point_within';
+    const other = makePerson();
+    let last2;
+    // eslint-disable-next-line no-await-in-loop
+    for (const fix of walk) last2 = await request(app).post('/api/attendance').set(headers(other)).send({ courseId: course._id, fix });
+    expect(last2.body.status).toBe('accepted');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'gps', status: 'present', band: 'inside' }),
+    );
+  });
+
+  test('farBufferLogic "all_points_within" fails when the default strategy would pass as suspicious', async () => {
+    // Three fixes at ~67m/~89m/~111m: the accuracy-weighted centroid (default)
+    // lands at ~89m — inside the 100m far buffer, banded "suspicious". Requiring
+    // every fix inside that same buffer fails, since the worst one is ~111m out.
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+    const walk = [
+      { lat: 6.8994, lng: 79.8005, accuracy: 5 },
+      { lat: 6.8992, lng: 79.8005, accuracy: 5 },
+      { lat: 6.8990, lng: 79.8005, accuracy: 5 },
+    ];
+
+    let last;
+    // eslint-disable-next-line no-await-in-loop
+    for (const fix of walk) last = await request(app).post('/api/attendance').set(headers(student)).send({ courseId: course._id, fix });
+    expect(last.body).toEqual({ status: 'collecting' }); // suspicious under the default strategy — never a direct verdict
+
+    mockSettingsStore.farBufferLogic = 'all_points_within';
+    const other = makePerson();
+    mockManualCodeDoc = { code: '87654321', mode: 'static' };
+    let last2;
+    // eslint-disable-next-line no-await-in-loop
+    for (const fix of walk) last2 = await request(app).post('/api/attendance').set(headers(other)).send({ courseId: course._id, fix });
+    expect(last2.body).toEqual({ status: 'collecting' }); // still never a silent pass, whichever band it lands in
+
+    const codeRes = await request(app).post('/api/attendance').set(headers(other))
+      .send({ courseId: course._id, code: '87654321' });
+    expect(codeRes.status).toBe(200);
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'flagged', band: 'far' }),
+    );
+  });
+
+  test('an unrecognized nearBufferLogic id falls back to the default strategy rather than erroring', async () => {
+    mockSettingsStore.nearBufferLogic = 'not_a_real_strategy_id';
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const last = await streamFixes(student, course._id, INSIDE);
+    expect(last.status).toBe(200);
+    expect(last.body.status).toBe('accepted');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'gps', status: 'present', band: 'inside' }),
+    );
+  });
 });
 
 describe('POST /api/attendance — Bluetooth path', () => {

@@ -307,11 +307,22 @@ async function recordAttendance(studentPk, courseId, {
   return recordHelpCodeAttendance(studentPk, courseId, code);
 }
 
+/** Composite key for one lecture occurrence: a session run on one specific calendar date. */
+function occurrenceKey(sessionId, attendanceDate) {
+  return `${sessionId}|${attendanceDate}`;
+}
+
 /**
  * Shared data gathering for both the on-screen JSON matrix and the Excel
- * export: every attendance doc for the course, and its sessions sorted by
- * earliest occurrence (falling back to weekly schedule order for sessions with
- * no attendance yet).
+ * export: every attendance doc for the course, grouped into occurrences — one
+ * per (session, attendanceDate) pair actually attended.
+ *
+ * A recurring `LectureSession` is a single document reused every week (see
+ * sessionExpiry.service.js), so a course that has run for several weeks has
+ * far more occurrences than distinct session documents. Keying columns by
+ * `session` alone would collapse every week onto one column, silently
+ * overwriting all but one week's attendance per student — occurrences keep
+ * each week's evidence visible instead.
  */
 async function getAttendanceMatrixRaw(course) {
   const sessionIds = await Attendance.distinct('session', { course: course._id });
@@ -324,38 +335,38 @@ async function getAttendanceMatrixRaw(course) {
   const attendanceDocs = await Attendance.find({ course: course._id, session: { $in: sessionIds } })
     .select('student session status attendanceDate reason')
     .populate('student', 'studentId email');
-  const sessionMinDate = new Map();
+  const sessions = await LectureSession.find({ _id: { $in: sessionIds } });
+  const sessionById = new Map(sessions.map((s) => [String(s._id), s]));
+
+  const occurrenceByKey = new Map();
   attendanceDocs.forEach((doc) => {
-    const sessKey = String(doc.session);
+    const sid = String(doc.session);
     const ymd = doc.attendanceDate;
     if (!ymd) return;
-    const prev = sessionMinDate.get(sessKey);
-    if (!prev || ymd < prev) sessionMinDate.set(sessKey, ymd);
+    const key = occurrenceKey(sid, ymd);
+    if (!occurrenceByKey.has(key)) {
+      occurrenceByKey.set(key, { key, sessionId: sid, attendanceDate: ymd, session: sessionById.get(sid) });
+    }
   });
-  const sessions = await LectureSession.find({ _id: { $in: sessionIds } });
-  sessions.sort((a, b) => {
-    const da = sessionMinDate.get(String(a._id));
-    const db = sessionMinDate.get(String(b._id));
-    if (da && db && da !== db) return da.localeCompare(db);
-    if (da && !db) return -1;
-    if (!da && db) return 1;
+  const occurrences = Array.from(occurrenceByKey.values()).sort((a, b) => {
+    if (a.attendanceDate !== b.attendanceDate) return a.attendanceDate.localeCompare(b.attendanceDate);
     const dOrder = (day) => DAY_INDEX.indexOf(String(day || '').toUpperCase());
-    const diffDay = dOrder(a.lectureDay) - dOrder(b.lectureDay);
+    const diffDay = dOrder(a.session?.lectureDay) - dOrder(b.session?.lectureDay);
     if (diffDay !== 0) return diffDay;
-    const taN = toMinutes(a.startTime);
-    const tbN = toMinutes(b.startTime);
+    const taN = toMinutes(a.session?.startTime);
+    const tbN = toMinutes(b.session?.startTime);
     if (taN !== tbN) return (taN ?? -1) - (tbN ?? -1);
-    return String(a._id).localeCompare(String(b._id));
+    return a.key.localeCompare(b.key);
   });
-  return { sessions, attendanceDocs, sessionMinDate };
+  return { occurrences, attendanceDocs };
 }
 
 async function getAttendanceMatrix(course) {
-  const { sessions, attendanceDocs, sessionMinDate } = await getAttendanceMatrixRaw(course);
+  const { occurrences, attendanceDocs } = await getAttendanceMatrixRaw(course);
   const rowsMap = new Map();
   attendanceDocs.forEach((doc) => {
     const sid = String(doc.student?._id || '');
-    if (!sid) return;
+    if (!sid || !doc.attendanceDate) return;
     if (!rowsMap.has(sid)) {
       rowsMap.set(sid, {
         // Human-readable identifier (email local-part) for the export column.
@@ -366,15 +377,17 @@ async function getAttendanceMatrix(course) {
       });
     }
     // Status only — `method`, `band`, and `centroid` stay server-internal.
-    rowsMap.get(sid).attendance[String(doc.session)] = doc.status;
+    rowsMap.get(sid).attendance[occurrenceKey(String(doc.session), doc.attendanceDate)] = doc.status;
   });
   return {
     course: {
       _id: course._id, code: course.code, batch: course.batch, name: course.name,
     },
-    sessions: sessions.map((s) => ({
-      _id: s._id,
-      label: formatAttendanceTableColumnLabel(s, sessionMinDate.get(String(s._id))),
+    sessions: occurrences.map((o) => ({
+      _id: o.key,
+      label: o.session
+        ? formatAttendanceTableColumnLabel(o.session, o.attendanceDate)
+        : o.attendanceDate,
     })),
     rows: Array.from(rowsMap.values()),
   };

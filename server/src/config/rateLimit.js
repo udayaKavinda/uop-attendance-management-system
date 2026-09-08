@@ -1,12 +1,26 @@
 const rateLimit = require('express-rate-limit');
-const { ipKeyGenerator } = require('express-rate-limit');
+
+/**
+ * IPv6-safe fallback key: collapse to a /64 (the smallest block an ISP
+ * typically hands a single customer) so a client can't dodge the limit by
+ * cycling through addresses in its own subnet, the same problem the
+ * library's own `ipKeyGenerator` helper solves — but that helper does not
+ * exist in the pinned v7 line (`package.json` requires `^7.0.0`; it was only
+ * added in v8, whose breaking changes this project has not adopted). Calling
+ * it unconditionally 500'd every unauthenticated request through any
+ * rate-limited route, sign-in included, since `req.user` is never set that
+ * early: verified by requesting `/api/auth/google-nonce` with no session.
+ */
+function normalizeIp(ip) {
+  const value = String(ip || 'unknown');
+  if (!value.includes(':')) return value; // IPv4, or the 'unknown' fallback
+  return value.split(':').slice(0, 4).join(':');
+}
 
 function limiterKeyByUserOrIp(req) {
   const uid = req?.user?._id ? String(req.user._id) : '';
   if (uid) return `user:${uid}`;
-  // Use the library helper so IPv6 addresses are normalised to a subnet
-  // (raw req.ip would let each IPv6 address bypass the limit).
-  return `ip:${ipKeyGenerator(req.ip || 'unknown')}`;
+  return `ip:${normalizeIp(req.ip)}`;
 }
 
 /**

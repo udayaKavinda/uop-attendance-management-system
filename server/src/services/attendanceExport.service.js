@@ -25,19 +25,23 @@ function sheetNameFor(course) {
  * just visible context for whoever reads the export.
  */
 async function buildAttendanceWorkbook(course) {
-  const { sessions, attendanceDocs, sessionMinDate } = await attendanceService.getAttendanceMatrixRaw(course);
+  const { occurrences, attendanceDocs } = await attendanceService.getAttendanceMatrixRaw(course);
 
-  const rowsMap = new Map(); // studentId -> { displayId, cells: Map(sessionId -> doc) }
+  // studentId -> { displayId, cells: Map(occurrenceKey -> doc) }. Keyed by
+  // occurrence (session + attendanceDate), not session alone, so a recurring
+  // session that ran several weeks gets one column per week instead of the
+  // later week's document silently overwriting the earlier one.
+  const rowsMap = new Map();
   attendanceDocs.forEach((doc) => {
     const sid = String(doc.student?._id || '');
-    if (!sid) return;
+    if (!sid || !doc.attendanceDate) return;
     if (!rowsMap.has(sid)) {
       rowsMap.set(sid, {
         displayId: studentDisplayIdFromEmail(doc.student?.email, doc.student?.studentId),
         cells: new Map(),
       });
     }
-    rowsMap.get(sid).cells.set(String(doc.session), doc);
+    rowsMap.get(sid).cells.set(`${doc.session}|${doc.attendanceDate}`, doc);
   });
 
   const workbook = new ExcelJS.Workbook();
@@ -45,9 +49,9 @@ async function buildAttendanceWorkbook(course) {
 
   sheet.columns = [
     { header: 'Student ID', key: 'studentId', width: 20 },
-    ...sessions.map((s) => ({
-      header: formatAttendanceTableColumnLabel(s, sessionMinDate.get(String(s._id))),
-      key: String(s._id),
+    ...occurrences.map((o) => ({
+      header: o.session ? formatAttendanceTableColumnLabel(o.session, o.attendanceDate) : o.attendanceDate,
+      key: o.key,
       width: 18,
     })),
   ];
@@ -56,15 +60,15 @@ async function buildAttendanceWorkbook(course) {
   const rows = [...rowsMap.values()].sort((a, b) => a.displayId.localeCompare(b.displayId));
   rows.forEach((row) => {
     const values = { studentId: row.displayId };
-    sessions.forEach((s) => {
-      const doc = row.cells.get(String(s._id));
-      values[String(s._id)] = doc?.status === 'present' || doc?.status === 'flagged' ? 'P' : '-';
+    occurrences.forEach((o) => {
+      const doc = row.cells.get(o.key);
+      values[o.key] = doc?.status === 'present' || doc?.status === 'flagged' ? 'P' : '-';
     });
     const sheetRow = sheet.addRow(values);
-    sessions.forEach((s) => {
-      const doc = row.cells.get(String(s._id));
+    occurrences.forEach((o) => {
+      const doc = row.cells.get(o.key);
       if (doc?.status !== 'flagged') return;
-      const cell = sheetRow.getCell(String(s._id));
+      const cell = sheetRow.getCell(o.key);
       cell.fill = FLAG_FILL;
       cell.font = FLAG_FONT;
       cell.note = doc.reason || 'Flagged — never verified as present.';

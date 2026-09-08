@@ -19,7 +19,6 @@ if (isProd && !process.env.SESSION_SECRET) {
 
 module.exports = {
   isProd,
-  timeZone: process.env.TZ,
   mongoUri: process.env.MONGO_URI || 'mongodb://localhost:27017/attendance',
   port: Number(process.env.PORT) || 5000,
   // SESSION_SECRET is guaranteed set in production by the process.exit guard above.

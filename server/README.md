@@ -27,7 +27,8 @@ in this repository; do not describe these as membership-filtered “their course
 
 ## Requirements and startup
 
-- Node.js 20+
+- Node.js 20.19+ (enforced via `package.json`'s `engines` field — `mongoose@9`'s own
+  floor, `npm install`/`ci` warns below it)
 - MongoDB
 - Production secrets/configuration from the root `README_ENV.md`
 
@@ -323,6 +324,14 @@ Base path: `/api/admin/courses`.
 | `GET /:courseId/attendance-matrix` | owner/admin | per-student `present` / `flagged` / absent matrix (JSON), bare status only — no `reason` |
 | `GET /:courseId/attendance-matrix.xlsx` | owner/admin | the same matrix as a downloadable Excel file — every record is `P` (absent is `-`, never blank); `flagged` cells are additionally red-filled with the reason as a cell comment |
 
+Columns are per **occurrence** (`session` + `attendanceDate`), not per `LectureSession`
+document: a recurring session is one document reused every week
+(`deactivateRecurringSessionsPastWindow` resets `active` and the lecturer taps Collect
+again next week on the same `_id`), so a course that has run several weeks gets one
+column per week attended, each labeled with that week's date. Column `_id`s are opaque
+strings (`"<sessionId>|<attendanceDate>"`) — both clients already treat `_id` as a plain
+lookup key, so this needed no client changes.
+
 ### Sessions
 
 Base path: `/api/admin/sessions` (owner/admin session guard applies).
@@ -462,28 +471,37 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-314 tests across 21 suites, covering authentication, route access, BLE rotation and
+359 tests across 26 suites, covering authentication, route access, BLE rotation and
 broadcasting (including the previous-token grace vs. the broadcaster poll interval),
-seeder slot claiming and the cap under contention, distance banding, accuracy-unknown
-normalisation, outlier trimming, the code-escalation outcomes for
-every band, flag-reason rendering, the geofence-logic strategy registry, the
-flagged-record Excel export, running-course DTO contracts, strict schedules/one-time
+seeder slot claiming and the cap under contention, distance banding at the exact buffer
+boundary, accuracy-unknown normalisation, outlier trimming, the code-escalation outcomes
+for every band, flag-reason rendering, the geofence-logic strategy registry (including
+`any_point_within`/`median_distance`/`best_accuracy_fix`/`all_points_within` exercised
+end-to-end through a live `POST /api/attendance` GPS stream, not just unit-tested against
+`geofenceLogic.service.js` directly), `settings.service.buffers()`'s normalisation
+(defaults, clamping `farBufferM` up to `nearBufferM`, unrecognized-strategy-id passthrough
+and fallback), admin-configured `nearBufferM`/`farBufferM`/`nearBufferLogic`/
+`farBufferLogic` changing a live band decision, GPS attendance staying unaffected by the
+global Bluetooth kill switch, the flagged-record Excel export, the attendance matrix and
+Excel export keying columns by occurrence (session + attendanceDate) so a recurring
+session run across several weeks gets one column per week instead of later weeks
+silently overwriting earlier ones, running-course DTO contracts, strict schedules/one-time
 dates, GPS geometry and fix filtering, active geofences, the geofence delete guard,
 seeder eligibility, the `/auth/native-return` target allow-list and its escaping,
-body-parser error classification, pages, and unified attendance. Keep Android and server
-contract tests aligned whenever a response changes.
+body-parser error classification, pages, and unified attendance. Also now covered: the
+student email-domain gate on brand-new Google sign-ins (rejects outside the configured
+domain, passes existing accounts through regardless, and the empty-domain "gate off" case),
+`GET /api/app-version`'s `minSupportedVersionCode` passthrough, `GET /api/healthz` actually
+reflecting live Mongo connectivity (503 when disconnected — the automated deploy rollback
+depends on this being honest), the Collect/`activateSession` schedule-window gate, the
+recurring-session window-close sweep forcing a fresh Collect tap each week, and
+`sessionSortRank`'s "is this session's day today" check (a real regression shipped once
+before — a wrong-weekday session tied for rank 0 whenever its time-of-day window happened
+to overlap the current clock time; fixed, and now has a regression test). Keep Android and
+server contract tests aligned whenever a response changes.
 
 Not yet covered by a dedicated test: multi-batch course creation, the lecturer-owner path
 through `assign-lecturer` (as opposed to the admin path), pagination on the three admin
-list endpoints, the lecturer directory's staff-wide (not admin-only) access, the student
-email domain gate, the
-`minSupportedVersionCode` app-version check, the Collect/`activateSession` schedule-window
-gate, the recurring-session window-close sweep, `isScheduledNow`/`getRunningSessionsForStaff`'s
-active-independent window check, `sessionSortRank`'s "is this session's day today"
-check (a real regression here already shipped once — a wrong-weekday session tied for
-rank 0 whenever its time-of-day window happened to overlap the current clock time; fixed,
-but the fix has no regression test yet), and the `any_point_within`/`median_distance`/
-`best_accuracy_fix` geofence-logic strategies end-to-end through `POST /api/attendance`
-(they're unit-tested directly against `geofenceLogic.service.js`, but not exercised
-through a live GPS-band request the way `accuracy_weighted_centroid` is). Add contract
-tests for these before relying on CI to catch a regression there.
+list endpoints, the lecturer directory's staff-wide (not admin-only) access, and
+`isScheduledNow`/`getRunningSessionsForStaff`'s active-independent window check specifically
+(distinct from the Collect-gate and sweep cases above, which are now covered).

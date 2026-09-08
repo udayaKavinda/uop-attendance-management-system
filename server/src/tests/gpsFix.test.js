@@ -144,6 +144,35 @@ describe('gpsFix', () => {
         geofenceLogic.evaluate(geofenceLogic.DEFAULT_STRATEGY_ID, metrics, 50),
       );
     });
+
+    it('median_distance passes iff the middle fix distance is within the buffer', () => {
+      const metrics = { fixDistances: [10, 40, 90], centroidDistanceM: 45, bestAccuracyFixDistanceM: 10 };
+      expect(geofenceLogic.evaluate('median_distance', metrics, 50)).toMatchObject({
+        withinBuffer: true, distanceM: 40,
+      });
+      expect(geofenceLogic.evaluate('median_distance', metrics, 39).withinBuffer).toBe(false);
+    });
+
+    it('best_accuracy_fix checks only the single most-precise fix, ignoring the rest', () => {
+      // The most-precise fix (bestAccuracyFixDistanceM) sits inside the buffer even
+      // though the other, noisier fixes do not.
+      const metrics = { fixDistances: [10, 200, 200], centroidDistanceM: 150, bestAccuracyFixDistanceM: 10 };
+      expect(geofenceLogic.evaluate('best_accuracy_fix', metrics, 50)).toMatchObject({
+        withinBuffer: true, distanceM: 10,
+      });
+    });
+
+    it('is inclusive at the exact buffer boundary (distance === bufferM passes)', () => {
+      const metrics = { fixDistances: [50], centroidDistanceM: 50, bestAccuracyFixDistanceM: 50 };
+      expect(geofenceLogic.evaluate('accuracy_weighted_centroid', metrics, 50).withinBuffer).toBe(true);
+      expect(geofenceLogic.evaluate('median_distance', metrics, 50).withinBuffer).toBe(true);
+      expect(geofenceLogic.evaluate('best_accuracy_fix', metrics, 50).withinBuffer).toBe(true);
+    });
+
+    it('fails one unit past the exact buffer boundary', () => {
+      const metrics = { fixDistances: [50.1], centroidDistanceM: 50.1, bestAccuracyFixDistanceM: 50.1 };
+      expect(geofenceLogic.evaluate('accuracy_weighted_centroid', metrics, 50).withinBuffer).toBe(false);
+    });
   });
 
   describe('isPassBand', () => {

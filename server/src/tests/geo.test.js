@@ -1,5 +1,5 @@
 const {
-  haversineMeters, isPointInPolygon, distanceToPolygonBoundary, isWithinGeofence,
+  haversineMeters, isPointInPolygon, distanceToPolygonBoundary, distanceToNearestGeofenceMeters,
 } = require('../utils/geo');
 
 // A ~111m x ~111m square centered near the equator/prime-meridian-ish latitude
@@ -53,25 +53,31 @@ describe('geo', () => {
     });
   });
 
-  describe('isWithinGeofence', () => {
-    it('accepts a point inside the polygon with zero buffer', () => {
+  describe('distanceToNearestGeofenceMeters', () => {
+    it('is 0 for a point inside the polygon', () => {
       // Center of the square, in [lat, lng] order matching the function signature.
-      expect(isWithinGeofence(0.0005, 0.0005, SQUARE, 0)).toBe(true);
+      expect(distanceToNearestGeofenceMeters(0.0005, 0.0005, [SQUARE])).toBe(0);
     });
 
-    it('rejects a point well outside the polygon and buffer', () => {
-      expect(isWithinGeofence(1, 1, SQUARE, 10)).toBe(false);
+    it('is a large distance for a point well outside every polygon', () => {
+      expect(distanceToNearestGeofenceMeters(1, 1, [SQUARE])).toBeGreaterThan(10);
     });
 
-    it('accepts a point just outside the boundary when within the buffer', () => {
+    it('measures a short distance for a point just outside the boundary', () => {
       // ~5.5m north of the square's top edge (0.00005 deg lat ≈ 5.5m).
       const justOutside = 0.001 + 0.00005;
-      expect(isWithinGeofence(justOutside, 0.0005, SQUARE, 10)).toBe(true);
+      expect(distanceToNearestGeofenceMeters(justOutside, 0.0005, [SQUARE])).toBeLessThan(10);
     });
 
-    it('rejects a point outside the boundary beyond the buffer', () => {
-      const wellOutside = 0.001 + 0.001; // ~111m north of the top edge
-      expect(isWithinGeofence(wellOutside, 0.0005, SQUARE, 10)).toBe(false);
+    it('picks the nearest of several polygons rather than the first', () => {
+      const farSquare = [[10, 10], [10.001, 10], [10.001, 10.001], [10, 10.001]];
+      const near = distanceToNearestGeofenceMeters(0.0005, 0.0005, [farSquare, SQUARE]);
+      expect(near).toBe(0);
+    });
+
+    it('skips a degenerate (fewer than 3 vertex) polygon rather than throwing', () => {
+      const degenerate = [[0, 0], [1, 1]];
+      expect(distanceToNearestGeofenceMeters(0.0005, 0.0005, [degenerate, SQUARE])).toBe(0);
     });
   });
 });

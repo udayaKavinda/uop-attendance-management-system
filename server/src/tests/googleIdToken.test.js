@@ -13,6 +13,18 @@ jest.mock('connect-mongo', () => {
   };
 });
 
+// oauthLimiter is a real, shared-across-this-file express-rate-limit instance
+// (max 20/min, keyed by IP since these routes run pre-authentication) — this
+// suite's own request volume was tripping it well before any interesting
+// rate-limiting behavior was under test here (that's covered directly in
+// rateLimit.config.test.js). Bypass it so adding a test never silently starts
+// failing an unrelated, later test in the same file via 429s.
+jest.mock('../config/rateLimit', () => ({
+  oauthLimiter: (req, res, next) => next(),
+  studentRecordLimiter: (req, res, next) => next(),
+  helpCodeLimiter: (req, res, next) => next(),
+}));
+
 // Google's verifier is mocked so the suite never makes a network call.
 const mockVerifyIdToken = jest.fn();
 jest.mock('google-auth-library', () => ({
@@ -46,6 +58,7 @@ process.env.GOOGLE_CLIENT_SECRET = 'test-secret';
 const request = require('supertest');
 const app = require('../app');
 const Person = require('../models/Person');
+const settingsService = require('../services/settings.service');
 
 const JWT = 'aaa.bbb.ccc';
 
@@ -189,6 +202,65 @@ describe('POST /api/auth/google-id-token', () => {
     );
     // The session cookie is set on THIS response, which is what the app's cookie jar stores.
     expect(String(res.headers['set-cookie'] || '')).toMatch(/attendance\.sid/);
+  });
+
+  test('rejects a brand-new account outside the configured student email domain', async () => {
+    const nonce = await freshNonce();
+    mockVerifyIdToken.mockResolvedValue({
+      getPayload: () => payload({ nonce, email: 'someone@gmail.com' }),
+    });
+
+    const res = await request(app)
+      .post('/api/auth/google-id-token')
+      .set('X-Requested-With', 'test')
+      .send({ idToken: JWT });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/@eng\.pdn\.ac\.lk/);
+    expect(Person.create).not.toHaveBeenCalled();
+  });
+
+  test('an empty studentEmailDomain setting disables the gate entirely', async () => {
+    settingsService.getSettings.mockResolvedValueOnce({ studentEmailDomain: '' });
+    const nonce = await freshNonce();
+    mockVerifyIdToken.mockResolvedValue({
+      getPayload: () => payload({ nonce, email: 'anyone@example.com' }),
+    });
+
+    const res = await request(app)
+      .post('/api/auth/google-id-token')
+      .set('X-Requested-With', 'test')
+      .send({ idToken: JWT });
+
+    expect(res.status).toBe(200);
+    expect(Person.create).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'anyone@example.com' }),
+    );
+  });
+
+  test('an existing account signs in regardless of domain — the gate only applies to new accounts', async () => {
+    const nonce = await freshNonce();
+    const existingOutsideDomain = {
+      _id: 'person-legacy',
+      email: 'legacy@gmail.com',
+      studentId: 'google-sub-123',
+      role: 'student',
+      active: true,
+      deleted: false,
+      save: jest.fn(),
+    };
+    Person.findOne.mockResolvedValue(existingOutsideDomain);
+    mockVerifyIdToken.mockResolvedValue({
+      getPayload: () => payload({ nonce, email: 'legacy@gmail.com' }),
+    });
+
+    const res = await request(app)
+      .post('/api/auth/google-id-token')
+      .set('X-Requested-With', 'test')
+      .send({ idToken: JWT });
+
+    expect(res.status).toBe(200);
+    expect(Person.create).not.toHaveBeenCalled();
   });
 
   test('a nonce cannot be used twice', async () => {

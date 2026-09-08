@@ -67,6 +67,9 @@ function distanceToPolygonBoundary(point, polygon) {
  * distance. Measuring to the boundary rather than literally inflating the
  * polygon is a standard, much simpler equivalent at this scale, and avoids the
  * edge cases of offsetting concave shapes.
+ *
+ * Private to this module — only `distanceToNearestGeofenceMeters` below calls
+ * it; every real caller has a session's full building list, not one polygon.
  */
 function distanceToGeofenceMeters(lat, lng, polygon) {
   const [refLng, refLat] = polygon[0];
@@ -87,17 +90,10 @@ function distanceToNearestGeofenceMeters(lat, lng, polygons) {
   return min;
 }
 
-/** Inside the polygon, or within `bufferMeters` of its boundary. */
-function isWithinGeofence(lat, lng, polygon, bufferMeters) {
-  return distanceToGeofenceMeters(lat, lng, polygon) <= bufferMeters;
-}
-
 module.exports = {
   haversineMeters,
   toLocalMeters,
   isPointInPolygon,
   distanceToPolygonBoundary,
-  distanceToGeofenceMeters,
   distanceToNearestGeofenceMeters,
-  isWithinGeofence,
 };
