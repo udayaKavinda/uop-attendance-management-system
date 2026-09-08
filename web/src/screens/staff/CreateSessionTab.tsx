@@ -1,9 +1,145 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { Geofence } from '../../api/types';
 import { Card, ErrorBanner, PrimaryButton } from '../../components/Chrome';
 import { LabeledSelect, SectionHeader } from '../../components/StaffChrome';
 import type { StaffApi } from '../../hooks/useStaffDashboard';
 
 const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+
+/**
+ * Mirrors BuildingMultiSelectDropdown in StaffDashboardScreen.kt: a search field
+ * that opens a filtered list, plus a removable chip per selection.
+ *
+ * Only `active !== false` buildings are offered. An archived polygon still gets
+ * returned by the geofences endpoint (it is a soft delete), and picking one would
+ * create a session GPS can never match against.
+ */
+function BuildingMultiSelect({
+  buildings,
+  selectedIds,
+  onToggle,
+}: {
+  buildings: Geofence[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  const available = buildings.filter((b) => b.active !== false && b._id != null);
+  const filtered = available.filter((b) =>
+    (b.name ?? '').toLowerCase().includes(query.trim().toLowerCase()),
+  );
+  const selected = available.filter((b) => b._id != null && selectedIds.includes(b._id));
+
+  // The native menu dismisses on an outside tap and clears the query with it.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  return (
+    <div className="buildings" ref={boxRef}>
+      <div className="buildings__head">
+        <span className="field__label">Buildings</span>
+        {selected.length > 0 && (
+          <span className="buildings__count">{selected.length} selected</span>
+        )}
+      </div>
+
+      <div className="buildings__combo">
+        <span className="buildings__search-icon" aria-hidden="true">
+          🔍
+        </span>
+        <input
+          className="input buildings__search"
+          type="search"
+          value={query}
+          placeholder="Search and select buildings"
+          aria-expanded={open}
+          onFocus={() => setOpen(true)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(true);
+          }}
+        />
+        <button
+          type="button"
+          className="buildings__toggle"
+          aria-label={open ? 'Close building list' : 'Open building list'}
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? '▴' : '▾'}
+        </button>
+
+        {open && (
+          <div className="buildings__menu" role="listbox">
+            {filtered.length === 0 ? (
+              <p className="buildings__empty">
+                {available.length === 0 ? 'No active buildings' : 'No buildings match your search'}
+              </p>
+            ) : (
+              filtered.map((b) => {
+                const id = b._id as string;
+                const isSelected = selectedIds.includes(id);
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    className={`buildings__option${isSelected ? ' buildings__option--selected' : ''}`}
+                    onClick={() => {
+                      onToggle(id);
+                      setQuery('');
+                    }}
+                  >
+                    <span className="buildings__option-icon" aria-hidden="true">
+                      {isSelected ? '✓' : '＋'}
+                    </span>
+                    <span>
+                      <span className="buildings__option-name">
+                        {b.name?.trim() ? b.name : 'Unnamed building'}
+                      </span>
+                      {isSelected && <span className="buildings__option-sub">Selected</span>}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
+
+      {selected.length === 0 ? (
+        <p className="hint">Select one or more buildings for GPS verification.</p>
+      ) : (
+        <div className="buildings__chips">
+          {selected.map((b) => (
+            <button
+              key={b._id}
+              type="button"
+              className="buildings__chip"
+              aria-label={`Remove ${b.name ?? ''}`}
+              onClick={() => b._id && onToggle(b._id)}
+            >
+              {b.name ?? ''}
+              <span aria-hidden="true">✕</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * Mirrors CreateSessionTab in StaffDashboardScreen.kt.
@@ -94,24 +230,17 @@ export function CreateSessionTab({ staff }: { staff: StaffApi }) {
         <hr className="rule" />
 
         <div className="field__label">Where is this lecture?</div>
-        <p className="hint">
+        <p className="hint hint--spaced">
           Students are checked against these building outlines. At least one is required.
         </p>
         {state.geofences.length === 0 ? (
           <ErrorBanner message="No buildings have been drawn yet. An administrator needs to add one in the Geofences tool before sessions can be created." />
         ) : (
-          <div className="building-list">
-            {state.geofences.map((g) => (
-              <label key={g._id} className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={g._id != null && buildingIds.includes(g._id)}
-                  onChange={() => g._id && toggleBuilding(g._id)}
-                />
-                <span>{g.name ?? 'Unnamed building'}</span>
-              </label>
-            ))}
-          </div>
+          <BuildingMultiSelect
+            buildings={state.geofences}
+            selectedIds={buildingIds}
+            onToggle={toggleBuilding}
+          />
         )}
 
         <hr className="rule" />

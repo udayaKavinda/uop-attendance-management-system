@@ -830,12 +830,135 @@ button {
   accent-color: var(--accent);
 }
 
-.building-list {
+/* Buildings multi-select — BuildingMultiSelectDropdown. */
+.hint--spaced {
+  margin-bottom: 8px;
+}
+
+.buildings__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.buildings__count {
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.buildings__combo {
+  position: relative;
+}
+
+.buildings__search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 13px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.buildings__search {
+  padding-left: 36px;
+  padding-right: 38px;
+}
+
+.buildings__toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: 0;
+  padding: 6px 8px;
+  color: var(--muted);
+}
+
+.buildings__menu {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--r-input);
-  padding: 4px 10px;
-  max-height: 220px;
+  border-radius: var(--r-option);
+  box-shadow: var(--shadow-card);
+  max-height: 240px;
   overflow-y: auto;
+}
+
+.buildings__empty {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+  padding: 14px 16px;
+}
+
+.buildings__option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 11px 14px;
+}
+
+.buildings__option--selected {
+  background: var(--accent-soft);
+}
+
+.buildings__option-icon {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.buildings__option--selected .buildings__option-icon {
+  color: var(--accent-dark);
+}
+
+.buildings__option-name {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.buildings__option--selected .buildings__option-name {
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+
+.buildings__option-sub {
+  display: block;
+  color: var(--accent-dark);
+  font-size: 11px;
+}
+
+.buildings__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.buildings__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 10px;
+  padding: 7px 8px 7px 10px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .disclosure {
