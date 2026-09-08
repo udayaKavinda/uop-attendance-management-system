@@ -101,7 +101,7 @@ export function AttendanceMatrixScreen({
                       const status = s._id ? row.attendance?.[s._id] : undefined;
                       return (
                         <td key={s._id} className={status ? `matrix__cell--${status}` : undefined}>
-                          {status === 'present' ? '●' : status === 'flagged' ? '▲' : '—'}
+                          {status === 'present' || status === 'flagged' ? 'P' : '-'}
                         </td>
                       );
                     })}

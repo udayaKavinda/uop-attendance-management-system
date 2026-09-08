@@ -1,20 +1,25 @@
 # UOP Attendance — iOS web client
 
-The student check-in flow as a React app, for iPhone and iPad. Android users have the
-native app; this exists so iOS users are not locked out before a native iOS app exists.
+The student check-in flow, and a lecturer dashboard, as a React app for iPhone and iPad.
+Android users have the native app for both roles; this exists so iOS users are not locked
+out before a native iOS app exists. **Administration stays Android-only** — an admin
+signing in here gets a plain notice, not a partial dashboard (`AdminNoticeScreen`).
 
 ## What it can and cannot do
 
 | | Android app | This client |
 |---|---|---|
-| Bluetooth proximity | yes | **no — Safari has no Web Bluetooth** |
-| GPS geofence | yes | yes |
-| Lecturer's 8-digit code | yes | yes |
-| Peer seeding (re-broadcasting) | yes | no |
-| Staff tools (sessions, broadcasting, code) | yes | no |
+| Student: Bluetooth proximity | yes | **no — Safari has no Web Bluetooth** |
+| Student: GPS geofence | yes | yes |
+| Student: lecturer's 8-digit code | yes | yes |
+| Student: peer seeding (re-broadcasting) | yes | no |
+| Lecturer: courses, sessions, attendance table | yes | yes |
+| Lecturer: **starting a Bluetooth broadcast** | yes | **no, deliberately — see below** |
+| Admin: lecturers, buildings, global settings | yes | **no — `AdminNoticeScreen`** |
 
-Bluetooth is the hard limit and the reason this is a stopgap: no iOS browser can read a
-BLE beacon, at all, behind any flag. So a check-in here runs GPS alone for its window.
+Bluetooth is the hard limit for students and the reason the check-in flow is a stopgap: no
+iOS browser can read a BLE beacon, at all, behind any flag. So a check-in here runs GPS
+alone for its window.
 
 Peer seeding is not a gap this client has to fill. The server only ever selects
 students who passed via a *primary* Bluetooth token as seeders
@@ -27,6 +32,40 @@ the same states, the same wording, and the same rule that the lecturer's code ap
 only *after* an automatic attempt has actually failed. The client is never told why it
 failed — the server answers `collecting` for both "still gathering fixes" and "you are
 too far away" — so it cannot leak a student's distance band.
+
+## Lecturer dashboard
+
+`StaffDashboard` is a line-for-line port of the Android lecturer role
+(`ui/staff/StaffViewModel.kt`, `StaffDashboardScreen.kt`): the same three tabs (Courses,
+Create session, Sessions) in the same order, the same copy, the same batch-code
+auto-formatter, the same searchable building multi-select. It authenticates over the same
+session cookie and hits the same `requireStaff`-gated endpoints the native app does — **no
+backend change was needed to add it.**
+
+One thing is permanently different, on purpose: **this client never calls either
+broadcast endpoint**
+
+```
+PATCH /api/admin/sessions/:id/broadcast   ← turns the BLE beacon on/off
+GET   /api/admin/sessions/:id/broadcast   ← the token poll, which IS the broadcaster's heartbeat
+```
+
+No browser can advertise as a BLE peripheral — Web Bluetooth is scan-only everywhere, and
+Safari has none at all — so a web lecturer has no radio to turn on. Claiming one anyway
+would be actively worse than not having one: `broadcasting: true` with nothing really
+transmitting would make a co-lecturer's Android dashboard read "Broadcasting from another
+device" and skip starting the one broadcast that would actually work, and skipping the GET
+means never resetting `lastBroadcastSeenAt`, so `sessionExpiry.service.js`'s stale-sweep
+(`BROADCAST_STALE_MS`) would flip the flag back off within seconds anyway — an
+intermittent lie is worse than a stable one. `broadcasting` is only ever *read* here (from
+the sessions/running list payloads), so a lecturer still correctly sees when a colleague's
+phone is on the air; the session card just has no "Join" action, since there is nothing to
+join with. See the long comment on the staff block in `src/api/client.ts` and
+`SessionsTab.tsx` for the full reasoning.
+
+Also absent, and staying that way: the admin-only tabs (Lecturers, Geofences, Settings —
+drawing a building polygon needs a map surface this client doesn't have) and the
+geofence map editor generally.
 
 ## Visual parity with the native app
 
@@ -132,10 +171,14 @@ src/
   assets/       the background photograph shared with the Android app
   geo/          watchPosition → throttled GPS fix stream
   hooks/        usePlatformGate (the iOS gate), useSession (OAuth + /api/me),
-                useCheckIn (the 90-second window)
+                useCheckIn (the 90-second window), useStaffDashboard (lecturer state,
+                port of StaffViewModel.kt)
   platform/     iOS / standalone detection, screen wake lock
-  components/   shared chrome, course picker, code dialog
-  screens/      check-in, login, staff notice, unsupported-platform
+  components/   Chrome.tsx (shared student/login chrome), StaffChrome.tsx (dashboard
+                widgets — tabs, session card, pills)
+  screens/      check-in, login, admin notice, unsupported-platform,
+                StaffDashboard.tsx (lecturer dashboard shell)
+  screens/staff/  CoursesTab, CreateSessionTab, SessionsTab, AttendanceMatrixScreen
 ```
 
 `src/api/types.ts` mirrors the server's controllers, the same way

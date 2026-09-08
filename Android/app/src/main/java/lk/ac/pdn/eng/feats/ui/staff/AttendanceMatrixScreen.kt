@@ -118,8 +118,13 @@ fun AttendanceMatrixScreen(
                                 Row {
                                     BodyCell(row.displayId ?: "", width = 140.dp, bold = true)
                                     sessions.forEach { s ->
-                                        // Three states now: present, awaiting the
-                                        // lecturer's decision, or absent.
+                                        // A correct manual code from a 'far'/'unknown' GPS
+                                        // verdict ("flagged" server-side) is still genuine
+                                        // attendance — the lecturer read the code out — so
+                                        // it shows the same "P" as any other present record,
+                                        // just tinted for a second look. See
+                                        // attendanceExport.service.js for the same rule
+                                        // applied to the Excel export.
                                         val status = row.attendance?.get(s.id)
                                         Box(
                                             Modifier.width(120.dp).padding(vertical = 8.dp),
@@ -127,8 +132,8 @@ fun AttendanceMatrixScreen(
                                         ) {
                                             when (status) {
                                                 "present" -> StatusPill("P", Palette.SuccessBg2, Palette.SuccessText)
-                                                "flagged" -> StatusPill("F", Palette.DangerBg, Palette.DangerText)
-                                                else -> Text("—", color = Palette.Muted, fontWeight = FontWeight.SemiBold)
+                                                "flagged" -> StatusPill("P", Palette.DangerBg, Palette.DangerText)
+                                                else -> Text("-", color = Palette.Muted, fontWeight = FontWeight.SemiBold)
                                             }
                                         }
                                     }

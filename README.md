@@ -41,11 +41,14 @@ Express also serves the public `/privacy` and `/delete` pages.
 
 ### Why there is a web client, and why it is iOS-only
 
-No iOS browser can read a Bluetooth beacon, so `web/` is a GPS-only client that gives
-iPhone users a way in ahead of a native iOS app; Android users get the notice to use the
-native app instead. It is served from the API's own origin because the session cookie is
-httpOnly and Safari blocks third-party cookies. [web/README.md](web/README.md) has the
-reasoning and the platform gate's limits.
+No iOS browser can read a Bluetooth beacon, so a student's check-in on `web/` is GPS-only,
+ahead of a native iOS app; Android students get the notice to use the native app instead.
+Staff are different: a lecturer signing in on `web/` gets a full dashboard (courses,
+sessions, the attendance table) — everything except starting a Bluetooth broadcast, which
+no browser can do. An admin still gets a plain notice; administration stays Android-only.
+The client is served from the API's own origin because the session cookie is httpOnly and
+Safari blocks third-party cookies. [web/README.md](web/README.md) has the reasoning and
+the platform gate's limits.
 
 ## Quick start
 

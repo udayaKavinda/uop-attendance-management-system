@@ -1524,6 +1524,10 @@ button {
   white-space: nowrap;
 }
 
+.matrix tbody td {
+  font-weight: 700;
+}
+
 .matrix thead th {
   background: var(--inactive-bg);
   color: var(--pill-ink);

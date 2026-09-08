@@ -56,14 +56,20 @@ second window runs Bluetooth and GPS together, and the server bands the result:
 | outside the far buffer | `far` | correct code → flagged¹ |
 | no usable fix / accuracy above the ceiling | `unknown` | correct code → flagged¹ |
 
-¹ "Flagged" is not a queue — it's an `Attendance` row with `status: 'flagged'` and a
-`reason`, visible only in the Excel attendance export (red fill + cell comment). Nobody
-approves or rejects it. `suspicious` always passes on a correct code now — there is no
-admin switch for it, unlike `far`/`unknown` which never pass. Crucially, `suspicious`,
-`far`, and `unknown` all require the student to actually submit the "get help" code to
-produce **any** `Attendance` record at all — raw GPS fixes alone never write one for
-these three bands, so a student who never falls back to the code leaves no trace, exactly
-like one who never checked in.
+¹ "Flagged" is not a queue, and it is not a lesser form of attendance — the lecturer read
+the code out, so the student is present. It's an `Attendance` row with `status: 'flagged'`
+and a `reason`, kept distinct only so a `far`/`unknown` code acceptance can be told apart
+internally from an ordinary pass. Every display surface (the on-screen matrix on both
+clients, and the Excel export) renders `flagged` exactly like `present` — the cell reads
+`P`, never a separate letter — and only the Excel export additionally red-fills it and
+attaches the reason as a cell comment, e.g. "GPS location is 25.0km from the nearest
+session building." or "Could not verify location." (no usable fix at all). Nobody approves
+or rejects it. `suspicious` always passes on a correct code now — there is no admin switch
+for it, unlike `far`/`unknown` which never pass *automatically*, only via a correct code.
+Crucially, `suspicious`, `far`, and `unknown` all require the student to actually submit
+the "get help" code to produce **any** `Attendance` record at all — raw GPS fixes alone
+never write one for these three bands, so a student who never falls back to the code
+leaves no trace, exactly like one who never checked in (rendered as `-`, not blank).
 
 "Within the near/far buffer" is deliberately not just a fixed distance check — each band
 independently runs a selectable strategy (`Settings.nearBufferLogic`/`farBufferLogic`)
@@ -193,7 +199,7 @@ human-readable labels for the course and the lecture occurrence, so a row stays 
 after either is renamed), `attendanceDate` (local `YYYY-MM-DD`), `timestamp`, and:
 
 ```text
-status = present | flagged                     ← the only field the lecturer sees
+status = present | flagged                     ← both render as "P" everywhere; see below
 method = bluetooth | gps | code_override       ← server-internal
 band   = inside | near | suspicious | far | unknown   ← server-internal
 reason = human-readable string, `flagged` only ← surfaced only in the Excel export
@@ -313,8 +319,8 @@ Base path: `/api/admin/courses`.
 | `PATCH /:courseId/assign-lecturer` | owner/admin | wholesale reassignment — set any number of owners (add or remove); a lecturer may only do this on a course they already own |
 | `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course — this is also what "delete" means; no destructive delete exists |
 | `POST /:courseId/sessions` | owner/admin | atomically create schedule, buildings (≥1, required), and code rotation |
-| `GET /:courseId/attendance-matrix` | owner/admin | per-student `present` / `flagged` / absent matrix (JSON) |
-| `GET /:courseId/attendance-matrix.xlsx` | owner/admin | the same matrix as a downloadable Excel file — flagged cells are red-filled with the reason as a cell comment |
+| `GET /:courseId/attendance-matrix` | owner/admin | per-student `present` / `flagged` / absent matrix (JSON), bare status only — no `reason` |
+| `GET /:courseId/attendance-matrix.xlsx` | owner/admin | the same matrix as a downloadable Excel file — every record is `P` (absent is `-`, never blank); `flagged` cells are additionally red-filled with the reason as a cell comment |
 
 ### Sessions
 

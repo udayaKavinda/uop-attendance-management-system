@@ -198,14 +198,17 @@ only.
 - Code rotation is sent atomically in the create-session request; there is no second
   best-effort setup request.
 - One-time sessions display and use the server's explicit occurrence date.
-- The on-screen attendance matrix uses **P** for present and **F** for flagged (a
-  `far`/`unknown` verdict — not a pending state; nothing "reviews" it). The **Share
-  Excel** action downloads the same matrix as a real `.xlsx` file (via a
-  `FileProvider`-shared content Uri) with flagged cells red-filled and the reason
-  attached as a cell comment — a CSV string can't carry either, so this replaced the
-  earlier plain-text CSV share. Verification provenance (method, band, centroid) is never
-  exposed on-screen or in the JSON API; `reason` is the one exception, and only inside the
-  Excel export's comments.
+- The on-screen attendance matrix uses **P** for anyone with a record — `present` and
+  `flagged` (a `far`/`unknown` code acceptance — not a pending state; nothing "reviews"
+  it, and it is not a lesser form of attendance, since the lecturer read the code out) both
+  render identically — and **-** for no attempt at all. The **Share Excel** action
+  downloads the same matrix as a real `.xlsx` file (via a `FileProvider`-shared content
+  Uri), which additionally red-fills `flagged` cells and attaches the reason as a cell
+  comment (e.g. "GPS location is 25.0km from the nearest session building." or "Could not
+  verify location.") — a CSV string can't carry either, so this replaced the earlier
+  plain-text CSV share. Verification provenance (method, band, centroid) is never exposed
+  on-screen or in the JSON API; `reason` is the one exception, and only inside the Excel
+  export's comments.
 
 ## Authentication
 
