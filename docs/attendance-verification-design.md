@@ -92,11 +92,14 @@ after submitting the code, which is unavoidable — and by then the record alrea
 
 ## Why `unknown` exists
 
-A centroid built entirely from very inaccurate fixes says nothing useful. If no
-contributing fix beat `ACCURACY_CEILING_M` (75m), the attempt bands as `unknown` rather
-than being trusted — a ±200m "fix" sitting 40m from the building must not silently pass
-as `near`. `unknown` routes to review, never to a pass. The same band applies when a
-student produced no fix at all (location denied, no provider, no lock).
+`unknown` is reserved for when there is no distance to band at all: the student produced
+no usable GPS fix (location denied, no provider, no lock) or every building on the
+session had been deactivated/deleted by the time a fix arrived, so nothing remained to
+measure a distance against. There used to also be an accuracy floor here — a centroid
+built entirely from fixes reporting worse than 75m accuracy banded as `unknown` rather
+than being trusted — but that gate was removed: every band decision now runs purely off
+distance, however imprecise the contributing fixes claimed to be. `unknown` still routes
+to review, never to a silent pass, via the code-escalation step.
 
 ## Selectable geofence logic
 
@@ -116,11 +119,10 @@ stronger claim — and the far band's strategy only runs if near didn't already 
 | `best_accuracy_fix` | Only the single most-precise fix's distance is checked; the rest are ignored. |
 
 Every strategy shares the same upstream pipeline: the outlier-trimming pass
-(`removeOutliersByMedianDistance`) and the `ACCURACY_CEILING_M` gate run first regardless
-of which strategy is selected, so a strategy only ever sees fixes that already cleared
-those two filters. If trimming leaves fewer than `MIN_FIXES` trustworthy fixes, the
-attempt reports "not ready" and waits for more rather than banding on data it has already
-judged unreliable.
+(`removeOutliersByMedianDistance`) runs first regardless of which strategy is selected,
+so a strategy only ever sees fixes that already cleared it. If trimming leaves fewer than
+`MIN_FIXES` (3) trustworthy fixes, the attempt reports "not ready" and waits for more
+rather than banding on data it has already judged unreliable.
 
 `all_points_within` is a genuine footgun with real GPS: one stray reading out of ~30 fails
 the whole attempt, so a student who never left the room can still be flagged. It is offered

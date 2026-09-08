@@ -144,7 +144,7 @@ const csrfHeader = { 'x-requested-with': 'fetch' };
 function headers(person) { return { ...authHeader(person), ...csrfHeader }; }
 
 /** Streams `count` identical fixes, returning the last response. */
-async function streamFixes(student, courseId, fix, count = 4) {
+async function streamFixes(student, courseId, fix, count = 3) {
   let last;
   for (let i = 0; i < count; i += 1) {
     // eslint-disable-next-line no-await-in-loop
@@ -190,7 +190,7 @@ describe('POST /api/attendance — GPS band decisions', () => {
       .send({ courseId: course._id, fix: INSIDE });
     expect(first.body.status).toBe('collecting');
 
-    const last = await streamFixes(student, course._id, INSIDE, 3);
+    const last = await streamFixes(student, course._id, INSIDE, 2);
     expect(last.status).toBe(200);
     expect(last.body.status).toBe('accepted');
     expect(Attendance.create).toHaveBeenCalledWith(
@@ -237,16 +237,20 @@ describe('POST /api/attendance — GPS band decisions', () => {
     expect(Attendance.create).not.toHaveBeenCalled();
   });
 
-  test('does not accept a centroid built only from very inaccurate fixes, and records nothing', async () => {
+  test('accepts a centroid built only from very inaccurate fixes, banded on distance alone', async () => {
+    // The accuracy gate was removed: a band decision now runs purely off
+    // distance, however inaccurate the contributing fixes were reported to be.
     const student = makePerson();
     const session = makeSession({ buildings: [addBuilding()] });
     const course = makeCourse();
     Course.findById.mockResolvedValue(course);
     LectureSession.find.mockResolvedValue([session]);
 
-    const last = await streamFixes(student, course._id, { ...INSIDE, accuracy: 300 });
-    expect(last.body).toEqual({ status: 'collecting' });
-    expect(Attendance.create).not.toHaveBeenCalled();
+    const last = await streamFixes(student, course._id, { ...INSIDE, accuracy: 300 }, 3);
+    expect(last.body.status).toBe('accepted');
+    expect(Attendance.create).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'gps', status: 'present', band: 'inside' }),
+    );
   });
 
   test('keeps collecting and records nothing when every referenced building has been deactivated', async () => {

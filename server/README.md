@@ -54,7 +54,7 @@ second window runs Bluetooth and GPS together, and the server bands the result:
 | within the near buffer (near-buffer logic) | `inside`/`near` | present |
 | within the far buffer (far-buffer logic), not the near one | `suspicious` | correct code → present |
 | outside the far buffer | `far` | correct code → flagged¹ |
-| no usable fix / accuracy above the ceiling | `unknown` | correct code → flagged¹ |
+| no usable fix at all | `unknown` | correct code → flagged¹ |
 
 ¹ "Flagged" is not a queue, and it is not a lesser form of attendance — the lecturer read
 the code out, so the student is present. It's an `Attendance` row with `status: 'flagged'`
@@ -90,13 +90,14 @@ depends on it.
 
 - Android streams one precise fix at a time for up to 90 seconds.
 - Outliers are dropped against the median; survivors are averaged weighted by 1/accuracy².
-  If trimming leaves fewer than 4 trustworthy fixes the attempt reports "not ready" and
+  If trimming leaves fewer than 3 trustworthy fixes the attempt reports "not ready" and
   waits for more, rather than banding on fixes it has already judged unreliable.
 - A reported accuracy of `0` means "unknown" (Android returns it when `hasAccuracy()` is
   false), not "perfect", and is normalised to a pessimistic 50 m for both centroid
   weighting and best-fix selection.
-- If no contributing fix beat 75 m accuracy the attempt bands `unknown` rather than being
-  trusted — a ±200 m "fix" near a building must not pass as `near`.
+- Every band decision runs on distance alone — there is no accuracy floor below which an
+  attempt is forced to `unknown`; a low-accuracy fix simply gets less weight in the
+  centroid than a precise one.
 - Intermediate fixes live only in memory for the attempt. Accepted attendance stores the
   centroid, contributing fix count, and distance for audit.
 - The band survives the attempt for 10 minutes so a later code submission can be judged
@@ -463,8 +464,8 @@ npm test -- --runInBand
 
 314 tests across 21 suites, covering authentication, route access, BLE rotation and
 broadcasting (including the previous-token grace vs. the broadcaster poll interval),
-seeder slot claiming and the cap under contention, distance banding, the accuracy ceiling
-and accuracy-unknown normalisation, outlier trimming, the code-escalation outcomes for
+seeder slot claiming and the cap under contention, distance banding, accuracy-unknown
+normalisation, outlier trimming, the code-escalation outcomes for
 every band, flag-reason rendering, the geofence-logic strategy registry, the
 flagged-record Excel export, running-course DTO contracts, strict schedules/one-time
 dates, GPS geometry and fix filtering, active geofences, the geofence delete guard,

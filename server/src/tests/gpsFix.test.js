@@ -9,29 +9,28 @@ const BUFFERS = { nearBufferM: 50, farBufferM: 100 };
 
 describe('gpsFix', () => {
   describe('computeCentroid / buffering', () => {
-    it('returns null (not enough fixes) before the 4th fix', () => {
+    it('returns null (not enough fixes) before the 3rd fix', () => {
       const key = `student-${Date.now()}-a`;
-      gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
       gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
       gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
       expect(gpsFix.computeCentroid(key, 'session1')).toBeNull();
     });
 
-    it('computes a centroid once 4 fixes have accumulated', () => {
+    it('computes a centroid once 3 fixes have accumulated', () => {
       const key = `student-${Date.now()}-b`;
-      for (let i = 0; i < 4; i += 1) {
+      for (let i = 0; i < 3; i += 1) {
         gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
       }
       const centroid = gpsFix.computeCentroid(key, 'session1');
       expect(centroid).not.toBeNull();
       expect(centroid.lat).toBeCloseTo(6.9, 5);
       expect(centroid.lng).toBeCloseTo(79.8, 5);
-      expect(centroid.fixCount).toBe(4);
+      expect(centroid.fixCount).toBe(3);
     });
 
     it('clearFixes resets the buffer for that (student, session)', () => {
       const key = `student-${Date.now()}-c`;
-      for (let i = 0; i < 4; i += 1) gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
+      for (let i = 0; i < 3; i += 1) gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
       gpsFix.clearFixes(key, 'session1');
       expect(gpsFix.computeCentroid(key, 'session1')).toBeNull();
     });
@@ -51,16 +50,16 @@ describe('gpsFix', () => {
       expect(survivors.some((f) => f.lat === 10)).toBe(false);
     });
 
-    it('returns null when there are fewer than 4 fixes', () => {
+    it('returns null when there are fewer than MIN_FIXES fixes', () => {
       expect(gpsFix.removeOutliersByMedianDistance([fix(1, 1), fix(1, 1)])).toBeNull();
     });
 
     // Regression: this used to fall back to returning the UNTRIMMED list, handing
-    // back the very outlier it had just identified. A student with 3 perfect
-    // in-room fixes plus one glitch then banded `far` (measured 86 km out).
+    // back the very outlier it had just identified. A student with 2 perfect
+    // in-room fixes plus one glitch then banded `far` instead of "keep collecting".
     it('reports "not ready" rather than the untrimmed set when trimming leaves too few', () => {
       const fixes = [
-        fix(6.9000, 79.8000), fix(6.9000, 79.8000), fix(6.9000, 79.8000),
+        fix(6.9000, 79.8000), fix(6.9000, 79.8000),
         fix(10.0000, 79.8000), // one wild glitch, at exactly MIN_FIXES total
       ];
       expect(gpsFix.removeOutliersByMedianDistance(fixes)).toBeNull();
@@ -162,30 +161,30 @@ describe('gpsFix', () => {
     const square = [[79.8000, 6.9000], [79.8010, 6.9000], [79.8010, 6.9010], [79.8000, 6.9010]];
     const geofences = [{ polygon: square }];
 
-    it('is not ready before the 4th fix even when standing inside the polygon', () => {
+    it('is not ready before enough fixes accumulate, even standing inside the polygon', () => {
       const key = `student-${Date.now()}-d`;
       const result = gpsFix.evaluateFix(key, 'session1', fix(6.9005, 79.8005), geofences, BUFFERS);
       expect(result.ready).toBe(false);
       expect(result.centroid).toBeNull();
     });
 
-    it('bands a centroid inside the polygon as "inside"', () => {
+    it('bands a centroid inside the polygon as "inside" after exactly 3 fixes (MIN_FIXES)', () => {
       const key = `student-${Date.now()}-e`;
       let result;
-      for (let i = 0; i < 4; i += 1) {
+      for (let i = 0; i < 3; i += 1) {
         result = gpsFix.evaluateFix(key, 'session1', fix(6.9005, 79.8005), geofences, BUFFERS);
       }
       expect(result.ready).toBe(true);
       expect(result.band).toBe('inside');
       expect(result.distanceM).toBe(0);
-      expect(result.centroid.fixCount).toBe(4);
+      expect(result.centroid.fixCount).toBe(3);
     });
 
     it('bands a centroid just outside the polygon but inside the near buffer as "near"', () => {
       const key = `student-${Date.now()}-f`;
       let result;
       // ~33m south of the polygon's lower edge.
-      for (let i = 0; i < 4; i += 1) {
+      for (let i = 0; i < 3; i += 1) {
         result = gpsFix.evaluateFix(key, 'session1', fix(6.8997, 79.8005), geofences, BUFFERS);
       }
       expect(result.band).toBe('near');
@@ -197,7 +196,7 @@ describe('gpsFix', () => {
       const key = `student-${Date.now()}-g`;
       let result;
       // ~78m south of the polygon.
-      for (let i = 0; i < 4; i += 1) {
+      for (let i = 0; i < 3; i += 1) {
         result = gpsFix.evaluateFix(key, 'session1', fix(6.8993, 79.8005), geofences, BUFFERS);
       }
       expect(result.band).toBe('suspicious');
@@ -206,7 +205,7 @@ describe('gpsFix', () => {
     it('bands a centroid beyond the far buffer as "far"', () => {
       const key = `student-${Date.now()}-h`;
       let result;
-      for (let i = 0; i < 4; i += 1) {
+      for (let i = 0; i < 3; i += 1) {
         result = gpsFix.evaluateFix(key, 'session1', fix(0, 0), geofences, BUFFERS);
       }
       expect(result.ready).toBe(true);
@@ -214,24 +213,26 @@ describe('gpsFix', () => {
       expect(result.centroid).not.toBeNull();
     });
 
-    it('refuses to band a centroid built only from very inaccurate fixes', () => {
+    // The accuracy gate (auto-banding poor fixes as "unknown") was removed:
+    // every band decision now runs purely off distance, however inaccurate the
+    // contributing fixes were reported to be.
+    it('bands a centroid from very inaccurate fixes on distance alone, not "unknown"', () => {
       const key = `student-${Date.now()}-i`;
       let result;
-      // Standing dead centre of the polygon, but every fix is +/-200m — the
-      // position is meaningless, so it must not silently pass as "inside".
-      for (let i = 0; i < 4; i += 1) {
+      // Standing dead centre of the polygon, every fix reported as +/-200m accurate.
+      for (let i = 0; i < 3; i += 1) {
         result = gpsFix.evaluateFix(key, 'session1', fix(6.9005, 79.8005, 200), geofences, BUFFERS);
       }
       expect(result.ready).toBe(true);
-      expect(result.band).toBe('unknown');
-      expect(gpsFix.isPassBand(result.band)).toBe(false);
+      expect(result.band).toBe('inside');
+      expect(gpsFix.isPassBand(result.band)).toBe(true);
     });
 
     it('bands against the NEAREST of several buildings', () => {
       const key = `student-${Date.now()}-j`;
       const farAway = [[10.0000, 10.0000], [10.0010, 10.0000], [10.0010, 10.0010], [10.0000, 10.0010]];
       let result;
-      for (let i = 0; i < 4; i += 1) {
+      for (let i = 0; i < 3; i += 1) {
         result = gpsFix.evaluateFix(
           key, 'session1', fix(6.9005, 79.8005), [{ polygon: farAway }, { polygon: square }], BUFFERS,
         );

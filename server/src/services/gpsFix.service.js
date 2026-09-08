@@ -9,14 +9,7 @@ const geofenceLogicService = require('./geofenceLogic.service');
 const fixBuffers = new Map(); // key -> [{ lat, lng, accuracy, ts }]
 
 const FIX_WINDOW_MS = 90_000; // matches the client's 90s runtime window
-const MIN_FIXES = 4;
-/**
- * If not one contributing fix beat this accuracy, the centroid is too vague to
- * band honestly — a 200m-accurate "fix" sitting 40m from the building says
- * nothing. Such attempts resolve to `unknown`, which is flagged for the
- * lecturer rather than silently passing or silently failing.
- */
-const ACCURACY_CEILING_M = 75;
+const MIN_FIXES = 3;
 
 /**
  * Android's `Location.getAccuracy()` returns 0.0 when `hasAccuracy()` is false,
@@ -58,7 +51,7 @@ function clearFixes(studentId, sessionId) {
 }
 
 /**
- * Step 1: require >= 4 fixes, then drop fixes whose distance from the median
+ * Step 1: require >= MIN_FIXES fixes, then drop fixes whose distance from the median
  * location exceeds ~2x the median distance (with a floor so a tight, low-noise
  * cluster doesn't over-trim on tiny jitter).
  *
@@ -146,11 +139,6 @@ function evaluateFix(studentId, sessionId, fix, geofences, buffers) {
   if (!survivors) return { ready: false, band: null, centroid: null };
 
   const centroid = { ...accuracyWeightedCentroid(survivors), fixCount: survivors.length };
-  if (centroid.bestAccuracy > ACCURACY_CEILING_M) {
-    return {
-      ready: true, band: 'unknown', centroid, distanceM: null,
-    };
-  }
 
   const polygons = geofences.map((g) => g.polygon);
   const fixDistances = survivors.map((f) => distanceToNearestGeofenceMeters(f.lat, f.lng, polygons));
@@ -187,7 +175,6 @@ function evaluateFix(studentId, sessionId, fix, geofences, buffers) {
 module.exports = {
   FIX_WINDOW_MS,
   MIN_FIXES,
-  ACCURACY_CEILING_M,
   addFix,
   clearFixes,
   removeOutliersByMedianDistance,
