@@ -91,7 +91,24 @@ async function disableCourse(course) {
   return { ok: true, course };
 }
 
+/**
+ * Re-activating is refused while the course has no owner, because the Course
+ * schema forbids an active course with an empty `lecturers` list and the save
+ * would otherwise throw a ValidationError. That reached the admin as the generic
+ * "These fields are missing or invalid: lecturers." — naming a field they never
+ * touched, on a button that says Enable, with no hint that the fix is to assign
+ * someone. An archived course legitimately gets here: deleteLecturer is allowed
+ * to strip the last owner precisely because an archived course runs nothing.
+ */
 async function enableCourse(course) {
+  if (!Array.isArray(course.lecturers) || course.lecturers.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'This course has no assigned lecturer, so it cannot be re-activated. '
+        + 'Assign at least one lecturer to it first, then activate it.',
+    };
+  }
   course.active = true;
   await course.save();
   invalidateActiveSessionCache(course._id);

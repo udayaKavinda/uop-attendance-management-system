@@ -31,12 +31,23 @@ async function createSession(course, body) {
         + 'Unarchive it from the Courses tab first.',
     };
   }
+  // Derived once, here, and then used for BOTH the clash check and the saved row.
+  // It used to be computed inside the create call below, i.e. after the clash
+  // check had already run — so the check had no date to compare against and fell
+  // back to weekday+time alone. Two separate derivations would also disagree for
+  // a session created exactly as the end time passes, checking one date and
+  // writing another.
+  const occurrenceDate = validated.recurring
+    ? null
+    : nextOccurrenceDate(validated.lectureDay, new Date(), validated.endTime);
+
   const overlap = await checkSessionOverlap(
     LectureSession,
     course._id,
     validated.lectureDay,
     validated.startTime,
-    validated.endTime
+    validated.endTime,
+    occurrenceDate,
   );
   if (!overlap.ok) return overlap;
 
@@ -60,9 +71,7 @@ async function createSession(course, body) {
     startTime: validated.startTime,
     endTime: validated.endTime,
     recurring: validated.recurring,
-    occurrenceDate: validated.recurring
-      ? null
-      : nextOccurrenceDate(validated.lectureDay, new Date(), validated.endTime),
+    occurrenceDate,
     buildings: validated.buildings,
     manualCodeRotationMode: validated.manualCodeRotationMode,
     manualCodeRotationSeconds: validated.manualCodeRotationSeconds,
@@ -119,7 +128,13 @@ async function activateSession(sessionItem) {
         + 'weekly/one-time setting. Delete it and create it again.',
     };
   }
-  if (sessionItem.recurring === false && sessionItem.occurrenceDate < localYmd()) {
+  // `isNonRecurringExpired`, not `occurrenceDate < today`: a one-time session whose
+  // date is today but whose window has already closed is equally finished, and the
+  // date-only test sent it to the generic window error below — "it is outside that
+  // window right now", which invites the lecturer to wait for a window that will
+  // never reopen. The rows reaching this branch have already passed the malformed
+  // check above, so `recurring` is a boolean and a one-time row carries its date.
+  if (sessionItem.recurring === false && isNonRecurringExpired(sessionItem)) {
     return {
       ok: false,
       status: 400,
@@ -170,7 +185,10 @@ function sessionSortRank(sessionItem, now = new Date()) {
     ? sessionItem.lectureDay === DAY_INDEX[now.getDay()]
     : sessionItem.occurrenceDate === localYmd(now);
 
-  if (isToday && startMin !== null && endMin !== null && nowMin >= startMin && nowMin <= endMin) {
+  // `< endMin`, matching the half-open window everywhere else: a session that has
+  // just reached its endTime is finished, not "running right now", and must not
+  // outrank the session actually starting at that minute.
+  if (isToday && startMin !== null && endMin !== null && nowMin >= startMin && nowMin < endMin) {
     return 0; // running right now
   }
 

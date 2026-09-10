@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
-const { toMinutes, findScheduleOverlap } = require('../utils/schedule');
-const { localYmd } = require('../utils/date');
+const { toMinutes, findScheduleOverlap, isNonRecurringExpired } = require('../utils/schedule');
 const { MIN_ROTATION_SECONDS, MAX_ROTATION_SECONDS } = require('../services/manualCode.service');
 
 const ALLOWED_DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
@@ -71,17 +70,35 @@ function validateBroadcastBody(body) {
   return { ok: true, on };
 }
 
-async function checkSessionOverlap(LectureSession, courseId, day, startTime, endTime) {
+/**
+ * `occurrenceDate` is the date the new session will land on (null when weekly).
+ * The caller derives it BEFORE calling, so the clash check and the row that gets
+ * written agree on one date — deriving it separately in each place lets a session
+ * created on the end-time boundary be checked against one date and saved with
+ * another.
+ */
+async function checkSessionOverlap(
+  LectureSession, courseId, day, startTime, endTime, occurrenceDate = null,
+) {
   const sameDaySessions = await LectureSession.find({
     course: courseId,
     lectureDay: day,
     deleted: false,
   });
-  const today = localYmd();
-  const relevant = sameDaySessions.filter(
-    (session) => session.recurring || session.occurrenceDate >= today,
-  );
-  const clash = findScheduleOverlap(relevant, day, startTime, endTime);
+  // Exactly the rule listAllForStaff hides cards by, so the clash check can only
+  // ever cite a session the lecturer can actually see. It used to drop one-time
+  // sessions by date alone (`occurrenceDate >= today`), which kept THIS MORNING's
+  // spent session in the comparison while the Sessions tab had already hidden it:
+  // the lecturer was blocked by an invisible row and told to "delete the other
+  // session first", with no way to reach it. Deliberately stricter than
+  // isNonRecurringExpired on its own so a malformed row (no `recurring`, or no
+  // date) stays in the comparison instead of quietly disappearing from it.
+  const now = new Date();
+  const isSpentOneTime = (session) => session.recurring === false
+    && Boolean(session.occurrenceDate)
+    && isNonRecurringExpired(session, now);
+  const relevant = sameDaySessions.filter((session) => !isSpentOneTime(session));
+  const clash = findScheduleOverlap(relevant, day, startTime, endTime, occurrenceDate);
   if (clash) {
     const kind = clash.recurring ? 'weekly' : `one-time on ${clash.occurrenceDate}`;
     return {

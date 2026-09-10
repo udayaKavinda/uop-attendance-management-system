@@ -34,7 +34,24 @@ jobs:
       - name: Install server dependencies
         run: PATH=/usr/bin:$PATH /usr/bin/npm --prefix server ci --include=dev --no-audit --no-fund
 
+      # NODE_ENV=test is set HERE, not left to Jest's default, because Jest only
+      # supplies it when the variable is unset — and this runner is the production
+      # host, where it may well already read `production`. Both ways that can land
+      # break the run, neither legibly:
+      #
+      #   NODE_ENV=production, no SESSION_SECRET -> config/env.js calls
+      #     process.exit(1) as it is required, killing the Jest workers. 14 suites
+      #     report "Jest worker encountered 4 child process exceptions", which says
+      #     nothing about the actual cause.
+      #   NODE_ENV=production, SESSION_SECRET set -> middlewares/testAuth.js
+      #     disables its test-only auth bypass, and 130 tests fail on 401s.
+      #
+      # Either way every deploy is blocked by a red job that looks like a code
+      # regression and is not one. Pinning it here makes the suite independent of
+      # whatever the host's ambient environment happens to hold.
       - name: Run server test suite
+        env:
+          NODE_ENV: test
         run: PATH=/usr/bin:$PATH /usr/bin/npm --prefix server test
 
       # Catches a broken client before the deploy job wipes web/dist and rebuilds

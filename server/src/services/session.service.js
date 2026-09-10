@@ -26,7 +26,16 @@ function evaluateScheduleWindow(sessionConfig, now = new Date()) {
   if (day !== sessionConfig.lectureDay) {
     return { ok: false, reason: `Attendance allowed only on ${sessionConfig.lectureDay}` };
   }
-  if (currentMinutes < start || currentMinutes > end) {
+  // Half-open: [start, end). A session is over the moment the clock reads its
+  // endTime, so 09:00-11:00 and 11:00-13:00 never both claim 11:00. With `> end`
+  // the end minute belonged to BOTH, and resolveActiveSessionForCourse takes the
+  // first match Mongo happens to return — so a student checking in at 11:00 for
+  // the incoming lecture was recorded against the one that had just finished.
+  // Back-to-back slots are the normal timetable shape, so this was reachable
+  // every day, for 60 seconds, silently. It also matches findScheduleOverlap,
+  // which has always treated these as half-open (`sStart < newEnd`) and therefore
+  // permits the very pair the window check could not tell apart.
+  if (currentMinutes < start || currentMinutes >= end) {
     return { ok: false, reason: 'Attendance allowed only within the configured lecture time' };
   }
   return { ok: true };

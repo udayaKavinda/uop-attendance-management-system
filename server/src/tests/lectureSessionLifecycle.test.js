@@ -90,6 +90,33 @@ describe('sessionSortRank (via listAllForStaff) — regression: wrong-weekday se
     },
   );
 
+  /**
+   * The handover minute. sessionSortRank's "running right now" test used to be
+   * `nowMin <= endMin`, which made the session that had just ENDED rank 0 as well
+   * as the one starting — a tie, resolved by whatever order the list arrived in.
+   * The lecturer's card for the finished lecture could therefore sit above the one
+   * they were about to teach.
+   */
+  test('at exactly the handover minute, the incoming session ranks above the one that just ended', async () => {
+    const FRIDAY_1100 = new Date(2026, 5, 5, 11, 0, 0);
+    const justEnded = makeSession({
+      _id: 'just-ended', lectureDay: TODAY, startTime: '09:00', endTime: '11:00',
+    });
+    const startingNow = makeSession({
+      _id: 'starting-now', lectureDay: TODAY, startTime: '11:00', endTime: '13:00',
+    });
+    // Deliberately supplied ending-first, so a tie would leave the wrong one on top.
+    LectureSession.find.mockReturnValue({
+      populate: jest.fn().mockResolvedValue([justEnded, startingNow]),
+    });
+
+    const sorted = await withFixedNow(
+      FRIDAY_1100,
+      () => listAllForStaff({ isAdmin: true, person: { _id: 'admin-1' } }, null),
+    );
+    expect(sorted[0]._id).toBe('starting-now');
+  });
+
   test('among two sessions both scheduled today, the one running right now ranks before one later today', async () => {
     const runningNow = makeSession({ _id: 'running-now', lectureDay: TODAY, startTime: '09:00', endTime: '11:00' });
     const laterToday = makeSession({ _id: 'later-today', lectureDay: TODAY, startTime: '14:00', endTime: '15:00' });
@@ -196,6 +223,32 @@ describe('activateSession — schedule-window gate', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/2020-01-01/);
     expect(result.error).toMatch(/passed/i);
+  });
+
+  /**
+   * Same session, same dead end, but dated TODAY with its window already closed.
+   * The check was `occurrenceDate < today`, which is false here, so this fell
+   * through to the generic window error — "it is outside that window right now",
+   * inviting the lecturer to wait for a window that can never reopen. It has to
+   * say the same thing as the case above: this one is spent, make a new one.
+   */
+  test('refuses a one-time session dated today whose window has already closed, and says it has passed', async () => {
+    const session = makeSession({
+      recurring: false,
+      occurrenceDate: '2026-06-05', // FRIDAY_0930's own date
+      lectureDay: TODAY,
+      startTime: '08:00',
+      endTime: '09:00', // over by 09:30
+      populated: () => false,
+    });
+    Course.findById.mockResolvedValue({ _id: 'course-1', active: true });
+    const result = await withFixedNow(FRIDAY_0930, () => activateSession(session));
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/passed/i);
+    expect(result.error).toMatch(/2026-06-05/);
+    // Not the generic window wording, which suggests waiting.
+    expect(result.error).not.toMatch(/outside that window right now/i);
   });
 
   test('activates a recurring session that is genuinely inside its window right now', async () => {

@@ -42,6 +42,7 @@ async function disable(req, res) {
 
 async function enable(req, res) {
   const result = await courseService.enableCourse(req.course);
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
   return res.json({ success: true, course: result.course });
 }
 

@@ -150,6 +150,38 @@ depends on it.
 - Found by the multi-week usage simulation, not by unit tests — the unit tests build the
   `ManualCode` document directly, so the rotate-during-verify path never ran.
 
+### The schedule window
+
+A session's window is **half-open: `[startTime, endTime)`**. It opens at the start minute
+and closes the moment the clock reads `endTime` — 09:00-11:00 is live at 10:59 and over at
+11:00:00.
+
+This is not cosmetic. Back-to-back slots (09:00-11:00 then 11:00-13:00) are the ordinary
+shape of a timetable, and `findScheduleOverlap` has always permitted them, treating times
+as half-open (`sStart < newEnd`). The window check used to be closed at both ends
+(`currentMinutes > end` meant "out"), so the boundary minute belonged to **both** sessions —
+a pair the system allowed you to create and then could not tell apart.
+`resolveActiveSessionForCourse` picks with `sessions.find(...)`, i.e. the first match in
+whatever order Mongo returned, so a student checking in at 11:00 for the lecture that was
+starting could be recorded against the one that had just finished. Every day, for sixty
+seconds, with nothing shown to either party.
+
+Four comparisons implement this and only work as a set — change one and you reopen the
+gap:
+
+| Where | Rule |
+| --- | --- |
+| `evaluateScheduleWindow` | `currentMinutes < start \|\| currentMinutes >= end` |
+| `isNonRecurringExpired` | spent once `nowMinutes >= end` |
+| `nextOccurrenceDate` | today's slot is spent at `currentMinutes >= end`, so it rolls a week |
+| `sessionSortRank` | "running right now" is `nowMin >= startMin && nowMin < endMin` |
+
+The **start** stays inclusive: a session is live at exactly `startTime`. Only the end moved.
+`startTime >= endTime` is rejected at create, so a half-open window is never empty.
+
+The practical consequence is that a session stops accepting check-ins one minute earlier
+than it used to — at `10:00:00` rather than `10:00:59` for a lecture ending at 10:00.
+
 ### One-time sessions
 
 Weekly sessions have `recurring: true`. A one-time session receives an explicit local
@@ -169,6 +201,39 @@ today (Mon 14 Sep), 10:00-12:00", or without the "today" when it rolled to the n
 occurrence. Identical taps produce different dates either side of `endTime`, and this is
 the only point at which a lecturer can catch the wrong one; both clients display it and
 fall back to a generic line if it is absent.
+
+Two one-time sessions collide only when they land on the **same** `occurrenceDate`.
+Sharing a weekday is not a clash — a session on the 10th and a session on the 17th can
+never both run. `findScheduleOverlap` therefore takes the new session's date as a fifth
+argument and skips an existing row when both sides are explicitly one-time and the dates
+differ. Everything else still collides on weekday + time alone, because a weekly session
+runs on that weekday every week:
+
+| new | existing | clash? |
+| --- | --- | --- |
+| weekly | weekly | yes, if the times overlap |
+| weekly | one-time | yes — the weekly runs on that date too |
+| one-time | weekly | yes — same reason, other way round |
+| one-time | one-time, same date | yes |
+| one-time | one-time, different date | **no** |
+| anything | spent one-time | no — it can never run again |
+
+The date is derived **before** the clash check, in `createSession`, and the same value is
+then written to the row. It used to be derived inside the `create()` call, i.e. after the
+check had already run, which is why the check had no date to compare and fell back to
+weekday + time. One derivation also keeps the two honest for a session created exactly as
+`endTime` passes, where deriving twice checks one date and saves another.
+
+`checkSessionOverlap` prunes spent one-time sessions using **the same rule
+`listAllForStaff` hides cards by**, and that alignment is the point rather than an
+incidental tidy-up. It previously pruned by date alone (`occurrenceDate >= today`), so
+between a session's window closing and midnight the row was hidden from the Sessions tab
+but still counted as a clash — the lecturer was blocked by a session they could not see,
+under an error instructing them to go and delete it. If either rule is changed, change
+both, or that dead end comes back. Both are deliberately stricter than
+`isNonRecurringExpired` alone (`recurring === false` **and** a non-empty `occurrenceDate`
+**and** expired) so malformed rows stay in the comparison and keep reporting a clash
+rather than quietly dropping out of it.
 
 Times are strictly validated as zero-padded 24-hour `HH:mm` values.
 
@@ -301,6 +366,10 @@ and broadcast attempts (the window itself is quoted back), and buildings that ha
 been deleted. Do not reintroduce bare states like `Course is disabled` — a lecturer
 cannot act on one.
 
+A remedy the lecturer cannot carry out is worse than a bare state, and the clash message
+was one: it can only ever cite a session that is still visible in the Sessions tab. See
+**One-time sessions** below for why that needs saying.
+
 `middlewares/errorHandler.js` applies the same rule to the errors Mongoose raises rather
 than the routes: a `CastError`, a `ValidationError` and a duplicate-key 11000 all name the
 **field** involved. They must never name the **value** — field names come from our own
@@ -376,7 +445,7 @@ Base path: `/api/admin/courses`.
 | `GET /?page=&limit=&lecturerId=` | staff | owned courses; admins see all, or one lecturer's with `lecturerId`. Omitting `limit` returns everything; passing it pages (`{ items, total, page, limit, hasMore }`) |
 | `POST /` | staff | create a course — `batches: string[]` creates one Course document per batch |
 | `PATCH /:courseId/assign-lecturer` | owner/admin | wholesale reassignment — set any number of owners (add or remove); a lecturer may only do this on a course they already own |
-| `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course — this is also what "delete" means; no destructive delete exists |
+| `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course — this is also what "delete" means; no destructive delete exists. `enable` is refused (400) while the course has no assigned lecturer |
 | `POST /:courseId/sessions` | owner/admin | atomically create schedule, buildings (≥1, required), and code rotation Responds `{ success, session, message }`, where `message` names the date the server derived (see One-time sessions) |
 | `GET /:courseId/attendance-matrix` | owner/admin | per-student `present` / `flagged` / absent matrix (JSON), bare status only — no `reason` |
 | `GET /:courseId/attendance-matrix.xlsx` | owner/admin | the same matrix as a downloadable Excel file — every record is `P` (absent is `-`, never blank); `flagged` cells are additionally red-filled with the reason as a cell comment |
@@ -423,6 +492,13 @@ Deleting a lecturer never invents a substitute owner for their courses. If remov
 would leave an *active* course with zero lecturers, the whole delete is refused (400) before
 anything is touched; an *archived* course is allowed to end up ownerless, since it runs no
 sessions and takes no attendance.
+
+Because of that allowance, `PATCH /:courseId/enable` refuses (400) a course whose
+`lecturers` list is empty, naming the real problem: assign a lecturer, then activate. The
+Course schema already forbids an active course with no owner, so without the check the
+re-activation reached `save()` and threw a ValidationError, which the error handler
+rendered as `These fields are missing or invalid: lecturers.` — a field the admin never
+touched, on a button labelled Enable, with nothing pointing at the fix.
 
 ## Things that are easy to miss
 
@@ -530,14 +606,14 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-467 tests across 32 suites. 446 of those run with every Mongoose model mocked and need
+471 tests across 33 suites. 450 of those run with every Mongoose model mocked and need
 no database. The remaining suite, `dbIntegration.test.js`, talks to a real MongoDB —
 schema defaults, validators, `populate` and unique indexes cannot be verified by mocking
 the layer that implements them.
 
 It needs no setup: `jest.globalSetup.js` probes `mongodb://127.0.0.1:27017` before the
 run and, if a mongod answers, points the suite at the **`uop_attendance_test`** database.
-With no local mongod the suite skips itself and the other 31 run as normal, so a machine
+With no local mongod the suite skips itself and the other 32 run as normal, so a machine
 or CI runner without a database still goes green. Set `MONGO_TEST_URI` to override the
 target, or to `off` to skip the probe entirely — which is what CI does, because the
 deploy runner *is* the production host and a test process must never open a connection
@@ -549,7 +625,8 @@ the application itself uses — an accidental `MONGO_TEST_URI=.../attendance` fa
 instead of destroying local data. It
 covers the persisted `active: false` on create, the one-time `occurrenceDate` required
 validator, the `buildings` minimum, the unique `(code, batch)` course index, one-time
-date resolution either side of `endTime`, overlap detection, the staff list's hiding and
+date resolution either side of `endTime`, overlap detection (including two one-time
+sessions a week apart, which must not collide), the staff list's hiding and
 lecturer scoping through real `populate`, both expiry sweeps, soft delete, student-facing
 course resolution, and the unique `(student, session, attendanceDate)` attendance index.
 

@@ -100,6 +100,29 @@ itself installs `--omit=dev`, so the suite cannot run there), runs the server te
 `MONGO_TEST_URI=off` so nothing touches production Mongo, and type-checks and builds the
 web client. Previously nothing was tested before a release reached the server.
 
+The test step also pins **`NODE_ENV: test`** rather than relying on Jest's default, which
+only applies when the variable is unset. This runner *is* the production host, so it may
+already carry `NODE_ENV=production`, and both ways that can land break the run without
+saying why:
+
+| Ambient state | What happens |
+| --- | --- |
+| `NODE_ENV=production`, no `SESSION_SECRET` | `config/env.js` calls `process.exit(1)` while being required. 14 suites report `Jest worker encountered 4 child process exceptions` — nothing about the real cause |
+| `NODE_ENV=production` + `SESSION_SECRET` | `middlewares/testAuth.js` switches its test-only auth bypass off; 130 tests fail on 401s |
+| `NODE_ENV=test` | 476 pass, 21 skipped (the live-DB suite, by `MONGO_TEST_URI=off`) |
+
+Either failure blocks every deploy behind a red job that reads like a code regression and
+is not one. `NODE_ENV` is set on the **step**, not the job, so the web build below it is
+left alone — Vite decides its own mode.
+
+Verified by simulating the job against a clean `git clone`: `npm ci --include=dev` for both
+workspaces, `tsc -b && vite build` producing `dist/index.html`, and the suite passing with
+exit code 0 under the job's exact environment. Reverting one line of the schedule-window
+fix in that clone produced exit code 1, confirming the gate actually blocks a deploy rather
+than only appearing to. What remains unverified is the runner itself: `actions/checkout@v4`
+and the `/usr/bin/npm` paths cannot be exercised off the host, so the first real run still
+needs watching.
+
 `.github/workflows/deploy.yml` deploys **main only** using the existing self-hosted
 `attendance-prod` runner. It does not start GitHub-hosted runners or require hosted-runner
 billing. The deployment:
