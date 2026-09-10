@@ -227,6 +227,12 @@ export interface CreateSessionReq {
 export interface SessionRes {
   success?: boolean;
   session?: StaffSession;
+  /**
+   * Confirmation copy from the server, naming the date it derived for a one-time
+   * session. Optional so an older server (which does not send it) still works —
+   * callers fall back to their own generic line.
+   */
+  message?: string;
 }
 
 /**

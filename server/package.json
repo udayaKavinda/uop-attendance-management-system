@@ -14,7 +14,8 @@
     "testMatch": [
       "**/src/tests/**/*.test.js"
     ],
-    "testTimeout": 10000
+    "testTimeout": 10000,
+    "globalSetup": "<rootDir>/jest.globalSetup.js"
   },
   "devDependencies": {
     "jest": "^29.7.0",
@@ -34,4 +35,4 @@
     "exceljs": "^4.4.0",
     "google-auth-library": "^9.14.1"
   }
-}
+}

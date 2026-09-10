@@ -1,6 +1,7 @@
 package lk.ac.pdn.eng.feats.data.net
 
 import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import retrofit2.HttpException
 import java.io.IOException
 
@@ -25,7 +26,13 @@ inline fun <T> ApiResult<T>.onError(block: (String, Int?) -> Unit): ApiResult<T>
     return this
 }
 
-private val errorMoshi: Moshi by lazy { Moshi.Builder().build() }
+// KotlinJsonAdapterFactory is not optional here: Moshi refuses to build a
+// reflective adapter for a Kotlin class without it and throws instead. That
+// throw happened inside the runCatching below, so EVERY server explanation was
+// silently swallowed and every failure reached the user as the bare
+// "Request failed (<code>)" fallback — overlap clashes, archived courses,
+// out-of-window Collect taps, all of it. See ApiErrorMessageTest.
+private val errorMoshi: Moshi by lazy { Moshi.Builder().add(KotlinJsonAdapterFactory()).build() }
 private val errorAdapter by lazy { errorMoshi.adapter(ServerError::class.java) }
 
 private class ServerError(val error: String? = null, val message: String? = null)

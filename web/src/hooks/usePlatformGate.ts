@@ -8,7 +8,7 @@ import { isIosDevice } from '../platform/ios';
  */
 const IS_IOS = isIosDevice();
 
-export type GateState = 'checking' | 'allowed' | 'blocked';
+export type GateState = 'checking' | 'allowed' | 'blocked' | 'unavailable';
 
 /**
  * Decides whether this device may use the client.
@@ -18,26 +18,36 @@ export type GateState = 'checking' | 'allowed' | 'blocked';
  * non-iOS device has to ask the server whether the admin has opened access
  * (see `webAllowNonIos` in the Settings model).
  *
- * That request fails **closed**. A blocked device staying blocked when the
- * network hiccups is the safe direction: the alternative would let a flaky
- * connection silently open the client to everyone, which is exactly what the
- * switch exists to control.
+ * That request still fails **closed**: a device stays out when the check cannot
+ * be completed, because the alternative would let a flaky connection silently
+ * open the client to everyone, which is exactly what the switch exists to
+ * control. What changed is that it no longer misreports why. A failed check is
+ * `unavailable`, not `blocked`, so the user is told the check did not complete
+ * and offered a retry, rather than being told this device is unsupported —
+ * which, for an Android device the admin had actually permitted, was simply
+ * untrue and left no way forward.
  */
-export function usePlatformGate(): GateState {
+export function usePlatformGate(): { state: GateState; retry: () => void } {
   const [state, setState] = useState<GateState>(IS_IOS ? 'allowed' : 'checking');
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (IS_IOS) return;
 
     let cancelled = false;
+    setState('checking');
     void api.webConfig().then((res) => {
       if (cancelled) return;
-      setState(res.ok && res.data.allowNonIos === true ? 'allowed' : 'blocked');
+      if (!res.ok) {
+        setState('unavailable');
+        return;
+      }
+      setState(res.data.allowNonIos === true ? 'allowed' : 'blocked');
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [attempt]);
 
-  return state;
+  return { state, retry: () => setAttempt((n) => n + 1) };
 }

@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { toMinutes, hasScheduleOverlap } = require('../utils/schedule');
+const { toMinutes, findScheduleOverlap } = require('../utils/schedule');
 const { localYmd } = require('../utils/date');
 const { MIN_ROTATION_SECONDS, MAX_ROTATION_SECONDS } = require('../services/manualCode.service');
 
@@ -81,9 +81,16 @@ async function checkSessionOverlap(LectureSession, courseId, day, startTime, end
   const relevant = sameDaySessions.filter(
     (session) => session.recurring || session.occurrenceDate >= today,
   );
-  const overlap = hasScheduleOverlap(relevant, day, startTime, endTime);
-  if (overlap) {
-    return { ok: false, status: 400, error: 'This session overlaps with an existing session for the same course' };
+  const clash = findScheduleOverlap(relevant, day, startTime, endTime);
+  if (clash) {
+    const kind = clash.recurring ? 'weekly' : `one-time on ${clash.occurrenceDate}`;
+    return {
+      ok: false,
+      status: 400,
+      error: `${startTime}-${endTime} clashes with this course's existing ${day} session `
+        + `at ${clash.startTime}-${clash.endTime} (${kind}). `
+        + 'Pick a time outside that range, or delete the other session first.',
+    };
   }
   return { ok: true };
 }

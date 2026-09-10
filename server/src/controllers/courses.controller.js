@@ -26,7 +26,7 @@ async function listRegistered(req, res) {
 
 async function registerCourse(req, res) {
   const { courseId } = req.params;
-  if (!mongoose.isValidObjectId(courseId)) return res.status(400).json({ error: 'Invalid course id' });
+  if (!mongoose.isValidObjectId(courseId)) return res.status(400).json({ error: 'courseId is not a valid id' });
   const course = await Course.findOne({ _id: courseId, active: true }).select('_id');
   if (!course) return res.status(404).json({ error: 'Course not found' });
   await Person.updateOne(
@@ -38,7 +38,7 @@ async function registerCourse(req, res) {
 
 async function unregisterCourse(req, res) {
   const { courseId } = req.params;
-  if (!mongoose.isValidObjectId(courseId)) return res.status(400).json({ error: 'Invalid course id' });
+  if (!mongoose.isValidObjectId(courseId)) return res.status(400).json({ error: 'courseId is not a valid id' });
   await Person.updateOne(
     { _id: req.auth.person._id },
     { $pull: { registeredCourses: courseId } },

@@ -24,17 +24,26 @@ function nextOccurrenceDate(lectureDay, now = new Date(), endTime = null) {
   return localYmd(result);
 }
 
-function hasScheduleOverlap(existingSessions, day, startTime, endTime) {
+/**
+ * The clashing session itself, not just "yes it clashes" — the caller turns it
+ * into an error a lecturer can act on ("clashes with 10:00-12:00") instead of a
+ * bare rejection that leaves them guessing which of their sessions is in the way.
+ */
+function findScheduleOverlap(existingSessions, day, startTime, endTime) {
   const newStart = toMinutes(startTime);
   const newEnd = toMinutes(endTime);
-  if (newStart === null || newEnd === null) return false;
-  return existingSessions.some((s) => {
+  if (newStart === null || newEnd === null) return null;
+  return existingSessions.find((s) => {
     if (s.lectureDay !== day) return false;
     const sStart = toMinutes(s.startTime);
     const sEnd = toMinutes(s.endTime);
     if (sStart === null || sEnd === null) return false;
     return sStart < newEnd && newStart < sEnd;
-  });
+  }) || null;
+}
+
+function hasScheduleOverlap(existingSessions, day, startTime, endTime) {
+  return findScheduleOverlap(existingSessions, day, startTime, endTime) !== null;
 }
 
 function isNonRecurringExpired(sessionItem, now = new Date()) {
@@ -52,5 +61,6 @@ module.exports = {
   toMinutes,
   nextOccurrenceDate,
   hasScheduleOverlap,
+  findScheduleOverlap,
   isNonRecurringExpired,
 };

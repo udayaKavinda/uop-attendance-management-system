@@ -17,6 +17,34 @@ const APP_BASE = `${window.location.origin}/app`;
  */
 const LOGIN_SUCCESS_PATH = '/app/login/success';
 
+/**
+ * Browser sign-in can only answer with a redirect, so the server sends a reason
+ * code (see oauthFailureQuery in auth.controller.js) rather than a message. The
+ * copy lives here so it can be specific: "Sign-in failed. Please try again." was
+ * flatly wrong for a rejected email domain, where retrying never succeeds.
+ */
+function signInFailureMessage(params: URLSearchParams): string | null {
+  const code = params.get('error');
+  if (code == null) return null;
+  switch (code) {
+    case 'domain': {
+      const domain = params.get('domain');
+      return domain
+        ? `Only @${domain} email addresses can sign in. Use your university account, `
+          + 'or ask an administrator to add you.'
+        : 'That email address is not eligible to sign in. Use your university account, '
+          + 'or ask an administrator to add you.';
+    }
+    case 'no_email':
+      return 'Your Google account did not share an email address, which this app needs to identify you. '
+        + 'Grant the email permission and try again.';
+    case 'session':
+      return 'Signed in with Google, but the session could not be created. Please try again.';
+    default:
+      return 'Sign-in failed. Please try again.';
+  }
+}
+
 export function useSession() {
   const [session, setSession] = useState<Session>({ state: 'loading' });
 
@@ -37,7 +65,7 @@ export function useSession() {
     setUnauthorizedHandler(() => setSession({ state: 'loggedOut' }));
 
     const params = new URLSearchParams(window.location.search);
-    const failed = params.get('error') === 'auth';
+    const failure = signInFailureMessage(params);
 
     // Tidy the URL before anything else so a refresh — or an "add to home
     // screen" done at this moment — does not preserve a one-shot callback path.
@@ -45,8 +73,8 @@ export function useSession() {
       window.history.replaceState({}, '', '/app/');
     }
 
-    if (failed) {
-      setSession({ state: 'loggedOut', error: 'Sign-in failed. Please try again.' });
+    if (failure) {
+      setSession({ state: 'loggedOut', error: failure });
       return;
     }
     void refresh();

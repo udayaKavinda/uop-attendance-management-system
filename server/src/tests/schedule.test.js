@@ -2,7 +2,7 @@
  * Schedule helpers unit tests
  */
 const {
-  toMinutes, hasScheduleOverlap, isNonRecurringExpired, nextOccurrenceDate,
+  toMinutes, hasScheduleOverlap, findScheduleOverlap, isNonRecurringExpired, nextOccurrenceDate,
 } = require('../utils/schedule');
 
 describe('toMinutes', () => {
@@ -35,6 +35,25 @@ describe('hasScheduleOverlap', () => {
   it('allows same time on different day', () => {
     const existing = [{ lectureDay: 'MON', startTime: '09:00', endTime: '11:00' }];
     expect(hasScheduleOverlap(existing, 'TUE', '09:00', '11:00')).toBe(false);
+  });
+});
+
+// The boolean above only says "something clashes". The error a lecturer reads has
+// to say WHICH session, so the finder must hand back the offending document.
+describe('findScheduleOverlap', () => {
+  const morning = { _id: 'm', lectureDay: 'MON', startTime: '09:00', endTime: '11:00' };
+  const afternoon = { _id: 'a', lectureDay: 'MON', startTime: '14:00', endTime: '16:00' };
+
+  it('returns the specific session that clashes, not merely true', () => {
+    expect(findScheduleOverlap([morning, afternoon], 'MON', '15:00', '17:00')).toBe(afternoon);
+  });
+
+  it('returns null when nothing clashes', () => {
+    expect(findScheduleOverlap([morning, afternoon], 'MON', '11:00', '14:00')).toBeNull();
+  });
+
+  it('returns null for an unparseable candidate time', () => {
+    expect(findScheduleOverlap([morning], 'MON', 'nonsense', '17:00')).toBeNull();
   });
 });
 

@@ -1,9 +1,16 @@
 /**
- * Schedule-window resolution unit tests (pure time math, no DB).
+ * Schedule-window resolution unit tests (pure time math, no DB) plus the
+ * course-resolution messages, which do read the models — mocked here.
  */
+jest.mock('../models/Course', () => ({ findById: jest.fn() }));
+jest.mock('../models/LectureSession', () => ({ find: jest.fn() }));
+
+const Course = require('../models/Course');
+const LectureSession = require('../models/LectureSession');
 const {
   isWithinScheduleWindow,
   invalidateActiveSessionCache,
+  resolveActiveSessionForCourse,
 } = require('../services/session.service');
 const { DAY_INDEX } = require('../utils/schedule');
 
@@ -61,5 +68,83 @@ describe('invalidateActiveSessionCache', () => {
   it('does not throw for a specific id or a full clear', () => {
     expect(() => invalidateActiveSessionCache('abc123')).not.toThrow();
     expect(() => invalidateActiveSessionCache()).not.toThrow();
+  });
+});
+
+
+/**
+ * Student-facing: this is what a check-in tap reports back. A missing course and
+ * an archived one used to share one bare "Invalid course", which blamed the
+ * request for something that had happened to the course.
+ */
+describe('resolveActiveSessionForCourse — course-level rejections', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    invalidateActiveSessionCache('course-1');
+    LectureSession.find.mockResolvedValue([]);
+  });
+
+  it('says the course is gone when it does not exist', async () => {
+    Course.findById.mockResolvedValue(null);
+    const result = await resolveActiveSessionForCourse('course-1');
+    expect(result.error).toMatch(/no longer exists/i);
+  });
+
+  it('says the course was archived, and names it, when it is inactive', async () => {
+    Course.findById.mockResolvedValue({ _id: 'course-1', code: 'CS101', active: false });
+    const result = await resolveActiveSessionForCourse('course-1');
+    expect(result.error).toMatch(/CS101/);
+    expect(result.error).toMatch(/archived/i);
+  });
+
+  it('still explains an archived course that has no code', async () => {
+    Course.findById.mockResolvedValue({ _id: 'course-1', active: false });
+    const result = await resolveActiveSessionForCourse('course-1');
+    expect(result.error).toMatch(/archived/i);
+  });
+
+  it('distinguishes "no session running" from a course-level problem', async () => {
+    Course.findById.mockResolvedValue({ _id: 'course-1', code: 'CS101', active: true });
+    const result = await resolveActiveSessionForCourse('course-1');
+    expect(result.error).toMatch(/no active lecture session/i);
+  });
+});
+
+/**
+ * The resolve cache holds an *admission decision*, not just a lookup, so serving
+ * it purely on age let a check-in tapped after the lecture ended through for the
+ * remainder of the TTL. Time is not faked here: the cached document is the same
+ * object the test holds, so shrinking its window stands in for the clock crossing
+ * endTime, and exercises the same branch.
+ */
+describe('resolveActiveSessionForCourse — a cached admission must not outlive its window', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    invalidateActiveSessionCache('course-2');
+  });
+
+  it('re-resolves instead of serving a cached session whose window has since closed', async () => {
+    const allDay = session({ lectureDay: DAY_INDEX[new Date().getDay()], startTime: '00:00', endTime: '23:59' });
+    Course.findById.mockResolvedValue({ _id: 'course-2', code: 'CS102', active: true });
+    LectureSession.find.mockResolvedValue([allDay]);
+
+    const first = await resolveActiveSessionForCourse('course-2');
+    expect(first.session).toBe(allDay);
+    expect(Course.findById).toHaveBeenCalledTimes(1);
+
+    allDay.endTime = '00:00'; // window now closed
+    const second = await resolveActiveSessionForCourse('course-2');
+    expect(second.error).toMatch(/no active lecture session/i);
+    expect(Course.findById).toHaveBeenCalledTimes(2); // the cache was not trusted
+  });
+
+  it('still serves the cache while the window is genuinely open', async () => {
+    const allDay = session({ lectureDay: DAY_INDEX[new Date().getDay()], startTime: '00:00', endTime: '23:59' });
+    Course.findById.mockResolvedValue({ _id: 'course-2', code: 'CS102', active: true });
+    LectureSession.find.mockResolvedValue([allDay]);
+
+    await resolveActiveSessionForCourse('course-2');
+    await resolveActiveSessionForCourse('course-2');
+    expect(Course.findById).toHaveBeenCalledTimes(1);
   });
 });

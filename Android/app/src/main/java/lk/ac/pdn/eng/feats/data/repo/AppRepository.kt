@@ -24,6 +24,7 @@ import lk.ac.pdn.eng.feats.data.net.RunningSessionDto
 import lk.ac.pdn.eng.feats.data.net.RunningCourseDto
 import lk.ac.pdn.eng.feats.data.net.SeedTokenDto
 import lk.ac.pdn.eng.feats.data.net.SessionDto
+import lk.ac.pdn.eng.feats.data.net.SessionRes
 import lk.ac.pdn.eng.feats.data.net.SetBroadcastReq
 import lk.ac.pdn.eng.feats.data.net.SettingsDto
 import lk.ac.pdn.eng.feats.data.net.SettingsReq
@@ -103,8 +104,13 @@ class AppRepository(private val api: ApiService) {
             Page(res.items ?: emptyList(), res.hasMore ?: false)
         }
 
-    suspend fun createSession(courseId: String, req: CreateSessionReq): ApiResult<SessionDto?> =
-        apiCall { api.createSession(courseId, req).session }
+    /**
+     * Returns the whole response, not just `session`: the confirmation the lecturer
+     * sees is composed server-side (it names the date derived for a one-time session)
+     * and would be dropped by unwrapping to the DTO here.
+     */
+    suspend fun createSession(courseId: String, req: CreateSessionReq): ApiResult<SessionRes> =
+        apiCall { api.createSession(courseId, req) }
 
     suspend fun runningSessions(): ApiResult<List<RunningSessionDto>> =
         apiCall { api.runningSessions().items ?: emptyList() }

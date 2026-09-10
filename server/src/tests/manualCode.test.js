@@ -201,3 +201,64 @@ describe('manualCode', () => {
     });
   });
 });
+
+/**
+ * Found by a multi-week usage simulation, not by unit testing: rotation is lazy,
+ * and `verifyCode` is itself one of the callers that triggers it. A rotation
+ * triggered by the submission stamped `generatedAt: now`, so the code it had just
+ * demoted to `prevCode` measured 0 ms old and passed the grace check — no matter
+ * how long it had really been the live code. It only showed up when nothing else
+ * polled in between, i.e. the lecturer's dashboard was closed or the phone asleep.
+ */
+describe('manualCode — the rotation grace must not revive an overdue code', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsWithinScheduleWindow.mockReturnValue(true);
+  });
+
+  const interval = makeSession({ manualCodeRotationMode: 'interval', manualCodeRotationSeconds: 30 });
+
+  function rotateWith(ageMs) {
+    mockModel.findOne.mockResolvedValue({
+      code: 'oldcode1', prevCode: null, generatedAt: Date.now() - ageMs, paused: false,
+    });
+    mockModel.findOneAndUpdate.mockImplementation((_f, update) => Promise.resolve({
+      ...update, paused: false,
+    }));
+    return manualCode.getOrRotateCode(interval);
+  }
+
+  it('keeps the old code as prevCode when the rotation is due right now', async () => {
+    await rotateWith(30_000);
+    const [, update] = mockModel.findOneAndUpdate.mock.calls[0];
+    expect(update.prevCode).toBe('oldcode1');
+  });
+
+  it('still keeps it when the rotation is only barely late (inside the grace)', async () => {
+    await rotateWith(30_000 + GRACE_MS - 1);
+    const [, update] = mockModel.findOneAndUpdate.mock.calls[0];
+    expect(update.prevCode).toBe('oldcode1');
+  });
+
+  it('drops prevCode once the rotation is overdue by more than the grace', async () => {
+    await rotateWith(30_000 + GRACE_MS + 1);
+    const [, update] = mockModel.findOneAndUpdate.mock.calls[0];
+    expect(update.prevCode).toBeNull();
+  });
+
+  it('drops prevCode for a badly overdue rotation — the ten-minute case', async () => {
+    await rotateWith(10 * 60_000);
+    const [, update] = mockModel.findOneAndUpdate.mock.calls[0];
+    expect(update.prevCode).toBeNull();
+  });
+
+  it('verifyCode rejects a code that was live ten minutes ago and never rotated', async () => {
+    mockModel.findOne.mockResolvedValue({
+      code: 'oldcode1', prevCode: null, generatedAt: Date.now() - 10 * 60_000, paused: false,
+    });
+    mockModel.findOneAndUpdate.mockImplementation((_f, update) => Promise.resolve({
+      ...update, paused: false,
+    }));
+    expect(await manualCode.verifyCode(interval, '12345678')).toBe(false);
+  });
+});

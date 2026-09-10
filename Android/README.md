@@ -223,6 +223,14 @@ If Credential Manager is unavailable, a Custom Tab runs `/auth/google`; a single
 exchange code returns through `lk.ac.pdn.eng.attendance://oauth` and is consumed by
 `POST /api/auth/exchange-code`.
 
+That same deep link is also the **only** way a rejected browser sign-in can report
+itself — it comes back as `?error=<code>` with no `code` parameter. `MainActivity`
+must therefore read both arms: reading only `code` (as it once did) made a rejected
+sign-in do nothing at all, with no error shown. `oauthReturnFrom` in `ui/auth/OAuth.kt`
+maps the codes to copy and mirrors `signInFailureMessage` in the web client; the codes
+themselves are listed in `server/README.md` under `/auth/google/callback`.
+`OAuthReturnTest` pins the mapping.
+
 The persistent cookie jar retains the Express session. Mutations include
 `X-Requested-With: fetch` for CSRF enforcement. A `401` clears local auth state.
 
@@ -292,3 +300,11 @@ The server README is the authoritative request/response and access-control refer
 Every API DTO change must have a server contract test and a matching Android DTO update.
 Before merging or deploying, run Android unit tests, lint, and debug assembly plus the full
 server Jest suite. Production CI enforces both groups before syncing the server.
+
+`apiCall` in `data/net/ApiResult.kt` is what turns a server rejection into the string the
+error banner shows, and it parses that body with its **own** Moshi instance — which must
+keep `KotlinJsonAdapterFactory`. Without it Moshi refuses to build a reflective adapter
+for a Kotlin class and throws instead of parsing; the throw lands inside the surrounding
+`runCatching`, so every server explanation is discarded and every failure reaches the user
+as a bare `Request failed (400)`. `ApiErrorMessageTest` pins this, and pins that the
+status-only fallback is still used when the body genuinely explains nothing.

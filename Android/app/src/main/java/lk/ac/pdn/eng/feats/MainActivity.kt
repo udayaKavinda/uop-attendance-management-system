@@ -15,25 +15,27 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import lk.ac.pdn.eng.feats.ui.AppRoot
 import lk.ac.pdn.eng.feats.ui.auth.OAuth
+import lk.ac.pdn.eng.feats.ui.auth.OAuthReturn
+import lk.ac.pdn.eng.feats.ui.auth.oauthReturnFrom
 import lk.ac.pdn.eng.feats.ui.components.AppBackground
 import lk.ac.pdn.eng.feats.ui.theme.AttendanceTheme
 
 class MainActivity : ComponentActivity() {
 
-    private var oauthCode by mutableStateOf<String?>(null)
+    private var oauthReturn by mutableStateOf<OAuthReturn?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        oauthCode = extractCode(intent)
+        oauthReturn = extractReturn(intent)
 
         setContent {
             AttendanceTheme {
                 AppBackground {
                     Box(Modifier.fillMaxSize().systemBarsPadding()) {
                         AppRoot(
-                            oauthCode = oauthCode,
-                            onCodeConsumed = { oauthCode = null },
+                            oauthReturn = oauthReturn,
+                            onOAuthReturnConsumed = { oauthReturn = null },
                         )
                     }
                 }
@@ -44,16 +46,22 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        extractCode(intent)?.let { oauthCode = it }
+        extractReturn(intent)?.let { oauthReturn = it }
     }
 
-    /** Pulls the OAuth exchange `code` out of the deep link lk.ac.pdn.eng.attendance://oauth?code=... */
-    private fun extractCode(intent: Intent?): String? {
+    /**
+     * Reads the deep link lk.ac.pdn.eng.attendance://oauth?code=... — or, when the
+     * server rejected the sign-in, ?error=...&domain=... . Both arms matter: only
+     * reading `code` meant a rejection silently did nothing.
+     */
+    private fun extractReturn(intent: Intent?): OAuthReturn? {
         val data: Uri = intent?.data ?: return null
         val expected = Uri.parse(OAuth.RETURN_TARGET)
-        if (data.scheme == expected.scheme && data.host == expected.host) {
-            return data.getQueryParameter("code")
-        }
-        return null
+        if (data.scheme != expected.scheme || data.host != expected.host) return null
+        return oauthReturnFrom(
+            code = data.getQueryParameter("code"),
+            error = data.getQueryParameter("error"),
+            domain = data.getQueryParameter("domain"),
+        )
     }
 }

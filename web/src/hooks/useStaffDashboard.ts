@@ -180,6 +180,7 @@ export function useStaffDashboard() {
     void refresh();
     void api.settings().then((res) => {
       if (res.ok) patch({ settings: res.data });
+      else setError(`Could not load Bluetooth/geofence settings: ${res.message}`);
     });
     void api.geofences().then((res) => {
       if (res.ok) patch({ geofences: res.data.items ?? [] });
@@ -294,6 +295,9 @@ export function useStaffDashboard() {
       searchTimer.current = window.setTimeout(() => {
         patch({ lecturerSearchLoading: true });
         void api.lecturers(q).then((res) => {
+          // A failed search used to render as an empty result list, which reads as
+          // "no such lecturer" — the opposite of what happened.
+          if (!res.ok) setError(`Lecturer search failed: ${res.message}`);
           patch({
             lecturerSearchResults: res.ok ? res.data.items ?? [] : [],
             lecturerSearchLoading: false,
@@ -301,7 +305,7 @@ export function useStaffDashboard() {
         });
       }, 300);
     },
-    [patch],
+    [patch, setError],
   );
 
   // ── Sessions ───────────────────────────────────────────────────────────────
@@ -355,7 +359,11 @@ export function useStaffDashboard() {
         manualCodeRotationSeconds,
       });
       if (res.ok) {
-        setFlash('Session created.');
+        // The server names the date it derived for a one-time session — the create
+        // form only takes a weekday, so "MON" can mean today or a week out and this
+        // is the lecturer's only chance to catch the wrong one. Falls back to the
+        // generic line if the server predates the field.
+        setFlash(res.data.message || 'Session created.');
         await refresh();
       } else {
         setError(res.message);

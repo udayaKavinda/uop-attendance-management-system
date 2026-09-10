@@ -8,7 +8,7 @@ import { NotSupportedScreen } from './screens/NotSupportedScreen';
 import { StaffDashboard } from './screens/StaffDashboard';
 
 export function App() {
-  const gate = usePlatformGate();
+  const { state: gate, retry } = usePlatformGate();
 
   switch (gate) {
     case 'checking':
@@ -21,6 +21,8 @@ export function App() {
       );
     case 'blocked':
       return <NotSupportedScreen />;
+    case 'unavailable':
+      return <NotSupportedScreen unreachable onRetry={retry} />;
     case 'allowed':
       // Session handling lives in its own component so it only mounts once the
       // device is actually allowed in — a blocked visitor should never probe

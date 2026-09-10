@@ -3,8 +3,18 @@ const { OAuth2Client } = require('google-auth-library');
 const Person = require('../models/Person');
 const settingsService = require('./settings.service');
 
-/** Thrown by `upsertGooglePerson` when a brand-new student email fails the domain check. */
-class EmailDomainRejectedError extends Error {}
+/**
+ * Thrown by `upsertGooglePerson` when a brand-new student email fails the domain
+ * check. Carries the configured domain so callers can name it rather than
+ * paraphrasing, and so the browser sign-in redirect can pass it on without
+ * re-parsing the message text.
+ */
+class EmailDomainRejectedError extends Error {
+  constructor(message, domain) {
+    super(message);
+    this.domain = domain;
+  }
+}
 
 /**
  * Shared Google identity logic for BOTH sign-in paths:
@@ -94,7 +104,7 @@ async function upsertGooglePerson({ email, googleSub }) {
     const settings = await settingsService.getSettings();
     const domain = String(settings.studentEmailDomain || '').trim().toLowerCase();
     if (domain && !emailNorm.endsWith(`@${domain}`)) {
-      throw new EmailDomainRejectedError(`Only @${domain} email addresses can sign in as a student`);
+      throw new EmailDomainRejectedError(`Only @${domain} email addresses can sign in as a student`, domain);
     }
     person = await Person.create({
       email: emailNorm,

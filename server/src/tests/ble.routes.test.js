@@ -350,7 +350,8 @@ describe('PATCH /api/admin/sessions/:id/broadcast', () => {
       .send({ on: true });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/not active/i);
+    expect(res.body.error).toMatch(/not collecting attendance yet/i);
+    expect(res.body.error).toMatch(/tap collect/i);
     expect(session.save).not.toHaveBeenCalled();
   });
 
@@ -369,7 +370,8 @@ describe('PATCH /api/admin/sessions/:id/broadcast', () => {
       .send({ on: true });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/course is disabled/i);
+    expect(res.body.error).toMatch(/archived/i);
+    expect(res.body.error).toMatch(/unarchive/i);
     expect(session.save).not.toHaveBeenCalled();
   });
 
@@ -415,7 +417,7 @@ describe('GET /api/admin/sessions/:id/broadcast', () => {
       .set(headers(lecturer));
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/not on/i);
+    expect(res.body.error).toMatch(/broadcast is not switched on/i);
   });
 
   test('200 — returns token, timing and attendance count, and stamps the heartbeat', async () => {

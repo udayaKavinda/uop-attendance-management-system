@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 function validateCourseId(courseId) {
   const id = String(courseId || '').trim();
   if (!id) return { ok: false, status: 400, error: 'courseId query parameter is required' };
-  if (!mongoose.isValidObjectId(id)) return { ok: false, status: 400, error: 'Invalid courseId' };
+  if (!mongoose.isValidObjectId(id)) return { ok: false, status: 400, error: 'courseId is not a valid id' };
   return { ok: true, courseId: id };
 }
 
@@ -51,7 +51,7 @@ function validateUnifiedAttendanceBody(body) {
   } = body || {};
   const id = String(courseId || '').trim();
   if (!mongoose.isValidObjectId(id)) {
-    return { ok: false, status: 400, error: 'Invalid courseId' };
+    return { ok: false, status: 400, error: 'courseId is not a valid id' };
   }
 
   const present = [token, fix, code].filter((v) => v !== undefined && v !== null).length;
@@ -71,7 +71,9 @@ function validateUnifiedAttendanceBody(body) {
   } else {
     const normalized = String(code || '').trim();
     if (!/^[0-9]{8}$/.test(normalized)) {
-      return { ok: false, status: 400, error: 'Invalid attendance code' };
+      // Shape, not correctness — a wrong-but-well-formed code is answered by
+      // "Incorrect code. Ask your lecturer to read it out again." further in.
+      return { ok: false, status: 400, error: 'The attendance code is 8 digits. Check what you typed and try again.' };
     }
     result.code = normalized;
   }
@@ -81,7 +83,7 @@ function validateUnifiedAttendanceBody(body) {
 function validateSessionIdQuery(sessionId) {
   const id = String(sessionId || '').trim();
   if (!id) return { ok: false, status: 400, error: 'sessionId query parameter is required' };
-  if (!mongoose.isValidObjectId(id)) return { ok: false, status: 400, error: 'Invalid sessionId' };
+  if (!mongoose.isValidObjectId(id)) return { ok: false, status: 400, error: 'sessionId is not a valid id' };
   return { ok: true, sessionId: id };
 }
 

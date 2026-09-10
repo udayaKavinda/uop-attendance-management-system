@@ -45,10 +45,16 @@ async function assertCourseAccess(person, isAdmin, courseId) {
   const course = await Course.findById(courseId);
   if (!course) return { ok: false, status: 404, message: 'Course not found' };
   if (isAdmin) return { ok: true, course };
-  if (person.role !== 'lecturer') return { ok: false, status: 403, message: 'Not allowed for this course' };
+  if (person.role !== 'lecturer') {
+    return { ok: false, status: 403, message: 'Only lecturers assigned to this course can manage it.' };
+  }
   const courseLecturerIds = Array.isArray(course.lecturers) ? course.lecturers.map((id) => String(id)) : [];
   if (!courseLecturerIds.includes(String(person._id))) {
-    return { ok: false, status: 403, message: 'Not allowed for this course' };
+    return {
+      ok: false,
+      status: 403,
+      message: 'You are not assigned to this course. Ask an administrator to add you as one of its lecturers.',
+    };
   }
   return { ok: true, course };
 }

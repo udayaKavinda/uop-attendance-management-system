@@ -284,6 +284,28 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Mirrors the server's scheduleWindowError(): name the window the lecturer
+     * missed. "…in its scheduled time window" alone gave no way to tell early
+     * from late from wrong-weekday, which are the only ways to land here.
+     */
+    private fun scheduleWindowMessage(sessionId: String): String {
+        val session = _state.value.sessions.firstOrNull { it.id == sessionId }
+        val start = session?.startTime
+        val end = session?.endTime
+        val when_ = when {
+            start == null || end == null -> null
+            session.recurring == false -> session.occurrenceDate?.let { "$it $start-$end" }
+            else -> session.lectureDay?.let { "$it $start-$end" }
+        }
+        return if (when_ == null) {
+            "Broadcast can only run while this session is in its scheduled time window."
+        } else {
+            "Broadcast can only run inside this session's scheduled time window ($when_), " +
+                "and it is outside that window right now."
+        }
+    }
+
     private fun sessionLabel(session: StaffSessionDto): String =
         listOfNotNull(
             session.course?.code,
@@ -434,7 +456,11 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
             )
             when (val res = repo.createSession(courseId, req)) {
                 is ApiResult.Success -> {
-                    setFlash("Session created.")
+                    // The server names the date it derived for a one-time session — the
+                    // form only takes a weekday, so "MON" can mean today or a week out,
+                    // and this is the lecturer's only chance to catch the wrong one.
+                    // Falls back to the generic line if the server predates the field.
+                    setFlash(res.data.message?.takeIf { it.isNotBlank() } ?: "Session created.")
                     refresh()
                 }
                 is ApiResult.Error -> setError(res.message)
@@ -542,7 +568,7 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if (!_state.value.isRunning(sessionId)) {
-            setError("Broadcast can only run while this session is in its scheduled time window.")
+            setError(scheduleWindowMessage(sessionId))
             return
         }
         val app = getApplication<Application>()

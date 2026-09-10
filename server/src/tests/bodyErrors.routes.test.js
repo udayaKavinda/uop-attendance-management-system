@@ -53,3 +53,65 @@ describe('request body errors', () => {
     expect(res.status).toHaveBeenCalledWith(500);
   });
 });
+
+/**
+ * These three used to answer "Invalid identifier" / "Invalid input" /
+ * "Duplicate value" — true, but with nothing a caller could act on. They now
+ * name the offending FIELD. They must never name the offending VALUE: field
+ * names come from our own schemas, values are caller-supplied and may be
+ * personal data.
+ */
+describe('respondError names the field, never the value', () => {
+  function capture(err) {
+    let body;
+    const res = {
+      status(code) { this.code = code; return this; },
+      json(payload) { body = { code: this.code, ...payload }; return this; },
+    };
+    respondError(res, err);
+    return body;
+  }
+
+  test('a CastError names the path that failed to cast', () => {
+    const out = capture(Object.assign(new Error('cast'), { name: 'CastError', path: 'courseId' }));
+    expect(out.code).toBe(400);
+    expect(out.error).toContain('courseId');
+  });
+
+  test('a ValidationError lists the invalid fields', () => {
+    const out = capture(Object.assign(new Error('v'), {
+      name: 'ValidationError',
+      errors: { code: {}, batch: {} },
+    }));
+    expect(out.code).toBe(400);
+    expect(out.error).toContain('code');
+    expect(out.error).toContain('batch');
+  });
+
+  test('a duplicate-key error names the fields but not their values', () => {
+    const out = capture(Object.assign(new Error('dup'), {
+      code: 11000,
+      keyValue: { code: 'CS101', batch: 'E23' },
+    }));
+    expect(out.code).toBe(409);
+    expect(out.error).toContain('code');
+    expect(out.error).toContain('batch');
+    expect(out.error).not.toContain('CS101');
+    expect(out.error).not.toContain('E23');
+  });
+
+  test('a field name that is not a plain schema path is dropped, not echoed', () => {
+    const out = capture(Object.assign(new Error('cast'), {
+      name: 'CastError',
+      path: '<script>alert(1)</script>',
+    }));
+    expect(out.code).toBe(400);
+    expect(out.error).not.toContain('script');
+  });
+
+  test('each branch still answers when the driver gives no field information', () => {
+    expect(capture(Object.assign(new Error('c'), { name: 'CastError' })).code).toBe(400);
+    expect(capture(Object.assign(new Error('v'), { name: 'ValidationError' })).code).toBe(400);
+    expect(capture(Object.assign(new Error('d'), { code: 11000 })).code).toBe(409);
+  });
+});

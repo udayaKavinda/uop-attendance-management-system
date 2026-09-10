@@ -126,11 +126,49 @@ depends on it.
   affects the others or the session's `active` state; only the heartbeat-staleness sweep
   or an explicit deactivate ends the channel for everyone.
 
+### The help code
+
+- Every session has an 8-digit code. The lecturer chooses only whether it rotates
+  (`manualCodeRotationMode`); the live value lives in `ManualCode` and exists only inside
+  the schedule window.
+- Rotation is **lazy**, exactly as it is for BLE tokens: the code changes on the first
+  call that finds it older than the interval, not on a timer. Nothing rotates while
+  nobody is asking.
+- The previous code stays valid for a 2-second grace (`GRACE_MS`) so a student who was
+  part-way through typing a code that rotated mid-entry is not punished for it.
+- **The grace applies only when the rotation was due, never when it was overdue.**
+  `verifyCode` calls `getOrRotateCode`, so a submission can itself be the call that
+  performs an overdue rotation. That stamps `generatedAt: now`, which made the code it
+  had just demoted to `prevCode` measure 0 ms old and pass the grace check no matter how
+  long it had actually been live — a code read out ten minutes earlier was still
+  accepted. It reproduced only when nothing else polled in between, i.e. the lecturer's
+  dashboard was closed or the phone asleep; with the dashboard open, rotation happened on
+  schedule and the same submission was correctly rejected. `getOrRotateCode` now drops
+  `prevCode` when the rotation is overdue by more than the grace.
+- The equivalent BLE path is not affected: `verifyToken` reads the token pool without
+  rotating it, so its `generatedAt` always reflects a real rotation.
+- Found by the multi-week usage simulation, not by unit tests — the unit tests build the
+  `ManualCode` document directly, so the rotate-during-verify path never ran.
+
 ### One-time sessions
 
 Weekly sessions have `recurring: true`. A one-time session receives an explicit local
 `occurrenceDate` (`YYYY-MM-DD`) for the next selected weekday. It cannot run again on a
 later week; expired one-time sessions must be recreated.
+
+Once its occurrence has passed, a one-time session is dropped from the staff session list
+(`GET /api/admin/sessions`) — it can never collect again, so the card is unusable. The row
+is not deleted: it still labels its own columns in the attendance matrix and the .xlsx
+export, which resolve sessions by id per-course rather than through that list. A row that
+is *malformed* rather than spent (missing `recurring`, or one-time with no `occurrenceDate`)
+stays listed on purpose, so a data problem is visible instead of silently erased.
+
+Because the create form takes a *weekday* and the server derives the date, the create
+response carries a `message` naming the date it chose — "One-time session created for
+today (Mon 14 Sep), 10:00-12:00", or without the "today" when it rolled to the next
+occurrence. Identical taps produce different dates either side of `endTime`, and this is
+the only point at which a lecturer can catch the wrong one; both clients display it and
+fall back to a generic line if it is absent.
 
 Times are strictly validated as zero-padded 24-hour `HH:mm` values.
 
@@ -230,8 +268,9 @@ than freezing on the first submission. Which bands write a row at all is specifi
   students accepted in the same instant all read a count under the cap and all minted,
   measured at 28 seeders against a `seedRate` of 5 — which widened the effective BLE
   radius that "hearing the beacon proves you are in the room" depends on.
-- `ManualCode`: `session`, `code`, `prevCode` (accepted for 2 s after an automatic
-  rotation, and left null after a forced regenerate so the old code dies at once),
+- `ManualCode`: `session`, `code`, `prevCode` (accepted for 2 s after an *on-time*
+  automatic rotation, left null after a forced regenerate so the old code dies at
+  once, and also left null when the rotation was overdue — see **The help code**),
   `generatedAt`, and `paused`. Deliberately not merged into the BLE token pool —
   different entropy, different lifecycle. Every session has one.
 - `Settings` stores the Bluetooth kill switch, the two distance buffers, the
@@ -251,6 +290,24 @@ is accepted — the guard tests for presence, not content (Android sends
 form POST is that HTML forms cannot set the header at all. `student`, `staff`, and
 `admin` below refer to server-derived session roles, never trusted client headers.
 
+Every rejection carries a human-readable reason in `{ "error": "..." }` (the auth guards
+use `message`; both clients read either). Staff-facing rejections are written to name the
+cause **and** the remedy, because the client renders them verbatim into the error banner
+with nothing else to go on — so "This session overlaps with an existing session" became
+`10:00-12:00 clashes with this course's existing MON session at 09:00-11:00 (weekly).
+Pick a time outside that range, or delete the other session first.` The same applies to
+archived courses (named, with "unarchive it from the Courses tab"), out-of-window Collect
+and broadcast attempts (the window itself is quoted back), and buildings that have since
+been deleted. Do not reintroduce bare states like `Course is disabled` — a lecturer
+cannot act on one.
+
+`middlewares/errorHandler.js` applies the same rule to the errors Mongoose raises rather
+than the routes: a `CastError`, a `ValidationError` and a duplicate-key 11000 all name the
+**field** involved. They must never name the **value** — field names come from our own
+schemas and are safe to echo, whereas the offending value is caller-supplied and may be
+personal data. `fieldNames()` drops anything that is not a plain schema path, so nothing
+unexpected can be reflected back; `bodyErrors.routes.test.js` pins both halves.
+
 ### Authentication and public routes
 
 | Method | Path | Access | Purpose |
@@ -258,7 +315,7 @@ form POST is that HTML forms cannot set the header at all. `student`, `staff`, a
 | GET | `/api/auth/google-nonce` | public/rate-limited | nonce for native sign-in |
 | POST | `/api/auth/google-id-token` | public/rate-limited | verify Google ID token and create session |
 | GET | `/auth/google` | public/rate-limited | browser OAuth fallback |
-| GET | `/auth/google/callback` | public/rate-limited | OAuth callback |
+| GET | `/auth/google/callback` | public/rate-limited | OAuth callback. On success redirects to `/login/success`; on failure to `/?error=<code>` where `<code>` is one of `domain` (plus `&domain=<host>`), `no_email`, `session`, or `auth`. Codes, never `err.message` — this lands in a URL and the message can carry driver internals. Both clients map the codes to copy (`signInFailureMessage` in web, `oauthReturnFrom` on Android); keep the three in step |
 | POST | `/api/auth/exchange-code` | public/rate-limited | consume native fallback exchange code |
 | GET | `/api/me` | authenticated | current account and role |
 | POST | `/api/logout` | public | destroy session — deliberately ungated, so it is idempotent and can never fail; with no session it is a no-op returning `{ success: true }`. The CSRF header is still required. |
@@ -320,7 +377,7 @@ Base path: `/api/admin/courses`.
 | `POST /` | staff | create a course — `batches: string[]` creates one Course document per batch |
 | `PATCH /:courseId/assign-lecturer` | owner/admin | wholesale reassignment — set any number of owners (add or remove); a lecturer may only do this on a course they already own |
 | `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course — this is also what "delete" means; no destructive delete exists |
-| `POST /:courseId/sessions` | owner/admin | atomically create schedule, buildings (≥1, required), and code rotation |
+| `POST /:courseId/sessions` | owner/admin | atomically create schedule, buildings (≥1, required), and code rotation Responds `{ success, session, message }`, where `message` names the date the server derived (see One-time sessions) |
 | `GET /:courseId/attendance-matrix` | owner/admin | per-student `present` / `flagged` / absent matrix (JSON), bare status only — no `reason` |
 | `GET /:courseId/attendance-matrix.xlsx` | owner/admin | the same matrix as a downloadable Excel file — every record is `P` (absent is `-`, never blank); `flagged` cells are additionally red-filled with the reason as a cell comment |
 
@@ -338,7 +395,7 @@ Base path: `/api/admin/sessions` (owner/admin session guard applies).
 
 | Method/path | Purpose |
 |---|---|
-| `GET /?page=&limit=` | list accessible sessions, soonest/currently-running first. Omitting `limit` returns everything; passing it pages (`{ items, total, page, limit, hasMore }`) |
+| `GET /?page=&limit=` | list accessible sessions, soonest/currently-running first. Spent one-time sessions (occurrence passed) are omitted, as are sessions belonging to an **archived course** (`course.active === false`) — `disableCourse` already deactivates them and `activate` refuses to bring them back, so they can only ever be dead cards; unarchiving the course restores them. `total`/`hasMore` count the visible set. Omitting `limit` returns everything; passing it pages (`{ items, total, page, limit, hasMore }`) |
 | `GET /running` | sessions whose scheduled window is open right now, **not** filtered by `active` — `{ sessionId, active, broadcasting }` per entry, refreshed on a faster cadence than the full list so a client can tell Within-session apart from Collecting without a full reload |
 | `PATCH /:sessionId/activate` / `deactivate` | "Collect"/"Join" and "Deactivate" client-side — `activate` requires being inside the session's own window right now (see LectureSession above) |
 | `DELETE /:sessionId` | soft-delete and revoke secrets |
@@ -460,7 +517,9 @@ Streaming GPS fixes can no longer consume the code budget.
 - Out-of-window lecturer-code removal (every session, since every session has a code).
 - Expired seed-token cleanup (verification independently checks leases).
 - Expired attempt-verdict sweep (10-minute TTL).
-- Short active-session cache invalidated on relevant staff mutations.
+- Short active-session cache invalidated on relevant staff mutations, and re-checked
+  against the schedule window on every hit — the entry is an admission decision, so
+  age alone must not keep it valid past `endTime`.
 - OAuth exchange/nonces, GPS attempt fixes, and attempt verdicts are in-memory and
   therefore assume a single Node process; use a shared store before
   horizontal scaling.
@@ -471,7 +530,28 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-359 tests across 26 suites, covering authentication, route access, BLE rotation and
+451 tests across 30 suites. 425 of those run with every Mongoose model mocked and need
+no database. The remaining suite, `dbIntegration.test.js`, talks to a real MongoDB —
+schema defaults, validators, `populate` and unique indexes cannot be verified by mocking
+the layer that implements them.
+
+It needs no setup: `jest.globalSetup.js` probes `mongodb://127.0.0.1:27017` before the
+run and, if a mongod answers, points the suite at the **`uop_attendance_test`** database.
+With no local mongod the suite skips itself and the other 29 run as normal, so a machine
+or CI runner without a database still goes green. Set `MONGO_TEST_URI` to override the
+target.
+
+That database is **dropped** before and after the run. The name is hard-coded and never
+derived from `MONGO_URI`, and the suite refuses to start if it is pointed at the database
+the application itself uses — an accidental `MONGO_TEST_URI=.../attendance` fails loudly
+instead of destroying local data. It
+covers the persisted `active: false` on create, the one-time `occurrenceDate` required
+validator, the `buildings` minimum, the unique `(code, batch)` course index, one-time
+date resolution either side of `endTime`, overlap detection, the staff list's hiding and
+lecturer scoping through real `populate`, both expiry sweeps, soft delete, student-facing
+course resolution, and the unique `(student, session, attendanceDate)` attendance index.
+
+The mocked suites cover authentication, route access, BLE rotation and
 broadcasting (including the previous-token grace vs. the broadcaster poll interval),
 seeder slot claiming and the cap under contention, distance banding at the exact buffer
 boundary, accuracy-unknown normalisation, outlier trimming, the code-escalation outcomes
@@ -493,11 +573,16 @@ student email-domain gate on brand-new Google sign-ins (rejects outside the conf
 domain, passes existing accounts through regardless, and the empty-domain "gate off" case),
 `GET /api/app-version`'s `minSupportedVersionCode` passthrough, `GET /api/healthz` actually
 reflecting live Mongo connectivity (503 when disconnected — the automated deploy rollback
-depends on this being honest), the Collect/`activateSession` schedule-window gate, the
+depends on this being honest), the Collect/`activateSession` schedule-window gate, the help code's rotation grace refusing to revive an overdue code (see **The help code** above), the
 recurring-session window-close sweep forcing a fresh Collect tap each week, and
 `sessionSortRank`'s "is this session's day today" check (a real regression shipped once
 before — a wrong-weekday session tied for rank 0 whenever its time-of-day window happened
-to overlap the current clock time; fixed, and now has a regression test). Keep Android and
+to overlap the current clock time; fixed, and now has a regression test), `listAllForStaff`
+hiding spent one-time sessions (which, ranked by their past date, had sorted ahead of every
+upcoming session) while keeping malformed rows visible, and the active-session cache
+refusing to serve an admission whose window has closed, and the create response's
+`message` naming the derived one-time date (including the ICU-independent date rendering
+and the malformed-date fallback). Keep Android and
 server contract tests aligned whenever a response changes.
 
 Not yet covered by a dedicated test: multi-batch course creation, the lecturer-owner path

@@ -16,7 +16,7 @@ function isRunning(sessionItem) {
 
 const MIN_ROTATION_SECONDS = 10;
 const MAX_ROTATION_SECONDS = 3600;
-const GRACE_MS = 2000; // accept the previous code for 2s after an automatic rotation
+const GRACE_MS = 2000; // previous code stays valid 2s after an ON-TIME rotation
 
 /** Cryptographically secure 8-digit numeric code, zero-padded (e.g. "00417293"). */
 function generateCode() {
@@ -94,9 +94,26 @@ async function getOrRotateCode(sessionItem) {
     return toState(doc, sessionItem, now);
   }
 
+  // Rotation is lazy: it happens on the first call that finds the code stale, and
+  // `verifyCode` is one of those callers. That makes the grace window dangerous to
+  // grant unconditionally — a rotation triggered by the submission itself stamps
+  // `generatedAt: now`, so `now - generatedAt` is ~0 and the code just demoted to
+  // `prevCode` looked 0 ms old no matter how long it had really been live. With the
+  // lecturer's dashboard closed (phone asleep, app backgrounded) nothing polled, so
+  // nothing rotated, and a code read out ten minutes earlier was still accepted.
+  //
+  // The grace exists for one case only: a student who was reading the code aloud at
+  // the instant it rotated on schedule. That is the case where the rotation is due
+  // now, not overdue. If it is overdue by more than the grace, the previous code's
+  // own grace has long since expired in real time and it must not be revived.
+  const overdueBy = (now - doc.generatedAt) - intervalMs;
   doc = await Model.findOneAndUpdate(
     { session: key },
-    { code: generateCode(), prevCode: doc.code, generatedAt: now },
+    {
+      code: generateCode(),
+      prevCode: overdueBy <= GRACE_MS ? doc.code : null,
+      generatedAt: now,
+    },
     { new: true },
   );
   return toState(doc, sessionItem, now);

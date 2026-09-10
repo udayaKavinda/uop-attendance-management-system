@@ -197,6 +197,20 @@ A session has no verification field. What the lecturer chooses is:
 - **Code rotation** — whether the 8-digit code rotates on an interval, and how fast.
   The code itself always exists; there is no enable switch.
 
+  Rotation is *lazy*: the code changes on the first call that finds it stale, not on a
+  timer, so nothing rotates while nobody is asking. That is fine on its own — but
+  `verifyCode` is one of those callers, which means a student's submission can be the
+  call that performs an overdue rotation. Because the previous code is accepted for a
+  2-second grace measured from the rotation, a rotation triggered by the submission
+  made the code it had just retired look 0 ms old, and a code read out ten minutes
+  earlier was accepted. This only happened when nothing else polled in between — the
+  lecturer's dashboard closed, or their phone asleep. The grace is now granted only
+  when the rotation was due, never when it was overdue.
+
+  The lesson generalises: any grace window measured from a lazily-updated timestamp is
+  only meaningful if the update happened when it was supposed to. The BLE path avoids
+  this by construction — `verifyToken` reads the token pool without rotating it.
+
 ## Flagged records
 
 *What* a flagged record is, and where it surfaces, is specified in
@@ -267,7 +281,9 @@ service capped it at 5 tries / 5 minutes before a 2-minute lockout
 (`manualCode.service.js`'s `verifyAttempt`), but that has been removed entirely; only
 `verifyCode` remains, a pure code check with no attempt state. Brute-forcing an 8-digit
 code (100 million possibilities) inside a session's schedule window remains the practical
-mitigation, alongside code rotation.
+mitigation, alongside code rotation — which is only a mitigation while rotation actually
+retires the old value; see the rotation note under Session configuration for the case
+where it did not.
 
 The code path does, however, carry its **own** rate limit now (10/min per student),
 separate from the 180/min budget every attendance submission shares. The two were one

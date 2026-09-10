@@ -20,6 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import lk.ac.pdn.eng.feats.BuildConfig
 import lk.ac.pdn.eng.feats.ui.auth.LoginScreen
 import lk.ac.pdn.eng.feats.ui.auth.MainViewModel
+import lk.ac.pdn.eng.feats.ui.auth.OAuthReturn
 import lk.ac.pdn.eng.feats.ui.auth.SessionState
 import lk.ac.pdn.eng.feats.ui.components.LoadingGate
 import lk.ac.pdn.eng.feats.ui.components.UpdateRequiredScreen
@@ -29,8 +30,8 @@ import lk.ac.pdn.eng.feats.ui.student.LectureEntryScreen
 
 @Composable
 fun AppRoot(
-    oauthCode: String?,
-    onCodeConsumed: () -> Unit,
+    oauthReturn: OAuthReturn?,
+    onOAuthReturnConsumed: () -> Unit,
     mainVm: MainViewModel = viewModel(),
 ) {
     val session by mainVm.session.collectAsState()
@@ -38,10 +39,19 @@ fun AppRoot(
     val authError by mainVm.authError.collectAsState()
     val updateRequired by mainVm.updateRequired.collectAsState()
 
-    LaunchedEffect(oauthCode) {
-        if (oauthCode != null) {
-            mainVm.onOAuthCode(oauthCode)
-            onCodeConsumed()
+    LaunchedEffect(oauthReturn) {
+        when (oauthReturn) {
+            is OAuthReturn.Code -> {
+                mainVm.onOAuthCode(oauthReturn.value)
+                onOAuthReturnConsumed()
+            }
+            // The browser flow can only report a rejection through the link itself,
+            // so this arm is the only place the user ever hears about it.
+            is OAuthReturn.Failure -> {
+                mainVm.showAuthError(oauthReturn.message)
+                onOAuthReturnConsumed()
+            }
+            null -> Unit
         }
     }
 

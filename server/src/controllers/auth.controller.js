@@ -2,6 +2,7 @@ const passport = require('passport');
 const Person = require('../models/Person');
 const oauthService = require('../services/oauth.service');
 const googleIdentityService = require('../services/googleIdentity.service');
+const { EmailDomainRejectedError } = googleIdentityService;
 const { validateExchangeCode, validateGoogleIdToken } = require('../validators/oauth.validator');
 const { respondError } = require('../middlewares/errorHandler');
 
@@ -40,15 +41,39 @@ function nativeReturn(req, res) {
   res.send(oauthService.buildNativeReturnHtml(parsed));
 }
 
+/** Hostname shape only — never let anything else reach a redirect URL. */
+const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+
+/**
+ * The browser sign-in flow can only answer with a redirect, so a rejection used
+ * to arrive as a bare `?error=auth` and both clients rendered "Sign-in failed.
+ * Please try again." — actively wrong for the commonest cause, a non-university
+ * address, where retrying can never succeed. (The native ID-token path has
+ * always returned the real reason, so the two sign-in routes disagreed.)
+ *
+ * A fixed set of codes, never the raw message: `err.message` can carry driver
+ * or provider internals, and this value lands in a URL.
+ */
+function oauthFailureQuery(err) {
+  if (err instanceof EmailDomainRejectedError) {
+    const domain = String(err.domain || '');
+    return DOMAIN_RE.test(domain)
+      ? `/?error=domain&domain=${encodeURIComponent(domain.toLowerCase())}`
+      : '/?error=domain';
+  }
+  if (err && /no email/i.test(String(err.message || ''))) return '/?error=no_email';
+  return '/?error=auth';
+}
+
 function googleCallback(req, res, next) {
   const returnBase = String(req.session.oauthReturnBase || oauthService.defaultAppOrigin()).replace(/\/$/, '');
   passport.authenticate('google', (err, user) => {
     if (err || !user) {
-      return oauthService.redirectAfterOAuth(res, returnBase, '/?error=auth', null);
+      return oauthService.redirectAfterOAuth(res, returnBase, oauthFailureQuery(err), null);
     }
     req.logIn(user, (loginErr) => {
       if (loginErr) {
-        return oauthService.redirectAfterOAuth(res, returnBase, '/?error=auth', null);
+        return oauthService.redirectAfterOAuth(res, returnBase, '/?error=session', null);
       }
       delete req.session.oauthReturnBase;
       return oauthService.redirectAfterOAuth(res, returnBase, '/login/success', user._id);
@@ -60,11 +85,15 @@ async function exchangeCode(req, res) {
   const validated = validateExchangeCode(req.body);
   if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
   const userId = oauthService.consumeOAuthExchangeCode(validated.code);
-  if (!userId) return res.status(401).json({ error: 'Invalid or expired code' });
+  if (!userId) {
+    return res.status(401).json({
+      error: 'This sign-in link has already been used or has expired. Start signing in again.',
+    });
+  }
   const person = await Person.findById(userId);
   if (!person) return res.status(401).json({ error: 'User not found' });
   req.logIn(person, (err) => {
-    if (err) return res.status(500).json({ error: 'Session error' });
+    if (err) return res.status(500).json({ error: 'Signed in, but the session could not be created. Please try again.' });
     return res.json({ success: true });
   });
 }
@@ -96,7 +125,7 @@ async function googleIdToken(req, res) {
   if (!result.ok) return res.status(result.status).json({ error: result.error });
 
   req.logIn(result.person, (err) => {
-    if (err) return res.status(500).json({ error: 'Session error' });
+    if (err) return res.status(500).json({ error: 'Signed in, but the session could not be created. Please try again.' });
     return res.json({ success: true });
   });
 }
@@ -128,4 +157,7 @@ module.exports = {
   googleIdToken,
   me,
   logout,
+  // Exported for tests: a pure mapper, and the only thing standing between a
+  // rejected browser sign-in and a user who is told nothing useful.
+  oauthFailureQuery,
 };

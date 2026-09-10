@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { validateSessionCreateBody } = require('../validators/session.validator');
+const { validateSessionCreateBody, checkSessionOverlap } = require('../validators/session.validator');
 
 function validId() {
   return new mongoose.Types.ObjectId().toHexString();
@@ -121,5 +121,54 @@ describe('validateSessionCreateBody', () => {
       expect(result.ok).toBe(true);
       expect(result.manualCodeEnabled).toBeUndefined();
     });
+  });
+});
+
+
+/**
+ * A rejected session used to say only "This session overlaps with an existing
+ * session for the same course", which on Android arrived as a bare
+ * "Request failed (400)". The message now has to carry enough for a lecturer to
+ * fix it without opening the sessions list: which slot is in the way, and what
+ * to do about it.
+ */
+describe('checkSessionOverlap — the message names the clashing session', () => {
+  function fakeModel(sessions) {
+    return { find: jest.fn().mockResolvedValue(sessions) };
+  }
+
+  it('reports the clashing weekly session by day and time', async () => {
+    const model = fakeModel([
+      { lectureDay: 'MON', startTime: '09:00', endTime: '11:00', recurring: true },
+    ]);
+    const result = await checkSessionOverlap(model, 'course-1', 'MON', '10:00', '12:00');
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(400);
+    expect(result.error).toContain('10:00-12:00');
+    expect(result.error).toContain('09:00-11:00');
+    expect(result.error).toContain('MON');
+    expect(result.error).toMatch(/weekly/i);
+    expect(result.error).toMatch(/delete the other session/i);
+  });
+
+  it('reports a clashing one-time session with its date', async () => {
+    const model = fakeModel([
+      {
+        lectureDay: 'MON', startTime: '09:00', endTime: '11:00', recurring: false, occurrenceDate: '2099-01-05',
+      },
+    ]);
+    const result = await checkSessionOverlap(model, 'course-1', 'MON', '10:00', '12:00');
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('2099-01-05');
+    expect(result.error).toMatch(/one-time/i);
+  });
+
+  it('passes when the new slot butts up against an existing one without overlapping', async () => {
+    const model = fakeModel([
+      { lectureDay: 'MON', startTime: '09:00', endTime: '11:00', recurring: true },
+    ]);
+    expect(await checkSessionOverlap(model, 'course-1', 'MON', '11:00', '12:00')).toEqual({ ok: true });
   });
 });

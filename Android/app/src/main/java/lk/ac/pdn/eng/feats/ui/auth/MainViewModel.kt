@@ -132,6 +132,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Browser fallback (Custom Tab OAuth) ─────────────────────────────────────
 
+    /**
+     * Shows a sign-in failure the browser flow reported through the deep link
+     * itself, where there is no ApiResult to carry a message.
+     */
+    fun showAuthError(message: String) {
+        _authError.value = message
+        _authBusy.value = false
+    }
+
     /** Handles the deep-link `code` returned by the native OAuth redirect. */
     fun onOAuthCode(code: String) {
         if (_authBusy.value) return

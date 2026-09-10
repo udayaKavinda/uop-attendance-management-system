@@ -10,9 +10,11 @@ const {
 } = require('../validators/session.validator');
 const { staffSessionMatch } = require('./auth.service');
 const { localYmd } = require('../utils/date');
-const { DAY_INDEX, toMinutes, nextOccurrenceDate } = require('../utils/schedule');
 const {
-  BROADCAST_WINDOW_ERROR,
+  DAY_INDEX, toMinutes, nextOccurrenceDate, isNonRecurringExpired,
+} = require('../utils/schedule');
+const {
+  scheduleWindowError,
   invalidateActiveSessionCache,
   isWithinScheduleWindow,
   isScheduledNow,
@@ -21,7 +23,14 @@ const {
 async function createSession(course, body) {
   const validated = validateSessionCreateBody(body);
   if (!validated.ok) return validated;
-  if (!course.active) return { ok: false, status: 409, error: 'Cannot add sessions to a disabled course' };
+  if (!course.active) {
+    return {
+      ok: false,
+      status: 409,
+      error: `${course.code || 'This course'} is archived, so it cannot take new sessions. `
+        + 'Unarchive it from the Courses tab first.',
+    };
+  }
   const overlap = await checkSessionOverlap(
     LectureSession,
     course._id,
@@ -37,7 +46,12 @@ async function createSession(course, body) {
     active: true,
   });
   if (found !== validated.buildings.length) {
-    return { ok: false, status: 400, error: 'One or more buildings were not found' };
+    return {
+      ok: false,
+      status: 400,
+      error: 'One or more of the selected buildings no longer exist or have been deactivated. '
+        + 'Reopen the building list and pick them again.',
+    };
   }
 
   const created = await LectureSession.create({
@@ -88,16 +102,33 @@ async function activateSession(sessionItem) {
   const course = sessionItem.populated && sessionItem.populated('course')
     ? sessionItem.course
     : await Course.findById(sessionItem.course);
-  if (!course?.active) return { ok: false, status: 400, error: 'Course is disabled' };
+  if (!course?.active) {
+    return {
+      ok: false,
+      status: 400,
+      error: `${course?.code || 'This course'} is archived, so its sessions cannot collect attendance. `
+        + 'Unarchive the course from the Courses tab first.',
+    };
+  }
   if (typeof sessionItem.recurring !== 'boolean'
     || (sessionItem.recurring === false && !sessionItem.occurrenceDate)) {
-    return { ok: false, status: 409, error: 'Session data does not match the current schema.' };
+    return {
+      ok: false,
+      status: 409,
+      error: 'This session was saved by an older version of the app and is missing its '
+        + 'weekly/one-time setting. Delete it and create it again.',
+    };
   }
   if (sessionItem.recurring === false && sessionItem.occurrenceDate < localYmd()) {
-    return { ok: false, status: 400, error: 'This one-time session has expired; create a new session.' };
+    return {
+      ok: false,
+      status: 400,
+      error: `This one-time session was scheduled for ${sessionItem.occurrenceDate} and has passed. `
+        + 'Create a new session for today, or make it weekly.',
+    };
   }
   if (!isScheduledNow(sessionItem)) {
-    return { ok: false, status: 400, error: BROADCAST_WINDOW_ERROR };
+    return { ok: false, status: 400, error: scheduleWindowError(sessionItem, 'Collecting attendance') };
   }
   sessionItem.active = true;
   await sessionItem.save();
@@ -165,7 +196,40 @@ async function listAllForStaff(auth, pagination) {
   const sessions = await LectureSession.find({ deleted: false, ...scope })
     .populate('course', 'code name active batch lecturers');
   const now = new Date();
-  const sorted = sessions
+
+  // Archiving a course makes every one of its sessions inert: disableCourse()
+  // already deactivates them, drops their broadcasts and deletes their manual
+  // codes, and activateSession() refuses to bring one back while the course is
+  // archived. So these cards were listed only to be permanently unusable — pure
+  // clutter that also pushed live sessions further down the first page. Nothing
+  // is deleted; unarchiving the course brings them straight back. A session
+  // whose course failed to populate (a dangling ref) is kept rather than
+  // silently hidden, so a data problem stays visible instead of erasing rows.
+  //
+  // A one-time session that has had its occurrence is hidden for the same reason:
+  // it can never run again (activateSession refuses it outright), so its card is
+  // permanently unusable clutter. Worse than clutter, in fact — ranked by its own
+  // past date it sorted AHEAD of every upcoming session, because a past date is a
+  // smaller epoch key than any future one and the sort is ascending, so every
+  // one-time session a lecturer had ever run piled up at the head of the list.
+  // Nothing is deleted: the row stays in the database and still labels its own
+  // columns in the attendance matrix and the .xlsx export, both of which resolve
+  // sessions by id and are reached per-course, not through this list.
+  //
+  // Deliberately stricter than the expiry sweep's `isNonRecurringExpired`, which
+  // also reports true for a row missing `recurring`/`occurrenceDate` entirely.
+  // That is right for the sweep (fail closed, deactivate it) and wrong here: such
+  // a row is a data problem, and hiding it would erase the only evidence a
+  // lecturer ever gets that one of their sessions is unusable.
+  const isSpentOneTime = (s) => s.recurring === false
+    && Boolean(s.occurrenceDate)
+    && isNonRecurringExpired(s, now);
+
+  const visible = sessions.filter(
+    (s) => !(s.course && s.course.active === false) && !isSpentOneTime(s),
+  );
+
+  const sorted = visible
     .map((s) => ({ s, rank: sessionSortRank(s, now) }))
     .sort((a, b) => a.rank - b.rank)
     .map(({ s }) => s);
@@ -191,20 +255,29 @@ async function resolveCourseForSession(sessionItem) {
 /** Whether a broadcast may be started or kept alive right now (active, course on, in window). */
 async function assertCanBroadcastNow(sessionItem, now = new Date()) {
   if (!sessionItem || sessionItem.deleted) {
-    return { ok: false, status: 400, error: 'Session not found' };
+    return { ok: false, status: 400, error: 'This session has been deleted.' };
   }
   if (!sessionItem.active) {
-    return { ok: false, status: 400, error: 'Session is not active' };
+    return {
+      ok: false,
+      status: 400,
+      error: 'This session is not collecting attendance yet. Tap Collect on the session card first.',
+    };
   }
   if (!await settingsService.isBleEnabled()) {
     return { ok: false, status: 403, error: 'Bluetooth is switched off by the administrator.' };
   }
   const course = await resolveCourseForSession(sessionItem);
   if (!course?.active) {
-    return { ok: false, status: 400, error: 'Course is disabled' };
+    return {
+      ok: false,
+      status: 400,
+      error: `${course?.code || 'This course'} is archived, so its sessions cannot broadcast. `
+        + 'Unarchive the course from the Courses tab first.',
+    };
   }
   if (!isWithinScheduleWindow(sessionItem, now)) {
-    return { ok: false, status: 400, error: BROADCAST_WINDOW_ERROR };
+    return { ok: false, status: 400, error: scheduleWindowError(sessionItem) };
   }
   return { ok: true, course };
 }
@@ -246,7 +319,11 @@ async function setBroadcasting(sessionItem, on) {
  */
 async function getBroadcast(sessionItem) {
   if (!sessionItem.broadcasting) {
-    return { ok: false, status: 400, error: 'Broadcast is not on for this session' };
+    return {
+      ok: false,
+      status: 400,
+      error: 'Bluetooth broadcast is not switched on for this session.',
+    };
   }
   const gate = await assertCanBroadcastNow(sessionItem);
   if (!gate.ok) {

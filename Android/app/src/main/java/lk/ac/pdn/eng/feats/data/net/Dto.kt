@@ -167,7 +167,16 @@ data class StaffSessionsRes(
     val hasMore: Boolean? = null,
 )
 
-data class SessionRes(val success: Boolean? = null, val session: SessionDto? = null)
+/**
+ * `message` is the server's confirmation copy for a just-created session, naming the
+ * date it derived for a one-time one. Nullable so an older server that does not send
+ * it still parses — the caller falls back to its own generic line.
+ */
+data class SessionRes(
+    val success: Boolean? = null,
+    val session: SessionDto? = null,
+    val message: String? = null,
+)
 
 data class CreateSessionReq(
     val lectureDay: String,

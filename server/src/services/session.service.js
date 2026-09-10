@@ -58,6 +58,29 @@ function checkScheduleWindow(sessionConfig) {
 const BROADCAST_WINDOW_ERROR =
   'Broadcast can only run while this session is in its scheduled time window.';
 
+/** "THU 08:00-10:00" for a weekly session, "2026-09-09 08:00-10:00" for a one-time one. */
+function describeScheduleWindow(sessionItem) {
+  const { lectureDay, startTime, endTime, recurring, occurrenceDate } = sessionItem || {};
+  if (!startTime || !endTime) return null;
+  if (recurring === false) {
+    return occurrenceDate ? `${occurrenceDate} ${startTime}-${endTime}` : null;
+  }
+  return lectureDay ? `${lectureDay} ${startTime}-${endTime}` : null;
+}
+
+/**
+ * The same rejection, but naming the window the caller missed. "Broadcast can
+ * only run while this session is in its scheduled time window" left a lecturer
+ * with no way to tell whether they were early, late, or on the wrong weekday
+ * entirely — the three cases that actually produce this error.
+ */
+function scheduleWindowError(sessionItem, action = 'Broadcast') {
+  const when = describeScheduleWindow(sessionItem);
+  if (!when) return BROADCAST_WINDOW_ERROR;
+  return `${action} can only run inside this session's scheduled time window (${when}), `
+    + 'and it is outside that window right now.';
+}
+
 /**
  * True iff the session's broadcast channel is open, inside its schedule window,
  * and its heartbeat is fresh. Read-time checks let students and polls fail fast
@@ -82,12 +105,28 @@ function invalidateActiveSessionCache(courseId) {
 async function resolveActiveSessionForCourse(courseId) {
   const cacheKey = String(courseId);
   const cached = _sessionResolveCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < SESSION_RESOLVE_CACHE_TTL_MS) {
+  // Only a live window may be served from cache. The TTL alone was not enough:
+  // the entry is a resolved *admission*, so between endTime and the entry
+  // expiring, a check-in tapped after the lecture ended was still admitted. The
+  // window is re-evaluated against the clock on every hit — it is a pure
+  // in-memory comparison, so this costs nothing the cache was there to save
+  // (the Course + LectureSession reads are still skipped).
+  if (cached && Date.now() - cached.ts < SESSION_RESOLVE_CACHE_TTL_MS
+    && isWithinScheduleWindow(cached.value.session)) {
     return cached.value;
   }
 
   const course = await Course.findById(courseId);
-  if (!course || !course.active) return { error: 'Invalid course' };
+  // Reached by a student tapping check-in, so it says what happened to the course
+  // rather than blaming the request. These are different situations and used to
+  // share one bare "Invalid course".
+  if (!course) return { error: 'That course no longer exists.' };
+  if (!course.active) {
+    return {
+      error: `${course.code || 'This course'} has been archived by its lecturer, `
+        + 'so attendance is no longer collected for it.',
+    };
+  }
   const { day } = getCurrentScheduleContext();
   const sessions = await LectureSession.find({
     course: course._id,
@@ -160,6 +199,7 @@ async function getRunningSessionsForStaff(scope, now = new Date()) {
 
 module.exports = {
   BROADCAST_WINDOW_ERROR,
+  scheduleWindowError,
   isWithinScheduleWindow,
   isScheduledNow,
   checkScheduleWindow,

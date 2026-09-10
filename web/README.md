@@ -102,7 +102,10 @@ The client reads it from the public `GET /api/web-config` (see `usePlatformGate`
 has to be unauthenticated because the decision happens before sign-in. iOS never waits on
 that request — the common case is not gated behind a possibly-slow round trip — and for
 everyone else the request **fails closed**, so a flaky connection can never silently open
-the client up.
+the client up. Failing closed is not the same as guessing why, though: a failed check is
+its own `unavailable` state that says the check did not complete and offers a retry. It
+must not fall through to the "use the Android app" notice, which for a device the admin
+had actually permitted is simply untrue and leaves no way forward.
 
 It is a UX gate, not a security control: it reads the user agent, which anyone can spoof.
 It changes what ordinary users experience, not what is possible — and it does not need to

@@ -5,6 +5,7 @@ const attendanceService = require('../../services/attendance.service');
 const attendanceExportService = require('../../services/attendanceExport.service');
 const { validateCreateCourseBody } = require('../../validators/course.validator');
 const { parsePagination } = require('../../utils/pagination');
+const { sessionCreatedMessage } = require('../../utils/sessionLabels');
 
 async function list(req, res) {
   const pagination = parsePagination(req.query);
@@ -54,7 +55,13 @@ async function assignLecturer(req, res) {
 async function createSession(req, res) {
   const result = await lectureSessionService.createSession(req.course, req.body);
   if (!result.ok) return res.status(result.status).json({ error: result.error });
-  return res.json({ success: true, session: result.session });
+  // `message` names the date the server just derived — see sessionCreatedMessage.
+  // Additive: a client that ignores it keeps showing its own generic confirmation.
+  return res.json({
+    success: true,
+    session: result.session,
+    message: sessionCreatedMessage(result.session),
+  });
 }
 
 async function attendanceMatrix(req, res) {

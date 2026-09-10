@@ -39,7 +39,14 @@ async function createOrUpdateLecturer({ name, email, phone }) {
     });
     return { ok: true, lecturer: p };
   }
-  if (p.role === 'admin') return { ok: false, status: 400, error: 'Cannot convert this account to lecturer' };
+  if (p.role === 'admin') {
+    return {
+      ok: false,
+      status: 400,
+      error: `${email} is already an administrator account, and an administrator cannot be `
+        + 'demoted to lecturer here. Use a different email address for this lecturer.',
+    };
+  }
   p.role = 'lecturer';
   p.name = name;
   p.phone = phone;

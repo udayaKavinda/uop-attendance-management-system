@@ -17,7 +17,12 @@ async function create(req, res) {
     if (!result.ok) return res.status(result.status).json({ error: result.error });
     return res.json({ success: true, lecturer: result.lecturer });
   } catch (err) {
-    if (err && err.code === 11000) return res.status(400).json({ error: 'Email already registered' });
+    if (err && err.code === 11000) {
+      return res.status(400).json({
+        error: 'That email address already belongs to another account. '
+          + 'Search for it in the lecturer list instead of creating a new record.',
+      });
+    }
     throw err;
   }
 }
