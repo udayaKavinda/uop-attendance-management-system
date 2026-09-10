@@ -51,6 +51,35 @@ function clearFixes(studentId, sessionId) {
 }
 
 /**
+ * Drops buffers with nothing live left in them.
+ *
+ * `addFix` already discards fixes older than the window, but only for the key
+ * being written — and `clearFixes` only runs on a PASS. Every attempt that never
+ * passes (location denied, student out of range, app closed, walked away mid-scan)
+ * therefore left its key in the Map permanently: 2000 abandoned attempts measured
+ * at ~10.8 MB, retained for the life of the process, growing with no ceiling
+ * across a semester. attemptVerdict.service.js already sweeps on a TTL for a
+ * smaller payload; this one held more and swept nothing.
+ *
+ * Cannot change a verdict, only memory. A buffer reaching this state contains
+ * nothing but fixes `addFix` would discard on the next write anyway, and
+ * `evaluateFix` always goes through `addFix` first — so deleting it is
+ * indistinguishable from leaving it, except in heap.
+ */
+function sweep(now = Date.now()) {
+  for (const [k, fixes] of fixBuffers) {
+    const live = fixes.filter((f) => now - f.ts <= FIX_WINDOW_MS);
+    if (live.length === 0) fixBuffers.delete(k);
+    else if (live.length !== fixes.length) fixBuffers.set(k, live);
+  }
+}
+
+// unref'd so it never holds the process open — the test runner and any short-lived
+// script must still be able to exit. Mirrors attemptVerdict.service.js.
+const sweepTimer = setInterval(() => sweep(), FIX_WINDOW_MS);
+if (typeof sweepTimer.unref === 'function') sweepTimer.unref();
+
+/**
  * Step 1: require >= MIN_FIXES fixes, then drop fixes whose distance from the median
  * location exceeds ~2x the median distance (with a floor so a tight, low-noise
  * cluster doesn't over-trim on tiny jitter).
@@ -177,6 +206,7 @@ module.exports = {
   MIN_FIXES,
   addFix,
   clearFixes,
+  sweep,
   removeOutliersByMedianDistance,
   accuracyWeightedCentroid,
   computeCentroid,

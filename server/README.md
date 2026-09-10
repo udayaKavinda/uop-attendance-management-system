@@ -593,6 +593,15 @@ Streaming GPS fixes can no longer consume the code budget.
 - Out-of-window lecturer-code removal (every session, since every session has a code).
 - Expired seed-token cleanup (verification independently checks leases).
 - Expired attempt-verdict sweep (10-minute TTL).
+- GPS fix-buffer sweep, every `FIX_WINDOW_MS` (90 s), dropping buffers with no live
+  fix left. `addFix` prunes stale fixes but only for the key being written, and
+  `clearFixes` runs only on a **pass** — so every attempt that never passed (location
+  denied, out of range, app closed mid-scan) used to keep its key for the life of the
+  process. Measured at ~10.9 MB retained for 2000 abandoned attempts, with no ceiling
+  across a semester; one sweep releases all of it. It cannot change a verdict, only
+  memory: a buffer in that state holds nothing but fixes the next `addFix` would drop
+  anyway, and `evaluateFix` always goes through `addFix` first. Both this timer and the
+  verdict sweep are `unref`'d, so neither holds the process open.
 - Short active-session cache invalidated on relevant staff mutations, and re-checked
   against the schedule window on every hit — the entry is an admission decision, so
   age alone must not keep it valid past `endTime`.
@@ -606,14 +615,14 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-471 tests across 33 suites. 450 of those run with every Mongoose model mocked and need
+502 tests across 36 suites. 481 of those run with every Mongoose model mocked and need
 no database. The remaining suite, `dbIntegration.test.js`, talks to a real MongoDB —
 schema defaults, validators, `populate` and unique indexes cannot be verified by mocking
 the layer that implements them.
 
 It needs no setup: `jest.globalSetup.js` probes `mongodb://127.0.0.1:27017` before the
 run and, if a mongod answers, points the suite at the **`uop_attendance_test`** database.
-With no local mongod the suite skips itself and the other 32 run as normal, so a machine
+With no local mongod the suite skips itself and the other 35 run as normal, so a machine
 or CI runner without a database still goes green. Set `MONGO_TEST_URI` to override the
 target, or to `off` to skip the probe entirely — which is what CI does, because the
 deploy runner *is* the production host and a test process must never open a connection
