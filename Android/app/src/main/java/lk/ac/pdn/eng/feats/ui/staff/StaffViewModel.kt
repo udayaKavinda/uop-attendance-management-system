@@ -157,8 +157,15 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
     fun clearFlash() { _state.value = _state.value.copy(flash = null) }
     fun clearError() { _state.value = _state.value.copy(error = null) }
 
-    private fun setFlash(msg: String) { _state.value = _state.value.copy(flash = msg) }
-    private fun setError(msg: String) { _state.value = _state.value.copy(error = msg) }
+    // One action has one outcome, so each setter clears the other. Neither used to,
+    // and `clearError` is only reachable by tapping the banner — so a clash error (or
+    // any other failure) survived the retry that fixed it, every later action, and
+    // every tab switch, sitting in red above a green "Session created." until the
+    // lecturer happened to tap it. The obvious reading of that screen is that the
+    // session was not created, so the real cost was lecturers re-creating work that
+    // had already succeeded.
+    private fun setFlash(msg: String) { _state.value = _state.value.copy(flash = msg, error = null) }
+    private fun setError(msg: String) { _state.value = _state.value.copy(error = msg, flash = null) }
 
     /** Reloads page 1 of every list — used at startup and after any mutation. */
     fun refresh() {
