@@ -15,6 +15,14 @@ const DEFAULT_HOST = 'mongodb://127.0.0.1:27017';
 const PROBE_TIMEOUT_MS = 1500;
 
 module.exports = async function globalSetup() {
+  // Explicit opt-out. Without it there is no way to say "do not look for a
+  // database": an unset or empty MONGO_TEST_URI means "probe localhost", which is
+  // wrong on a machine that happens to BE the production host — CI runs on the
+  // deploy target, and a test process must never open a connection there.
+  if (process.env.MONGO_TEST_URI === 'off') {
+    process.env.MONGO_TEST_URI = '';
+    return;
+  }
   if (process.env.MONGO_TEST_URI) return;
 
   const mongoose = require('mongoose');

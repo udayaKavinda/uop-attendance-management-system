@@ -90,7 +90,7 @@ describe('GET /auth/native-return', () => {
   describe('parseNativeReturnTarget', () => {
     test('breaks a valid target into base, path and code', () => {
       expect(oauthService.parseNativeReturnTarget(`${BASE}/login/success?code=${CODE}`)).toEqual({
-        base: BASE, path: '/login/success', code: CODE, error: null,
+        base: BASE, path: '/login/success', code: CODE, error: null, domain: null,
       });
     });
 

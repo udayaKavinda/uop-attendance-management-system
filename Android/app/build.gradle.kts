@@ -47,7 +47,12 @@ android {
     defaultConfig {
         applicationId = "lk.ac.pdn.eng.feats"
         minSdk = 24
-        targetSdk = 37
+        // Must not exceed compileSdk: targeting an API level the app was not
+        // compiled against means the behaviour changes for that level are opted
+        // into without the SDK that defines them being present, and Play rejects
+        // an upload whose targetSdk is above the latest stable platform. This was
+        // 37 against compileSdk 36.
+        targetSdk = 36
         versionCode = 9
         versionName = "1.9.0"
 

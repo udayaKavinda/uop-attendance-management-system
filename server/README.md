@@ -415,7 +415,7 @@ becomes visible to staff is the Excel export under `/api/admin/courses`.
 | `GET /api/admin/settings` | staff | current policies |
 | `PATCH /api/admin/settings` | admin | BLE kill switch, distance buffers, per-band geofence-logic strategy, seeding, student email domain, minimum app version |
 | `GET /api/admin/geofences` | staff | active selectable buildings |
-| `POST/PATCH/DELETE /api/admin/geofences/:id?` | admin | building polygon management; `DELETE` is refused (400) while any live session still uses the building |
+| `POST/PATCH/DELETE /api/admin/geofences/:id?` | admin | building polygon management. Both `DELETE` and a `PATCH` setting `active: false` are refused (400) while any live session still uses the building — switching one off is the same outage as deleting it, since banding filters on `{ deleted: false, active: true }` and cannot tell the two apart. Re-activating is never blocked. Renames and polygon edits are unaffected |
 | `GET /api/admin/lecturers?q=&page=&limit=` | staff | lecturer directory — readable by any staff member on purpose, so an owner can find a co-owner to add to their own course |
 | `POST/DELETE /api/admin/lecturers/:id?` | admin | create, or hide (soft-delete) rather than destroy |
 
@@ -530,16 +530,18 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-451 tests across 30 suites. 425 of those run with every Mongoose model mocked and need
+467 tests across 32 suites. 446 of those run with every Mongoose model mocked and need
 no database. The remaining suite, `dbIntegration.test.js`, talks to a real MongoDB —
 schema defaults, validators, `populate` and unique indexes cannot be verified by mocking
 the layer that implements them.
 
 It needs no setup: `jest.globalSetup.js` probes `mongodb://127.0.0.1:27017` before the
 run and, if a mongod answers, points the suite at the **`uop_attendance_test`** database.
-With no local mongod the suite skips itself and the other 29 run as normal, so a machine
+With no local mongod the suite skips itself and the other 31 run as normal, so a machine
 or CI runner without a database still goes green. Set `MONGO_TEST_URI` to override the
-target.
+target, or to `off` to skip the probe entirely — which is what CI does, because the
+deploy runner *is* the production host and a test process must never open a connection
+there.
 
 That database is **dropped** before and after the run. The name is hard-coded and never
 derived from `MONGO_URI`, and the suite refuses to start if it is pointed at the database
@@ -566,8 +568,8 @@ global Bluetooth kill switch, the flagged-record Excel export, the attendance ma
 Excel export keying columns by occurrence (session + attendanceDate) so a recurring
 session run across several weeks gets one column per week instead of later weeks
 silently overwriting earlier ones, running-course DTO contracts, strict schedules/one-time
-dates, GPS geometry and fix filtering, active geofences, the geofence delete guard,
-seeder eligibility, the `/auth/native-return` target allow-list and its escaping,
+dates, GPS geometry and fix filtering, active geofences, the geofence delete and deactivate guards,
+seeder eligibility, the `/auth/native-return` target allow-list and its escaping (including a round-trip test feeding every query `oauthFailureQuery` can emit straight into `parseNativeReturnTarget`, after the two drifted apart and a rejected email domain reached the user as a blank 400 instead of an explanation),
 body-parser error classification, pages, and unified attendance. Also now covered: the
 student email-domain gate on brand-new Google sign-ins (rejects outside the configured
 domain, passes existing accounts through regardless, and the empty-domain "gate off" case),

@@ -16,6 +16,36 @@ async function createGeofence({ name, polygon }) {
 async function updateGeofence(id, patch) {
   const geofence = await Geofence.findOne({ _id: id, deleted: false });
   if (!geofence) return { ok: false, status: 404, error: 'Geofence not found' };
+
+  // Switching a building off is the same outage as deleting it, so it gets the
+  // same guard — see softDeleteGeofence below for the reasoning. findByIds
+  // filters `{ deleted: false, active: true }`, so banding cannot tell an
+  // inactive building from a deleted one: every GPS attempt for a session left
+  // with no active building lands in attendance.service's `geofences.length === 0`
+  // branch, which records `unknown` and answers `{ ok: true, collecting: true }`.
+  // The student's phone says "collecting" until it gives up, no error is shown,
+  // and the lecturer finds out when the register comes back empty. Only the
+  // delete path checked for this; one toggle produced the identical outage
+  // silently.
+  //
+  // One-way on purpose: turning a building back ON is always safe, and blocking
+  // it would strand exactly the admin trying to undo the mistake.
+  if (patch.active === false && geofence.active !== false) {
+    const inUse = await LectureSession.countDocuments({
+      buildings: geofence._id,
+      deleted: false,
+    });
+    if (inUse > 0) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Cannot switch off this building because ${inUse} session${inUse === 1 ? '' : 's'} `
+          + `still use${inUse === 1 ? 's' : ''} it, and attendance would stop being recorded for `
+          + `${inUse === 1 ? 'it' : 'them'} without warning. Remove it from those sessions first.`,
+      };
+    }
+  }
+
   if (patch.name !== undefined) geofence.name = patch.name;
   if (patch.polygon !== undefined) geofence.polygon = patch.polygon;
   if (patch.active !== undefined) geofence.active = patch.active;

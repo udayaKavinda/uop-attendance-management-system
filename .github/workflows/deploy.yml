@@ -11,7 +11,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Nothing reaches the server until this passes. The deploy job installs with
+  # `--omit=dev`, so jest is not even present there — the suite has to run in its
+  # own checkout, against the full dependency tree.
+  test:
+    runs-on: [self-hosted, linux, x64, attendance-prod]
+    timeout-minutes: 15
+    env:
+      # This runner IS the production host. Left to itself the live-database suite
+      # probes localhost:27017 and would open a connection to production Mongo, so
+      # it is switched off explicitly here: that suite skips and the other 31 run.
+      # A test process must never touch production data.
+      MONGO_TEST_URI: 'off'
+    steps:
+      - name: Check out the commit being deployed
+        uses: actions/checkout@v4
+
+      # --include=dev is the point: jest, supertest and the web build toolchain
+      # all live in devDependencies, and the runner sets NODE_ENV=production for
+      # the deploy job. Nothing installed here is shipped — this is a scratch
+      # checkout, separate from APP_DIR.
+      - name: Install server dependencies
+        run: PATH=/usr/bin:$PATH /usr/bin/npm --prefix server ci --include=dev --no-audit --no-fund
+
+      - name: Run server test suite
+        run: PATH=/usr/bin:$PATH /usr/bin/npm --prefix server test
+
+      # Catches a broken client before the deploy job wipes web/dist and rebuilds
+      # it in place — where a compile error would leave the served bundle missing.
+      - name: Type-check and build the web client
+        run: |
+          PATH=/usr/bin:$PATH /usr/bin/npm --prefix web ci --include=dev --no-audit --no-fund
+          PATH=/usr/bin:$PATH /usr/bin/npm --prefix web run build
+          test -f web/dist/index.html || { echo "web build produced no dist/index.html"; exit 1; }
+
   deploy:
+    needs: test
     runs-on: [self-hosted, linux, x64, attendance-prod]
     timeout-minutes: 20
     env:

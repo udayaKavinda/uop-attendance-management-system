@@ -61,6 +61,12 @@ if (typeof oauthExchangeSweep.unref === 'function') oauthExchangeSweep.unref();
 const NATIVE_RETURN_PATHS = ['', '/', '/login/success'];
 /** Exchange codes are 32 random bytes hex-encoded — see issueOAuthExchangeCode. */
 const EXCHANGE_CODE_RE = /^[0-9a-f]{64}$/;
+/**
+ * Hostname shape only. Must stay in step with auth.controller's DOMAIN_RE, which
+ * is what produces the value — oauthReturnRoundTrip.test.js feeds one into the
+ * other so the two cannot drift apart again.
+ */
+const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 
 /**
  * Validates a native return target and breaks it into the pieces the bounce page
@@ -94,6 +100,7 @@ function parseNativeReturnTarget(raw) {
   const params = new URLSearchParams(target.slice(queryAt + 1));
   let code = null;
   let error = null;
+  let domain = null;
   for (const [name, value] of params) {
     // Every parameter is re-emitted from these validated fields, never copied
     // through, so an unknown one has nowhere to go: reject rather than drop it.
@@ -103,17 +110,30 @@ function parseNativeReturnTarget(raw) {
     } else if (name === 'error') {
       if (!/^[a-z_]{1,32}$/.test(value)) return null;
       error = value;
+    } else if (name === 'domain') {
+      // `error=domain` carries the rejected address's domain so the app can name
+      // it ("gmail.com is not a University of Peradeniya address") instead of the
+      // useless "Sign-in failed. Please try again." Hostname shape only, and
+      // length-capped: this value is rebuilt into a URL and shown to a user.
+      if (value.length > 253 || !DOMAIN_RE.test(value)) return null;
+      domain = value.toLowerCase();
     } else {
       return null;
     }
   }
-  return { base, path, code, error };
+  // A domain on its own says nothing and belongs to no other error code, so it is
+  // only meaningful next to `error=domain`. Anything else is malformed.
+  if (domain !== null && error !== 'domain') return null;
+  return { base, path, code, error, domain };
 }
 
 /** Rebuilds the return URL from validated parts — never from the caller's string. */
-function nativeReturnUrl({ base, path, code, error }) {
+function nativeReturnUrl({
+  base, path, code, error, domain,
+}) {
   const query = new URLSearchParams();
   if (error) query.set('error', error);
+  if (domain && error === 'domain') query.set('domain', domain);
   if (code) query.set('code', code);
   const qs = query.toString();
   return `${base}${path}${qs ? `?${qs}` : ''}`;

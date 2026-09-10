@@ -93,6 +93,13 @@ and execute `/usr/bin/node server/src/server.js`.
 
 ## Automated production deployment
 
+`.github/workflows/deploy.yml` runs a **`test` job first**, and the deploy job does not
+start unless it passes (`needs: test`). That job takes its own checkout, installs with
+`--include=dev` (jest and the web build toolchain live in devDependencies, and the deploy
+itself installs `--omit=dev`, so the suite cannot run there), runs the server tests with
+`MONGO_TEST_URI=off` so nothing touches production Mongo, and type-checks and builds the
+web client. Previously nothing was tested before a release reached the server.
+
 `.github/workflows/deploy.yml` deploys **main only** using the existing self-hosted
 `attendance-prod` runner. It does not start GitHub-hosted runners or require hosted-runner
 billing. The deployment:
