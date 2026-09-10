@@ -123,11 +123,6 @@ fun LectureEntryScreen(
 
     val coroutineScope = rememberCoroutineScope()
 
-    // `begin` and the two launchers below refer to each other (a launcher result
-    // re-runs `begin`, which may launch either one), so the initial reference is
-    // a lateinit var, assigned once every dependency exists.
-    lateinit var begin: () -> Unit
-
     // Turning the radio on is asynchronous — this callback can fire slightly
     // before `adapter.isEnabled` actually flips, which would otherwise waste the
     // whole attempt on GPS alone even though the student just said yes. Give it
@@ -145,27 +140,41 @@ fun LectureEntryScreen(
         }
     }
 
+    // Everything after the permission question, and the only path that starts the
+    // window. Deliberately never re-asks: it is the permission launcher's result
+    // handler as well as `begin`'s else-branch, so if it could ask again the two
+    // would form a cycle. They did. Once a permission is denied twice Android marks
+    // it USER_FIXED and `launch()` stops showing a dialog — it returns the same
+    // "still denied" result synchronously, so `begin -> launch -> begin` recursed
+    // with nothing in between until the 8MB stack was gone and the app died on the
+    // student's Check-me-in tap, every time, unrecoverably. Asking is `begin`'s job
+    // and it happens at most once per attempt; from here the window simply runs
+    // with whatever was granted.
+    val proceed: () -> Unit = {
+        // Bluetooth being off is worth one tap to fix; everything else just
+        // degrades to GPS rather than blocking the attempt. Reached after a
+        // permission result too, so this prompt still fires when switched-off
+        // Bluetooth is the very next thing standing in the way.
+        val blocker = BlePermissions.scanBlocker(context)
+        if (blocker != null && blocker.contains("turned off", ignoreCase = true)) {
+            enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+        } else {
+            vm.startCheckIn()
+        }
+    }
+
     // Asked once, up front. Any subset can be denied: the window runs with
     // whatever is left, and falls through to the lecturer's code if nothing is.
-    // Re-runs begin() rather than starting directly, so a Bluetooth-off prompt
-    // still fires if that's the very next thing blocking the attempt.
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { begin() }
+    ) { proceed() }
 
-    begin = {
+    val begin: () -> Unit = {
         val needed = LectureEntryViewModel.requiredPermissions()
         if (!BlePermissions.hasAll(context, needed)) {
             permissionLauncher.launch(needed)
         } else {
-            // Bluetooth being off is worth one tap to fix; everything else just
-            // degrades to GPS rather than blocking the attempt.
-            val blocker = BlePermissions.scanBlocker(context)
-            if (blocker != null && blocker.contains("turned off", ignoreCase = true)) {
-                enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-            } else {
-                vm.startCheckIn()
-            }
+            proceed()
         }
     }
 
