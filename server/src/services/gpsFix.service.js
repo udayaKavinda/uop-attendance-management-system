@@ -1,15 +1,27 @@
 const { distanceToNearestGeofenceMeters, haversineMeters } = require('../utils/geo');
 const geofenceLogicService = require('./geofenceLogic.service');
+const GpsFixBuffer = require('../models/GpsFixBuffer');
 
 /**
- * Per-(student, session) GPS fix accumulator, transient — matches the design's
- * "in-memory Map for a single process" caveat shared with the OAuth code store
- * and the sign-in nonce store; move to Redis before scaling out.
+ * Per-(student, session) GPS fix accumulator, held in MongoDB.
+ *
+ * This was a per-process `Map`. The storage moved because that made a restart
+ * mid-lecture lose every in-flight attempt and made a second app instance
+ * impossible (see GpsFixBuffer). Only the storage moved: every function below
+ * that decides anything — trimming, weighting, banding — is still pure and
+ * still synchronous, so the arithmetic remains testable without a database.
  */
-const fixBuffers = new Map(); // key -> [{ lat, lng, accuracy, ts }]
 
 const FIX_WINDOW_MS = 90_000; // matches the client's 90s runtime window
 const MIN_FIXES = 3;
+
+/**
+ * Hard cap on stored fixes per attempt. The client sends one roughly every 3
+ * seconds, so a well-behaved 90-second window contributes about 30; this leaves
+ * generous headroom while keeping a single document bounded no matter how fast
+ * a client decides to talk.
+ */
+const MAX_BUFFERED_FIXES = 120;
 
 /**
  * Android's `Location.getAccuracy()` returns 0.0 when `hasAccuracy()` is false,
@@ -29,55 +41,62 @@ function normalizedAccuracy(fix) {
   return Math.max(1, raw);
 }
 
-function fixKey(studentId, sessionId) {
-  return `${studentId}:${sessionId}`;
-}
-
-/** Appends a fix, dropping anything older than the 90s window, and returns the live buffer. */
-function addFix(studentId, sessionId, fix) {
-  const key = fixKey(studentId, sessionId);
-  const now = Date.now();
-  const existing = fixBuffers.get(key) || [];
-  const fresh = existing.filter((f) => now - f.ts <= FIX_WINDOW_MS);
-  fresh.push({
-    lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy, ts: now,
-  });
-  fixBuffers.set(key, fresh);
-  return fresh;
-}
-
-function clearFixes(studentId, sessionId) {
-  fixBuffers.delete(fixKey(studentId, sessionId));
+/** Drops anything outside the live window. Pure — the age rule, in one place. */
+function liveFixes(fixes, now = Date.now()) {
+  return (fixes || []).filter((f) => now - f.ts <= FIX_WINDOW_MS);
 }
 
 /**
- * Drops buffers with nothing live left in them.
+ * Appends a fix and returns the live buffer for this attempt.
  *
- * `addFix` already discards fixes older than the window, but only for the key
- * being written — and `clearFixes` only runs on a PASS. Every attempt that never
- * passes (location denied, student out of range, app closed, walked away mid-scan)
- * therefore left its key in the Map permanently: 2000 abandoned attempts measured
- * at ~10.8 MB, retained for the life of the process, growing with no ceiling
- * across a semester. attemptVerdict.service.js already sweeps on a TTL for a
- * smaller payload; this one held more and swept nothing.
- *
- * Cannot change a verdict, only memory. A buffer reaching this state contains
- * nothing but fixes `addFix` would discard on the next write anyway, and
- * `evaluateFix` always goes through `addFix` first — so deleting it is
- * indistinguishable from leaving it, except in heap.
+ * One round trip, and `$push` is atomic: two fixes arriving together from the
+ * same device both land, where the previous read-modify-write on a `Map` could
+ * drop one. Ageing is applied to the returned array rather than by rewriting
+ * the document, so a write never has to read first.
  */
-function sweep(now = Date.now()) {
-  for (const [k, fixes] of fixBuffers) {
-    const live = fixes.filter((f) => now - f.ts <= FIX_WINDOW_MS);
-    if (live.length === 0) fixBuffers.delete(k);
-    else if (live.length !== fixes.length) fixBuffers.set(k, live);
-  }
+async function addFix(studentId, sessionId, fix) {
+  const now = Date.now();
+  const doc = await GpsFixBuffer.findOneAndUpdate(
+    { student: String(studentId), session: String(sessionId) },
+    {
+      $push: {
+        fixes: {
+          $each: [{
+            lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy, ts: now,
+          }],
+          $slice: -MAX_BUFFERED_FIXES,
+        },
+      },
+    },
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
+  );
+  return liveFixes(doc.fixes, now);
 }
 
-// unref'd so it never holds the process open — the test runner and any short-lived
-// script must still be able to exit. Mirrors attemptVerdict.service.js.
-const sweepTimer = setInterval(() => sweep(), FIX_WINDOW_MS);
-if (typeof sweepTimer.unref === 'function') sweepTimer.unref();
+async function clearFixes(studentId, sessionId) {
+  await GpsFixBuffer.deleteOne({ student: String(studentId), session: String(sessionId) });
+}
+
+/**
+ * Deletes buffers with nothing live left in them.
+ *
+ * Abandoned attempts are the common case, not the exception — location denied,
+ * student out of range, app closed, walked away mid-scan — and `clearFixes`
+ * only runs on a pass, so without this they accumulate for a whole semester.
+ * The TTL index on the collection is the routine cleanup; this exists so the
+ * sweep can also be driven explicitly, and asserted on, rather than waiting on
+ * MongoDB's periodic monitor.
+ *
+ * Cannot change a verdict, only storage: a buffer in this state holds only
+ * fixes that `liveFixes` would discard anyway.
+ */
+async function sweep(now = Date.now()) {
+  const cutoff = now - FIX_WINDOW_MS;
+  const res = await GpsFixBuffer.deleteMany({
+    $nor: [{ fixes: { $elemMatch: { ts: { $gt: cutoff } } } }],
+  });
+  return res.deletedCount || 0;
+}
 
 /**
  * Step 1: require >= MIN_FIXES fixes, then drop fixes whose distance from the median
@@ -131,9 +150,11 @@ function accuracyWeightedCentroid(fixes) {
 }
 
 /** Returns null if there aren't enough fixes yet to decide. */
-function computeCentroid(studentId, sessionId) {
-  const fixes = fixBuffers.get(fixKey(studentId, sessionId)) || [];
-  const survivors = removeOutliersByMedianDistance(fixes);
+async function computeCentroid(studentId, sessionId) {
+  const doc = await GpsFixBuffer.findOne({
+    student: String(studentId), session: String(sessionId),
+  });
+  const survivors = removeOutliersByMedianDistance(liveFixes(doc?.fixes));
   if (!survivors) return null;
   const centroid = accuracyWeightedCentroid(survivors);
   return { ...centroid, fixCount: survivors.length };
@@ -162,8 +183,8 @@ function isPassBand(band) {
  * near is checked first since it's the stronger claim, then far only if near
  * didn't already pass.
  */
-function evaluateFix(studentId, sessionId, fix, geofences, buffers) {
-  const fixes = addFix(studentId, sessionId, fix);
+async function evaluateFix(studentId, sessionId, fix, geofences, buffers) {
+  const fixes = await addFix(studentId, sessionId, fix);
   const survivors = removeOutliersByMedianDistance(fixes);
   if (!survivors) return { ready: false, band: null, centroid: null };
 
@@ -204,9 +225,11 @@ function evaluateFix(studentId, sessionId, fix, geofences, buffers) {
 module.exports = {
   FIX_WINDOW_MS,
   MIN_FIXES,
+  MAX_BUFFERED_FIXES,
   addFix,
   clearFixes,
   sweep,
+  liveFixes,
   removeOutliersByMedianDistance,
   accuracyWeightedCentroid,
   computeCentroid,

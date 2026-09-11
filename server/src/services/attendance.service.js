@@ -167,8 +167,8 @@ async function recordBluetoothAttendance(studentPk, courseId, token, canAdvertis
     seedRelayed: verified.role === 'seed',
   });
 
-  gpsFixService.clearFixes(String(studentPk), String(session._id));
-  attemptVerdict.clear(String(studentPk), String(session._id));
+  await gpsFixService.clearFixes(String(studentPk), String(session._id));
+  await attemptVerdict.clear(String(studentPk), String(session._id));
 
   if (!result.duplicate) {
     result.seeding = await peerSeeding.selectSeedingRole(session, studentPk, canAdvertise, verified.role);
@@ -205,17 +205,17 @@ async function recordGpsFixAttendance(studentPk, courseId, fix) {
     // deleted or deactivated. Fail closed (unknown) so a later code submission
     // can't be judged against a building that no longer exists — but only the
     // code submission itself writes anything.
-    attemptVerdict.record(studentKey, sessionKey, { band: 'unknown' });
+    await attemptVerdict.record(studentKey, sessionKey, { band: 'unknown' });
     return { ok: true, collecting: true };
   }
 
   const settings = await settingsService.getSettings();
-  const verdict = gpsFixService.evaluateFix(
+  const verdict = await gpsFixService.evaluateFix(
     studentKey, sessionKey, fix, geofences, settingsService.buffers(settings),
   );
   if (!verdict.ready) return { ok: true, collecting: true };
 
-  attemptVerdict.record(studentKey, sessionKey, {
+  await attemptVerdict.record(studentKey, sessionKey, {
     band: verdict.band,
     centroid: verdict.centroid,
     distanceM: verdict.distanceM,
@@ -237,8 +237,8 @@ async function recordGpsFixAttendance(studentPk, courseId, fix) {
     centroid: centroidDoc(verdict.centroid, verdict.distanceM),
   });
 
-  gpsFixService.clearFixes(studentKey, sessionKey);
-  attemptVerdict.clear(studentKey, sessionKey);
+  await gpsFixService.clearFixes(studentKey, sessionKey);
+  await attemptVerdict.clear(studentKey, sessionKey);
   // No seeding here on purpose: a GPS pass only proves the student is within the
   // near buffer of the building, not inside the room. See peerSeeding.service.
   return result;
@@ -268,7 +268,7 @@ async function recordHelpCodeAttendance(studentPk, courseId, code) {
     return { ok: false, status: 400, error: 'Incorrect code. Ask your lecturer to read it out again.' };
   }
 
-  const stored = attemptVerdict.get(studentKey, sessionKey);
+  const stored = await attemptVerdict.get(studentKey, sessionKey);
   // No stored verdict means the attempt never produced a usable fix at all
   // (location denied, no provider, no lock). Treat that as unknown, never a pass.
   const band = stored?.band || 'unknown';
@@ -288,8 +288,8 @@ async function recordHelpCodeAttendance(studentPk, courseId, code) {
   });
 
   if (passes) {
-    gpsFixService.clearFixes(studentKey, sessionKey);
-    attemptVerdict.clear(studentKey, sessionKey);
+    await gpsFixService.clearFixes(studentKey, sessionKey);
+    await attemptVerdict.clear(studentKey, sessionKey);
   }
   return result;
 }

@@ -49,7 +49,11 @@ export function watchFixes(
   onFix: (fix: GpsFix) => void,
   onError: (error: LocationUnavailableError) => void,
 ): WatchHandle {
-  if (!('geolocation' in navigator)) {
+  // Truthiness, not `'geolocation' in navigator`: the property can be present
+  // and hold nothing (a stripped webview, a privacy shim that nulls it out), and
+  // the `in` check passed that straight through to `.watchPosition` — a raw
+  // TypeError in the student's face instead of the sentence below.
+  if (!navigator.geolocation) {
     onError(new LocationUnavailableError('Location is not available in this browser.'));
     return { stop: () => {} };
   }

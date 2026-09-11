@@ -1,3 +1,5 @@
+jest.mock('../models/GpsFixBuffer', () => require('./helpers/gpsStateFakes').makeFixBufferModel());
+
 const gpsFix = require('../services/gpsFix.service');
 const geofenceLogic = require('../services/geofenceLogic.service');
 
@@ -9,30 +11,30 @@ const BUFFERS = { nearBufferM: 50, farBufferM: 100 };
 
 describe('gpsFix', () => {
   describe('computeCentroid / buffering', () => {
-    it('returns null (not enough fixes) before the 3rd fix', () => {
+    it('returns null (not enough fixes) before the 3rd fix', async () => {
       const key = `student-${Date.now()}-a`;
-      gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
-      gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
-      expect(gpsFix.computeCentroid(key, 'session1')).toBeNull();
+      await gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
+      await gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
+      expect(await gpsFix.computeCentroid(key, 'session1')).toBeNull();
     });
 
-    it('computes a centroid once 3 fixes have accumulated', () => {
+    it('computes a centroid once 3 fixes have accumulated', async () => {
       const key = `student-${Date.now()}-b`;
       for (let i = 0; i < 3; i += 1) {
-        gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
+        await gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
       }
-      const centroid = gpsFix.computeCentroid(key, 'session1');
+      const centroid = await gpsFix.computeCentroid(key, 'session1');
       expect(centroid).not.toBeNull();
       expect(centroid.lat).toBeCloseTo(6.9, 5);
       expect(centroid.lng).toBeCloseTo(79.8, 5);
       expect(centroid.fixCount).toBe(3);
     });
 
-    it('clearFixes resets the buffer for that (student, session)', () => {
+    it('clearFixes resets the buffer for that (student, session)', async () => {
       const key = `student-${Date.now()}-c`;
-      for (let i = 0; i < 3; i += 1) gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
-      gpsFix.clearFixes(key, 'session1');
-      expect(gpsFix.computeCentroid(key, 'session1')).toBeNull();
+      for (let i = 0; i < 3; i += 1) await gpsFix.addFix(key, 'session1', fix(6.9, 79.8));
+      await gpsFix.clearFixes(key, 'session1');
+      expect(await gpsFix.computeCentroid(key, 'session1')).toBeNull();
     });
   });
 
@@ -74,7 +76,7 @@ describe('gpsFix', () => {
       expect(gpsFix.accuracyWeightedCentroid([fix(0, 0, 0), fix(0, 0, 12)]).bestAccuracy).toBe(12);
     });
 
-    it('does not let an accuracy-unknown fix win best_accuracy_fix', () => {
+    it('does not let an accuracy-unknown fix win best_accuracy_fix', async () => {
       const square = [[79.8000, 6.9000], [79.8010, 6.9000], [79.8010, 6.9010], [79.8000, 6.9010]];
       const buffers = { ...BUFFERS, nearBufferLogic: 'best_accuracy_fix', farBufferLogic: 'best_accuracy_fix' };
       const key = `student-${Date.now()}-acc0`;
@@ -82,11 +84,11 @@ describe('gpsFix', () => {
       // Three genuinely precise fixes dead centre, plus one accuracy-unknown fix 6 km away.
       const inRoom = [6.9005, 79.8005];
       for (let i = 0; i < 4; i += 1) {
-        result = gpsFix.evaluateFix(key, 'session1', fix(inRoom[0], inRoom[1], 3), [{ polygon: square }], buffers);
+        result = await gpsFix.evaluateFix(key, 'session1', fix(inRoom[0], inRoom[1], 3), [{ polygon: square }], buffers);
       }
-      result = gpsFix.evaluateFix(key, 'session1', fix(6.85, 79.8005, 0), [{ polygon: square }], buffers);
+      result = await gpsFix.evaluateFix(key, 'session1', fix(6.85, 79.8005, 0), [{ polygon: square }], buffers);
       expect(result.band).toBe('inside');
-      gpsFix.clearFixes(key, 'session1');
+      await gpsFix.clearFixes(key, 'session1');
     });
   });
 
@@ -190,18 +192,18 @@ describe('gpsFix', () => {
     const square = [[79.8000, 6.9000], [79.8010, 6.9000], [79.8010, 6.9010], [79.8000, 6.9010]];
     const geofences = [{ polygon: square }];
 
-    it('is not ready before enough fixes accumulate, even standing inside the polygon', () => {
+    it('is not ready before enough fixes accumulate, even standing inside the polygon', async () => {
       const key = `student-${Date.now()}-d`;
-      const result = gpsFix.evaluateFix(key, 'session1', fix(6.9005, 79.8005), geofences, BUFFERS);
+      const result = await gpsFix.evaluateFix(key, 'session1', fix(6.9005, 79.8005), geofences, BUFFERS);
       expect(result.ready).toBe(false);
       expect(result.centroid).toBeNull();
     });
 
-    it('bands a centroid inside the polygon as "inside" after exactly 3 fixes (MIN_FIXES)', () => {
+    it('bands a centroid inside the polygon as "inside" after exactly 3 fixes (MIN_FIXES)', async () => {
       const key = `student-${Date.now()}-e`;
       let result;
       for (let i = 0; i < 3; i += 1) {
-        result = gpsFix.evaluateFix(key, 'session1', fix(6.9005, 79.8005), geofences, BUFFERS);
+        result = await gpsFix.evaluateFix(key, 'session1', fix(6.9005, 79.8005), geofences, BUFFERS);
       }
       expect(result.ready).toBe(true);
       expect(result.band).toBe('inside');
@@ -209,33 +211,33 @@ describe('gpsFix', () => {
       expect(result.centroid.fixCount).toBe(3);
     });
 
-    it('bands a centroid just outside the polygon but inside the near buffer as "near"', () => {
+    it('bands a centroid just outside the polygon but inside the near buffer as "near"', async () => {
       const key = `student-${Date.now()}-f`;
       let result;
       // ~33m south of the polygon's lower edge.
       for (let i = 0; i < 3; i += 1) {
-        result = gpsFix.evaluateFix(key, 'session1', fix(6.8997, 79.8005), geofences, BUFFERS);
+        result = await gpsFix.evaluateFix(key, 'session1', fix(6.8997, 79.8005), geofences, BUFFERS);
       }
       expect(result.band).toBe('near');
       expect(result.distanceM).toBeGreaterThan(0);
       expect(result.distanceM).toBeLessThanOrEqual(50);
     });
 
-    it('bands a centroid between the buffers as "suspicious"', () => {
+    it('bands a centroid between the buffers as "suspicious"', async () => {
       const key = `student-${Date.now()}-g`;
       let result;
       // ~78m south of the polygon.
       for (let i = 0; i < 3; i += 1) {
-        result = gpsFix.evaluateFix(key, 'session1', fix(6.8993, 79.8005), geofences, BUFFERS);
+        result = await gpsFix.evaluateFix(key, 'session1', fix(6.8993, 79.8005), geofences, BUFFERS);
       }
       expect(result.band).toBe('suspicious');
     });
 
-    it('bands a centroid beyond the far buffer as "far"', () => {
+    it('bands a centroid beyond the far buffer as "far"', async () => {
       const key = `student-${Date.now()}-h`;
       let result;
       for (let i = 0; i < 3; i += 1) {
-        result = gpsFix.evaluateFix(key, 'session1', fix(0, 0), geofences, BUFFERS);
+        result = await gpsFix.evaluateFix(key, 'session1', fix(0, 0), geofences, BUFFERS);
       }
       expect(result.ready).toBe(true);
       expect(result.band).toBe('far');
@@ -245,24 +247,24 @@ describe('gpsFix', () => {
     // The accuracy gate (auto-banding poor fixes as "unknown") was removed:
     // every band decision now runs purely off distance, however inaccurate the
     // contributing fixes were reported to be.
-    it('bands a centroid from very inaccurate fixes on distance alone, not "unknown"', () => {
+    it('bands a centroid from very inaccurate fixes on distance alone, not "unknown"', async () => {
       const key = `student-${Date.now()}-i`;
       let result;
       // Standing dead centre of the polygon, every fix reported as +/-200m accurate.
       for (let i = 0; i < 3; i += 1) {
-        result = gpsFix.evaluateFix(key, 'session1', fix(6.9005, 79.8005, 200), geofences, BUFFERS);
+        result = await gpsFix.evaluateFix(key, 'session1', fix(6.9005, 79.8005, 200), geofences, BUFFERS);
       }
       expect(result.ready).toBe(true);
       expect(result.band).toBe('inside');
       expect(gpsFix.isPassBand(result.band)).toBe(true);
     });
 
-    it('bands against the NEAREST of several buildings', () => {
+    it('bands against the NEAREST of several buildings', async () => {
       const key = `student-${Date.now()}-j`;
       const farAway = [[10.0000, 10.0000], [10.0010, 10.0000], [10.0010, 10.0010], [10.0000, 10.0010]];
       let result;
       for (let i = 0; i < 3; i += 1) {
-        result = gpsFix.evaluateFix(
+        result = await gpsFix.evaluateFix(
           key, 'session1', fix(6.9005, 79.8005), [{ polygon: farAway }, { polygon: square }], BUFFERS,
         );
       }
