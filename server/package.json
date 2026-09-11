@@ -21,6 +21,10 @@
     "jest": "^29.7.0",
     "supertest": "^7.0.0"
   },
+  "comment:overrides": "exceljs and gaxios both pin uuid 8/9, which carry GHSA-w5hq-g745-h8pq. Lifting the transitive copies to 11 clears it without touching exceljs itself -- `npm audit fix --force` would instead DOWNGRADE exceljs 4.4.0 -> 3.4.0 and take the attendance export with it. Safe because both consumers only ever destructure the named v4 export, which 11 still provides from CJS; the advisory is about v3/v5/v6 with an explicit buf.",
+  "overrides": {
+    "uuid": "^11.1.1"
+  },
   "dependencies": {
     "express": "^5.2.1",
     "mongoose": "^9.0.0",
