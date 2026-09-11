@@ -1,4 +1,4 @@
-jest.mock('../models/GpsFixBuffer', () => require('./helpers/gpsStateFakes').makeFixBufferModel());
+jest.mock('../models/AttendanceAttempt', () => require('./helpers/gpsStateFakes').makeAttendanceAttemptModel());
 
 const gpsFix = require('../services/gpsFix.service');
 const geofenceLogic = require('../services/geofenceLogic.service');

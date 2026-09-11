@@ -8,8 +8,7 @@ const ManualCode = require('../models/ManualCode');
 const Settings = require('../models/Settings');
 const Geofence = require('../models/Geofence');
 const AuditLog = require('../models/AuditLog');
-const GpsFixBuffer = require('../models/GpsFixBuffer');
-const AttemptVerdict = require('../models/AttemptVerdict');
+const AttendanceAttempt = require('../models/AttendanceAttempt');
 const { mongoUri, isProd } = require('./env');
 
 async function connectDatabase() {
@@ -34,11 +33,10 @@ async function syncAllIndexes() {
     await Settings.syncIndexes();
     await Geofence.syncIndexes();
     await AuditLog.syncIndexes();
-    // Both carry a TTL index, and that index *is* the cleanup for abandoned
-    // attempts now that neither service sweeps on a timer. Without it the two
-    // collections grow for a whole semester.
-    await GpsFixBuffer.syncIndexes();
-    await AttemptVerdict.syncIndexes();
+    // Carries a TTL index, and that index *is* the cleanup for abandoned
+    // attempts now that neither service sweeps on a timer. Without it the
+    // collection grows for a whole semester.
+    await AttendanceAttempt.syncIndexes();
   } catch (e) {
     // A failed sync means queries may run without their expected indexes (full
     // collection scans under load) — surface loudly and refuse to run in prod.

@@ -1,7 +1,6 @@
 'use strict';
 
-jest.mock('../models/GpsFixBuffer', () => require('./helpers/gpsStateFakes').makeFixBufferModel());
-jest.mock('../models/AttemptVerdict', () => require('./helpers/gpsStateFakes').makeVerdictModel());
+jest.mock('../models/AttendanceAttempt', () => require('./helpers/gpsStateFakes').makeAttendanceAttemptModel());
 jest.mock('connect-mongo', () => ({
   MongoStore: {
     create: jest.fn().mockReturnValue({

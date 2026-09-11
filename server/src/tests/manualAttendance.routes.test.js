@@ -1,8 +1,7 @@
 'use strict';
 
 // Mock connect-mongo before the app is loaded (MongoStore.create runs at module load)
-jest.mock('../models/GpsFixBuffer', () => require('./helpers/gpsStateFakes').makeFixBufferModel());
-jest.mock('../models/AttemptVerdict', () => require('./helpers/gpsStateFakes').makeVerdictModel());
+jest.mock('../models/AttendanceAttempt', () => require('./helpers/gpsStateFakes').makeAttendanceAttemptModel());
 jest.mock('connect-mongo', () => ({
   MongoStore: {
     create: jest.fn().mockReturnValue({

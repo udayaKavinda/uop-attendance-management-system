@@ -1,15 +1,19 @@
 const { distanceToNearestGeofenceMeters, haversineMeters } = require('../utils/geo');
 const geofenceLogicService = require('./geofenceLogic.service');
-const GpsFixBuffer = require('../models/GpsFixBuffer');
+const AttendanceAttempt = require('../models/AttendanceAttempt');
+// One-way: attemptVerdict does not require this module, so there is no cycle.
+const { VERDICT_TTL_MS } = require('./attemptVerdict.service');
 
 /**
- * Per-(student, session) GPS fix accumulator, held in MongoDB.
+ * The GPS half of an attendance attempt, held in MongoDB alongside the verdict
+ * it produces (see AttendanceAttempt, and attemptVerdict.service for the other
+ * half of the same document).
  *
  * This was a per-process `Map`. The storage moved because that made a restart
  * mid-lecture lose every in-flight attempt and made a second app instance
- * impossible (see GpsFixBuffer). Only the storage moved: every function below
- * that decides anything — trimming, weighting, banding — is still pure and
- * still synchronous, so the arithmetic remains testable without a database.
+ * impossible. Only the storage moved: every function below that decides
+ * anything — trimming, weighting, banding — is still pure and still
+ * synchronous, so the arithmetic remains testable without a database.
  */
 
 const FIX_WINDOW_MS = 90_000; // matches the client's 90s runtime window
@@ -56,7 +60,7 @@ function liveFixes(fixes, now = Date.now()) {
  */
 async function addFix(studentId, sessionId, fix) {
   const now = Date.now();
-  const doc = await GpsFixBuffer.findOneAndUpdate(
+  const doc = await AttendanceAttempt.findOneAndUpdate(
     { student: String(studentId), session: String(sessionId) },
     {
       $push: {
@@ -73,8 +77,16 @@ async function addFix(studentId, sessionId, fix) {
   return liveFixes(doc.fixes, now);
 }
 
+/**
+ * Drops the fixes but keeps the document, because the verdict they produced
+ * lives in it and outlives them. The attempt itself is ended by
+ * attemptVerdict.clear, which every call site pairs with this one.
+ */
 async function clearFixes(studentId, sessionId) {
-  await GpsFixBuffer.deleteOne({ student: String(studentId), session: String(sessionId) });
+  await AttendanceAttempt.updateOne(
+    { student: String(studentId), session: String(sessionId) },
+    { $set: { fixes: [] } },
+  );
 }
 
 /**
@@ -90,10 +102,17 @@ async function clearFixes(studentId, sessionId) {
  * Cannot change a verdict, only storage: a buffer in this state holds only
  * fixes that `liveFixes` would discard anyway.
  */
-async function sweep(now = Date.now()) {
-  const cutoff = now - FIX_WINDOW_MS;
-  const res = await GpsFixBuffer.deleteMany({
-    $nor: [{ fixes: { $elemMatch: { ts: { $gt: cutoff } } } }],
+async function sweep(now = Date.now(), verdictTtlMs = VERDICT_TTL_MS) {
+  const fixCutoff = now - FIX_WINDOW_MS;
+  const verdictCutoff = now - verdictTtlMs;
+  const res = await AttendanceAttempt.deleteMany({
+    // No live fix left ...
+    $nor: [{ fixes: { $elemMatch: { ts: { $gt: fixCutoff } } } }],
+    // ... AND no verdict still worth judging a code submission against. Both
+    // halves are required: deleting on stale fixes alone would throw away the
+    // verdict a student is on their way to the front of the hall to use, which
+    // is the exact failure this state was made durable to prevent.
+    $or: [{ verdictTs: null }, { verdictTs: { $lte: verdictCutoff } }],
   });
   return res.deletedCount || 0;
 }
@@ -151,7 +170,7 @@ function accuracyWeightedCentroid(fixes) {
 
 /** Returns null if there aren't enough fixes yet to decide. */
 async function computeCentroid(studentId, sessionId) {
-  const doc = await GpsFixBuffer.findOne({
+  const doc = await AttendanceAttempt.findOne({
     student: String(studentId), session: String(sessionId),
   });
   const survivors = removeOutliersByMedianDistance(liveFixes(doc?.fixes));

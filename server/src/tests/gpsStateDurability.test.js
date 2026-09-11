@@ -46,8 +46,7 @@ if (!URI) {
   console.warn('[gpsStateDurability] no MONGO_TEST_URI — skipping live-database suite.');
 }
 
-const GpsFixBuffer = require('../models/GpsFixBuffer');
-const AttemptVerdict = require('../models/AttemptVerdict');
+const AttendanceAttempt = require('../models/AttendanceAttempt');
 
 let gpsFix = require('../services/gpsFix.service');
 let attemptVerdict = require('../services/attemptVerdict.service');
@@ -87,22 +86,19 @@ function restartProcess() {
 describeDb('live MongoDB — durable attempt state', () => {
   beforeAll(async () => {
     await mongoose.connect(URI, { serverSelectionTimeoutMS: 8000 });
-    await Promise.all([GpsFixBuffer.init(), AttemptVerdict.init()]);
+    await AttendanceAttempt.init();
   }, 30000);
 
   afterAll(async () => {
     if (mongoose.connection.readyState === 1) {
-      await Promise.all([
-        GpsFixBuffer.deleteMany({}),
-        AttemptVerdict.deleteMany({}),
-      ]);
+      await AttendanceAttempt.deleteMany({});
       await mongoose.disconnect();
     }
   });
 
   beforeEach(async () => {
     restartProcess();
-    await Promise.all([GpsFixBuffer.deleteMany({}), AttemptVerdict.deleteMany({})]);
+    await AttendanceAttempt.deleteMany({});
   });
 
   // ── the incident ─────────────────────────────────────────────────────────
@@ -179,7 +175,7 @@ describeDb('live MongoDB — durable attempt state', () => {
 
       expect(verdict.ready).toBe(true);
       expect(verdict.centroid.fixCount).toBe(3);
-      expect(await GpsFixBuffer.countDocuments({ student, session })).toBe(1);
+      expect(await AttendanceAttempt.countDocuments({ student, session })).toBe(1);
     });
   });
 
@@ -195,9 +191,9 @@ describeDb('live MongoDB — durable attempt state', () => {
         Array.from({ length: N }, () => gpsFix.addFix(student, session, INSIDE)),
       );
 
-      const doc = await GpsFixBuffer.findOne({ student, session });
+      const doc = await AttendanceAttempt.findOne({ student, session });
       expect(doc.fixes).toHaveLength(N);
-      expect(await GpsFixBuffer.countDocuments({ student, session })).toBe(1);
+      expect(await AttendanceAttempt.countDocuments({ student, session })).toBe(1);
     });
 
     it('concurrent upserts still produce exactly one buffer document', async () => {
@@ -212,7 +208,7 @@ describeDb('live MongoDB — durable attempt state', () => {
 
       // A duplicate-key rejection here would mean a lost fix in production.
       expect(rejected).toHaveLength(0);
-      expect(await GpsFixBuffer.countDocuments({ student, session })).toBe(1);
+      expect(await AttendanceAttempt.countDocuments({ student, session })).toBe(1);
     });
 
     it('concurrent verdict writes leave exactly one verdict', async () => {
@@ -225,7 +221,7 @@ describeDb('live MongoDB — durable attempt state', () => {
         })),
       );
       expect(results.filter((r) => r.status === 'rejected')).toHaveLength(0);
-      expect(await AttemptVerdict.countDocuments({ student, session })).toBe(1);
+      expect(await AttendanceAttempt.countDocuments({ student, session })).toBe(1);
     });
   });
 
@@ -271,7 +267,7 @@ describeDb('live MongoDB — durable attempt state', () => {
       const session = 'sess-stale';
       const old = Date.now() - gpsFix.FIX_WINDOW_MS - 5_000;
 
-      await GpsFixBuffer.create({
+      await AttendanceAttempt.create({
         student,
         session,
         fixes: [
@@ -280,7 +276,7 @@ describeDb('live MongoDB — durable attempt state', () => {
       });
 
       // Three fixes are stored, but none of them are live.
-      expect((await GpsFixBuffer.findOne({ student, session })).fixes).toHaveLength(3);
+      expect((await AttendanceAttempt.findOne({ student, session })).fixes).toHaveLength(3);
       expect(await gpsFix.computeCentroid(student, session)).toBeNull();
     });
 
@@ -288,7 +284,7 @@ describeDb('live MongoDB — durable attempt state', () => {
       const student = 'stu-mixed';
       const session = 'sess-mixed';
       const old = Date.now() - gpsFix.FIX_WINDOW_MS - 5_000;
-      await GpsFixBuffer.create({
+      await AttendanceAttempt.create({
         student, session, fixes: [{ ...INSIDE, ts: old }, { ...INSIDE, ts: old }],
       });
 
@@ -308,7 +304,7 @@ describeDb('live MongoDB — durable attempt state', () => {
         await gpsFix.addFix(student, session, INSIDE);
       }
 
-      const doc = await GpsFixBuffer.findOne({ student, session });
+      const doc = await AttendanceAttempt.findOne({ student, session });
       expect(doc.fixes.length).toBe(gpsFix.MAX_BUFFERED_FIXES);
     }, 120000);
   });
@@ -318,30 +314,74 @@ describeDb('live MongoDB — durable attempt state', () => {
   describe('sweep', () => {
     it('deletes buffers with no live fix and keeps the ones that have one', async () => {
       const old = Date.now() - gpsFix.FIX_WINDOW_MS - 5_000;
-      await GpsFixBuffer.create({ student: 'dead', session: 's', fixes: [{ ...INSIDE, ts: old }] });
-      await GpsFixBuffer.create({ student: 'alive', session: 's', fixes: [{ ...INSIDE, ts: Date.now() }] });
+      await AttendanceAttempt.create({ student: 'dead', session: 's', fixes: [{ ...INSIDE, ts: old }] });
+      await AttendanceAttempt.create({ student: 'alive', session: 's', fixes: [{ ...INSIDE, ts: Date.now() }] });
 
       const removed = await gpsFix.sweep();
 
       expect(removed).toBe(1);
-      expect(await GpsFixBuffer.countDocuments({ student: 'dead' })).toBe(0);
-      expect(await GpsFixBuffer.countDocuments({ student: 'alive' })).toBe(1);
+      expect(await AttendanceAttempt.countDocuments({ student: 'dead' })).toBe(0);
+      expect(await AttendanceAttempt.countDocuments({ student: 'alive' })).toBe(1);
     });
 
     it('deletes a buffer that has no fixes at all', async () => {
-      await GpsFixBuffer.create({ student: 'empty', session: 's', fixes: [] });
+      await AttendanceAttempt.create({ student: 'empty', session: 's', fixes: [] });
       await gpsFix.sweep();
-      expect(await GpsFixBuffer.countDocuments({ student: 'empty' })).toBe(0);
+      expect(await AttendanceAttempt.countDocuments({ student: 'empty' })).toBe(0);
+    });
+
+    /**
+     * The trap that combining the two collections created, and the one that
+     * would silently recreate the original incident: a student's fixes go stale
+     * while they are walking to the front of the hall for the code, and their
+     * verdict is on the same document. A sweep that only looked at fix age
+     * would take the verdict with it, `get` would return null, and null is read
+     * as `unknown` — flagged.
+     */
+    it('does NOT delete a row whose fixes are stale but whose verdict is still live', async () => {
+      const old = Date.now() - gpsFix.FIX_WINDOW_MS - 30_000;
+      await AttendanceAttempt.create({
+        student: 'walking-to-the-front',
+        session: 's',
+        fixes: [{ ...INSIDE, ts: old }, { ...INSIDE, ts: old }, { ...INSIDE, ts: old }],
+        band: 'suspicious',
+        centroid: { lat: 7.2559, lng: 80.5918, bestAccuracy: 8, fixCount: 3 },
+        distanceM: 78,
+        verdictTs: Date.now(), // recorded moments ago
+      });
+
+      const removed = await gpsFix.sweep();
+
+      expect(removed).toBe(0);
+      expect(await AttendanceAttempt.countDocuments({ student: 'walking-to-the-front' })).toBe(1);
+      // And the verdict is still usable, which is the whole point.
+      const stored = await attemptVerdict.get('walking-to-the-front', 's');
+      expect(stored).not.toBeNull();
+      expect(stored.band).toBe('suspicious');
+    });
+
+    it('deletes the row once BOTH the fixes and the verdict have aged out', async () => {
+      const old = Date.now() - gpsFix.FIX_WINDOW_MS - 30_000;
+      await AttendanceAttempt.create({
+        student: 'long-gone',
+        session: 's',
+        fixes: [{ ...INSIDE, ts: old }],
+        band: 'suspicious',
+        verdictTs: Date.now() - attemptVerdict.VERDICT_TTL_MS - 1_000,
+      });
+
+      expect(await gpsFix.sweep()).toBe(1);
+      expect(await AttendanceAttempt.countDocuments({ student: 'long-gone' })).toBe(0);
     });
 
     it('keeps a buffer where only one of several fixes is still live', async () => {
       const old = Date.now() - gpsFix.FIX_WINDOW_MS - 5_000;
-      await GpsFixBuffer.create({
+      await AttendanceAttempt.create({
         student: 'partly', session: 's',
         fixes: [{ ...INSIDE, ts: old }, { ...INSIDE, ts: old }, { ...INSIDE, ts: Date.now() }],
       });
       await gpsFix.sweep();
-      expect(await GpsFixBuffer.countDocuments({ student: 'partly' })).toBe(1);
+      expect(await AttendanceAttempt.countDocuments({ student: 'partly' })).toBe(1);
     });
   });
 
@@ -359,7 +399,7 @@ describeDb('live MongoDB — durable attempt state', () => {
       const got = await attemptVerdict.get('stu-newest', 'sess');
       expect(got.band).toBe('inside');
       expect(got.distanceM).toBe(0);
-      expect(await AttemptVerdict.countDocuments({ student: 'stu-newest' })).toBe(1);
+      expect(await AttendanceAttempt.countDocuments({ student: 'stu-newest' })).toBe(1);
     });
 
     it('expires on age rather than waiting for the TTL monitor, and deletes the row', async () => {
@@ -370,7 +410,7 @@ describeDb('live MongoDB — durable attempt state', () => {
       // Read from a moment past the TTL instead of faking the clock.
       const later = Date.now() + attemptVerdict.VERDICT_TTL_MS + 1;
       expect(await attemptVerdict.get(student, session, later)).toBeNull();
-      expect(await AttemptVerdict.countDocuments({ student, session })).toBe(0);
+      expect((await AttendanceAttempt.findOne({ student, session })).band).toBeNull();
     });
 
     it('is still valid one tick before the TTL', async () => {
@@ -407,54 +447,51 @@ describeDb('live MongoDB — durable attempt state', () => {
     });
 
     it('sweep removes aged verdicts and leaves fresh ones', async () => {
-      await AttemptVerdict.create({
-        student: 'old', session: 's', band: 'inside', ts: Date.now() - attemptVerdict.VERDICT_TTL_MS - 1,
+      await AttendanceAttempt.create({
+        student: 'old', session: 's', band: 'inside', verdictTs: Date.now() - attemptVerdict.VERDICT_TTL_MS - 1,
       });
-      await AttemptVerdict.create({
-        student: 'new', session: 's', band: 'inside', ts: Date.now(),
+      await AttendanceAttempt.create({
+        student: 'new', session: 's', band: 'inside', verdictTs: Date.now(),
       });
 
       const removed = await attemptVerdict.sweep();
 
       expect(removed).toBe(1);
-      expect(await AttemptVerdict.countDocuments({ student: 'old' })).toBe(0);
-      expect(await AttemptVerdict.countDocuments({ student: 'new' })).toBe(1);
+      // Cleared in place, not deleted: the row may still hold live fixes.
+      expect((await AttendanceAttempt.findOne({ student: 'old' })).band).toBeNull();
+      expect((await AttendanceAttempt.findOne({ student: 'new' })).band).toBe('inside');
     });
   });
 
   // ── schema guarantees ────────────────────────────────────────────────────
 
   describe('collection guarantees', () => {
-    it('enforces one buffer per (student, session)', async () => {
-      await GpsFixBuffer.create({ student: 'dup', session: 's', fixes: [] });
-      await expect(GpsFixBuffer.create({ student: 'dup', session: 's', fixes: [] }))
+    it('enforces one attempt document per (student, session)', async () => {
+      await AttendanceAttempt.create({ student: 'dup', session: 's', fixes: [] });
+      await expect(AttendanceAttempt.create({ student: 'dup', session: 's', fixes: [] }))
         .rejects.toThrow(/duplicate key/i);
     });
 
-    it('enforces one verdict per (student, session)', async () => {
-      await AttemptVerdict.create({ student: 'dup', session: 's', band: 'inside', ts: Date.now() });
-      await expect(AttemptVerdict.create({ student: 'dup', session: 's', band: 'near', ts: Date.now() }))
+    it('cannot create a second attempt document for the same pair', async () => {
+      await AttendanceAttempt.create({ student: 'dup2', session: 's', band: 'inside', verdictTs: Date.now() });
+      await expect(AttendanceAttempt.create({ student: 'dup2', session: 's', band: 'near', verdictTs: Date.now() }))
         .rejects.toThrow(/duplicate key/i);
     });
 
     it('rejects a band the banding code cannot produce', async () => {
-      await expect(AttemptVerdict.create({ student: 'bad', session: 's', band: 'elsewhere', ts: Date.now() }))
+      await expect(AttendanceAttempt.create({ student: 'bad', session: 's', band: 'elsewhere', verdictTs: Date.now() }))
         .rejects.toThrow(/validation/i);
     });
 
-    it('carries a TTL index on both collections so abandoned state cannot accumulate', async () => {
-      const fixIdx = await GpsFixBuffer.collection.indexes();
-      const verdictIdx = await AttemptVerdict.collection.indexes();
+    it('carries a TTL index long enough for both halves of an attempt', async () => {
+      const idx = await AttendanceAttempt.collection.indexes();
+      const ttl = idx.find((i) => i.expireAfterSeconds !== undefined);
 
-      expect(fixIdx.some((i) => i.expireAfterSeconds !== undefined)).toBe(true);
-      expect(verdictIdx.some((i) => i.expireAfterSeconds !== undefined)).toBe(true);
-
-      // And the TTL must outlast the window it is cleaning up after, or it would
-      // race the attempt it belongs to.
-      const fixTtl = fixIdx.find((i) => i.expireAfterSeconds !== undefined).expireAfterSeconds;
-      expect(fixTtl * 1000).toBeGreaterThan(gpsFix.FIX_WINDOW_MS);
-      const verdictTtl = verdictIdx.find((i) => i.expireAfterSeconds !== undefined).expireAfterSeconds;
-      expect(verdictTtl * 1000).toBeGreaterThanOrEqual(attemptVerdict.VERDICT_TTL_MS);
+      expect(ttl).toBeDefined();
+      // The TTL must outlast BOTH lifetimes the document now covers, or it
+      // would race the attempt it belongs to — and the verdict's is the longer.
+      expect(ttl.expireAfterSeconds * 1000).toBeGreaterThan(gpsFix.FIX_WINDOW_MS);
+      expect(ttl.expireAfterSeconds * 1000).toBeGreaterThanOrEqual(attemptVerdict.VERDICT_TTL_MS);
     });
   });
 });
