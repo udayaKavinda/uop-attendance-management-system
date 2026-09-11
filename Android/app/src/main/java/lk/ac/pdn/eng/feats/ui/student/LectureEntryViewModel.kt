@@ -1,6 +1,7 @@
 package lk.ac.pdn.eng.feats.ui.student
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -300,7 +301,11 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
             cancelCheckIn()
             _mockLocationDetected.value = true
         } catch (e: Exception) {
-            // No provider, permission revoked mid-window, etc. Bluetooth may still win.
+            // No provider, permission revoked mid-window, etc. Bluetooth may still
+            // win, so this never ends the attempt — but it used to vanish entirely,
+            // which is why a student whose GPS never started looked identical to one
+            // who was simply out of range. Leave a trace for the next report.
+            Log.w("LectureEntry", "GPS path stopped: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 

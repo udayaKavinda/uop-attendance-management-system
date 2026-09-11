@@ -69,12 +69,8 @@ class GpsLocationSource(private val context: Context) {
             close(LocationUnavailableException("Location is not available on this device."))
             return@callbackFlow
         }
-        val provider = when {
-            manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-            manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            else -> null
-        }
-        if (provider == null) {
+        val providers = enabledProviders(manager)
+        if (providers.isEmpty()) {
             close(LocationUnavailableException("Location is turned off. Enable it to verify your position."))
             return@callbackFlow
         }
@@ -87,9 +83,17 @@ class GpsLocationSource(private val context: Context) {
             trySend(GpsFix(location.latitude, location.longitude, location.accuracy))
         }
 
-        try {
-            manager.requestLocationUpdates(provider, intervalMs, 0f, listener, Looper.getMainLooper())
-        } catch (e: SecurityException) {
+        // Registering the same listener against several providers is supported and
+        // simply interleaves their fixes. The server already handles a mixed stream:
+        // it trims outliers by median distance and weights the centroid by 1/accuracy²,
+        // so a coarse network fix informs the result without being able to dominate a
+        // precise satellite one (gpsFix.service.js).
+        val registered = providers.filter { provider ->
+            runCatching {
+                manager.requestLocationUpdates(provider, intervalMs, 0f, listener, Looper.getMainLooper())
+            }.isSuccess
+        }
+        if (registered.isEmpty()) {
             close(LocationUnavailableException(LocationPermissions.permissionDeniedMessage()))
             return@callbackFlow
         }
@@ -98,6 +102,32 @@ class GpsLocationSource(private val context: Context) {
             runCatching { manager.removeUpdates(listener) }
         }
     }
+}
+
+/**
+ * The providers to stream from, best first.
+ *
+ * `FUSED_PROVIDER` (API 31+) is the platform's own blended engine — satellites,
+ * Wi-Fi, cell and sensors together — and is what Google Maps shows a position
+ * from. Critically it is part of `LocationManager`, so preferring it keeps the
+ * deliberate choice not to depend on Play Services.
+ *
+ * Below API 31 there is no fused provider here, and the previous behaviour —
+ * take GPS if enabled, otherwise network — was the bug: GPS is essentially
+ * always *enabled*, so network was only ever reached when the student had
+ * switched location off entirely, i.e. never. A phone that is enabled but has no
+ * satellite lock yet (indoors, or the first minute of a cold start in the open)
+ * produced no fixes at all, the server never reached its 3-fix minimum, and the
+ * attempt banded `unknown` — "Could not verify location." Registering both
+ * together means a usable position arrives while the satellites are still
+ * settling.
+ */
+private fun enabledProviders(manager: LocationManager): List<String> {
+    val enabled = { provider: String -> runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false) }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && enabled(LocationManager.FUSED_PROVIDER)) {
+        return listOf(LocationManager.FUSED_PROVIDER)
+    }
+    return listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).filter(enabled)
 }
 
 /**
