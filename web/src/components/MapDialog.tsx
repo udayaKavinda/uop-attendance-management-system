@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { MouseEvent, TouchEvent, TouchList, WheelEvent } from 'react';
 import campusMap from '../assets/campus-map.png';
 
 const MIN_SCALE = 1;
@@ -42,7 +43,7 @@ export function MapDialog({ onDismiss }: { onDismiss: () => void }) {
     });
   }
 
-  function onWheel(e: React.WheelEvent) {
+  function onWheel(e: WheelEvent) {
     e.preventDefault();
     zoomBy(e.deltaY < 0 ? 1.2 : 1 / 1.2);
   }
@@ -52,12 +53,12 @@ export function MapDialog({ onDismiss }: { onDismiss: () => void }) {
     setPos({ x: 0, y: 0 });
   }
 
-  function onMouseDown(e: React.MouseEvent) {
+  function onMouseDown(e: MouseEvent) {
     if (scale === MIN_SCALE) return;
     drag.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
   }
 
-  function onMouseMove(e: React.MouseEvent) {
+  function onMouseMove(e: MouseEvent) {
     if (!drag.current) return;
     setPos({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y });
   }
@@ -66,7 +67,7 @@ export function MapDialog({ onDismiss }: { onDismiss: () => void }) {
     drag.current = null;
   }
 
-  function onTouchStart(e: React.TouchEvent) {
+  function onTouchStart(e: TouchEvent) {
     if (e.touches.length === 2) {
       pinch.current = { distance: touchDistance(e.touches), scale };
     } else if (e.touches.length === 1 && scale > MIN_SCALE) {
@@ -75,7 +76,7 @@ export function MapDialog({ onDismiss }: { onDismiss: () => void }) {
     }
   }
 
-  function onTouchMove(e: React.TouchEvent) {
+  function onTouchMove(e: TouchEvent) {
     if (e.touches.length === 2 && pinch.current) {
       const ratio = touchDistance(e.touches) / pinch.current.distance;
       setScale(clampScale(pinch.current.scale * ratio));
@@ -85,7 +86,7 @@ export function MapDialog({ onDismiss }: { onDismiss: () => void }) {
     }
   }
 
-  function onTouchEnd(e: React.TouchEvent) {
+  function onTouchEnd(e: TouchEvent) {
     if (e.touches.length < 2) pinch.current = null;
     if (e.touches.length === 0) drag.current = null;
   }
