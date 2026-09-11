@@ -70,6 +70,12 @@ let mockManualCodeDoc = null;
 jest.mock('../models/ManualCode', () => ({
   findOne: jest.fn(() => Promise.resolve(mockManualCodeDoc)),
   findOneAndUpdate: jest.fn(() => Promise.resolve(mockManualCodeDoc)),
+  // The service refreshes a stale `updatedAt` on plain reads so the model's 1h TTL
+  // cannot delete a live lecture's code — see TTL_REFRESH_AFTER_MS.
+  updateOne: jest.fn((_filter, update) => {
+    if (mockManualCodeDoc && update && update.$set) Object.assign(mockManualCodeDoc, update.$set);
+    return Promise.resolve({ matchedCount: 1, modifiedCount: 1 });
+  }),
   deleteOne: jest.fn(),
 }));
 

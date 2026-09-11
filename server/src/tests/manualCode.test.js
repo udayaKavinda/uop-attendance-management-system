@@ -6,6 +6,9 @@
 const mockModel = {
   findOne: jest.fn(),
   findOneAndUpdate: jest.fn(),
+  // The service refreshes a stale `updatedAt` on plain reads so the model's 1h TTL
+  // cannot delete a code out from under a running lecture — see TTL_REFRESH_AFTER_MS.
+  updateOne: jest.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
   deleteOne: jest.fn(),
 };
 jest.mock('../models/ManualCode', () => mockModel);
@@ -66,6 +69,81 @@ describe('manualCode', () => {
       const result = await manualCode.getOrRotateCode(makeSession({ manualCodeRotationMode: 'none' }));
       expect(result.code).toBe('existing1');
       expect(mockModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The model TTL-deletes a code an hour after its last write. Reads used to not
+     * count as writes, so a `none`-mode code — the default — was deleted one hour
+     * into a two-hour lecture and silently replaced, and the code the lecturer had
+     * already read out started being rejected. These pin the refresh-on-read that
+     * stops that, including the throttle that keeps it from writing on every poll.
+     */
+    describe('TTL keep-alive on read', () => {
+      const staleBy = (ms) => ({
+        code: 'existing1', prevCode: null, generatedAt: Date.now() - ms, paused: false,
+        updatedAt: new Date(Date.now() - ms),
+      });
+
+      it('refreshes updatedAt when a non-rotating code is going stale, without changing the code', async () => {
+        mockModel.findOne.mockResolvedValue(staleBy(20 * 60 * 1000));
+        const before = Date.now();
+        const result = await manualCode.getOrRotateCode(
+          makeSession({ manualCodeRotationMode: 'none' }),
+        );
+
+        expect(result.code).toBe('existing1');
+        expect(mockModel.findOneAndUpdate).not.toHaveBeenCalled();
+        expect(mockModel.updateOne).toHaveBeenCalledTimes(1);
+        const [filter, update, options] = mockModel.updateOne.mock.calls[0];
+        expect(filter).toEqual({ session: 'session1' });
+        expect(update.$set.updatedAt.getTime()).toBeGreaterThanOrEqual(before);
+        // Explicit stamp, not a side effect of writing some unrelated field.
+        expect(options).toEqual({ timestamps: false });
+      });
+
+      it('leaves a recently-touched code alone, so polling does not write every time', async () => {
+        mockModel.findOne.mockResolvedValue(staleBy(60 * 1000));
+        await manualCode.getOrRotateCode(makeSession({ manualCodeRotationMode: 'none' }));
+        expect(mockModel.updateOne).not.toHaveBeenCalled();
+      });
+
+      it('refreshes a paused interval code too — pausing takes the same early return', async () => {
+        mockModel.findOne.mockResolvedValue({ ...staleBy(20 * 60 * 1000), paused: true });
+        await manualCode.getOrRotateCode(
+          makeSession({ manualCodeRotationMode: 'interval', manualCodeRotationSeconds: 60 }),
+        );
+        expect(mockModel.updateOne).toHaveBeenCalledTimes(1);
+        expect(mockModel.findOneAndUpdate).not.toHaveBeenCalled();
+      });
+
+      it('keeps a code alive across a two-hour lecture polled every 30s', async () => {
+        const TTL_MS = 60 * 60 * 1000;
+        const doc = staleBy(0);
+        mockModel.findOne.mockImplementation(() => Promise.resolve(doc));
+        mockModel.updateOne.mockImplementation((_f, update) => {
+          Object.assign(doc, update.$set);
+          return Promise.resolve({ matchedCount: 1 });
+        });
+
+        const session = makeSession({ manualCodeRotationMode: 'none' });
+        const start = Date.now();
+        const realNow = Date.now;
+        try {
+          // 240 polls at 30s covers 2h; assert the TTL never comes due in between.
+          for (let i = 1; i <= 240; i++) {
+            const t = start + i * 30 * 1000;
+            Date.now = () => t;
+            expect(t - doc.updatedAt.getTime()).toBeLessThan(TTL_MS);
+            const state = await manualCode.getOrRotateCode(session);
+            expect(state.code).toBe('existing1');
+          }
+        } finally {
+          Date.now = realNow;
+        }
+        // ~4 writes an hour, not one per poll.
+        expect(mockModel.updateOne.mock.calls.length).toBeLessThanOrEqual(10);
+        expect(mockModel.updateOne.mock.calls.length).toBeGreaterThanOrEqual(6);
+      });
     });
 
     it('does not rotate before the interval elapses', async () => {

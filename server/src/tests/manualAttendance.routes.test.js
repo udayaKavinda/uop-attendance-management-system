@@ -21,6 +21,14 @@ jest.mock('../models/ManualCode', () => ({
     mockManualCodeStore[session] = doc;
     return Promise.resolve(doc);
   }),
+  // Used by the service's TTL keep-alive on plain reads — applies $set the way
+  // Mongo would, so a refreshed `updatedAt` is actually observable here.
+  updateOne: jest.fn(({ session }, update) => {
+    const doc = mockManualCodeStore[session];
+    if (!doc) return Promise.resolve({ matchedCount: 0, modifiedCount: 0 });
+    Object.assign(doc, update.$set || {});
+    return Promise.resolve({ matchedCount: 1, modifiedCount: 1 });
+  }),
   deleteOne: jest.fn(({ session }) => {
     delete mockManualCodeStore[session];
     return Promise.resolve({ deletedCount: 1 });

@@ -145,8 +145,22 @@ depends on it.
   dashboard was closed or the phone asleep; with the dashboard open, rotation happened on
   schedule and the same submission was correctly rejected. `getOrRotateCode` now drops
   `prevCode` when the rotation is overdue by more than the grace.
-- The equivalent BLE path is not affected: `verifyToken` reads the token pool without
-  rotating it, so its `generatedAt` always reflects a real rotation.
+- **A read refreshes the row's `updatedAt` once it passes `TTL_REFRESH_AFTER_MS` (15
+  min).** `ManualCode` carries a 1-hour TTL index as safety cleanup for sessions that
+  were never deactivated, but reading a code is not a write: all three of the paths that
+  hand back a stored code — `none` mode, paused, and interval-not-yet-due — used to
+  return the document untouched, and nothing else wrote either. `none` is the default for
+  both clients, so `updatedAt` froze at creation and Mongo deleted a perfectly live code
+  exactly one hour in. The standard slots are two hours, so this landed mid-lecture: the
+  next caller found no row, minted a fresh code, and the value the lecturer had read out
+  or written on the board started being rejected — while their own dashboard showed the
+  new one, making it look like the students were mistyping. Refreshing on read makes the
+  TTL measure time since the code was last *used* rather than since it was created, at
+  about four writes an hour per live session.
+- The equivalent BLE path is not affected twice over: `verifyToken` reads the token pool
+  without rotating it, so its `generatedAt` always reflects a real rotation; and
+  `BleToken` carries the same 1-hour TTL but rotates every 15 seconds while a session
+  broadcasts, so its `updatedAt` is never stale enough for the TTL to fire.
 - Found by the multi-week usage simulation, not by unit tests — the unit tests build the
   `ManualCode` document directly, so the rotate-during-verify path never ran.
 
@@ -615,7 +629,7 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-502 tests across 36 suites. 481 of those run with every Mongoose model mocked and need
+506 tests across 36 suites. 485 of those run with every Mongoose model mocked and need
 no database. The remaining suite, `dbIntegration.test.js`, talks to a real MongoDB —
 schema defaults, validators, `populate` and unique indexes cannot be verified by mocking
 the layer that implements them.

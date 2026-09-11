@@ -18,6 +18,43 @@ const MIN_ROTATION_SECONDS = 10;
 const MAX_ROTATION_SECONDS = 3600;
 const GRACE_MS = 2000; // previous code stays valid 2s after an ON-TIME rotation
 
+/**
+ * How stale a stored code's `updatedAt` may get before a plain read refreshes it.
+ *
+ * The model TTL-deletes a code one hour after its last write — safety cleanup for
+ * sessions that were never deactivated. But reading a code is not a write: the two
+ * early returns in [getOrRotateCode] hand back the stored document untouched, which
+ * is every call for a `none`-mode code (the default for both clients) and every call
+ * for a paused one. Nothing else writes either, so `updatedAt` froze at creation and
+ * Mongo deleted a perfectly live code exactly one hour in — mid-lecture, since the
+ * standard slots are two hours. The next caller found no document and minted a fresh
+ * code, so the value the lecturer had read out or written on the board started being
+ * rejected, while their own dashboard showed the new one and made it look like the
+ * students were mistyping.
+ *
+ * Refreshing on read keeps the TTL measuring what it was meant to measure — time since
+ * the code was last *used*, not since it was created — at four writes an hour per live
+ * session. Deliberately well under the one-hour TTL so a slow poll cannot race it.
+ */
+const TTL_REFRESH_AFTER_MS = 15 * 60 * 1000;
+
+/**
+ * Pushes the TTL clock forward when a read finds the stored code going stale.
+ * `timestamps: false` because the point is to set `updatedAt` explicitly rather
+ * than let the plugin stamp it as a side effect of some unrelated field write.
+ */
+async function keepAlive(Model, key, doc, now) {
+  const updatedAt = doc.updatedAt ? doc.updatedAt.getTime() : 0;
+  if (now - updatedAt < TTL_REFRESH_AFTER_MS) return doc;
+  await Model.updateOne(
+    { session: key },
+    { $set: { updatedAt: new Date(now) } },
+    { timestamps: false },
+  );
+  doc.updatedAt = new Date(now);
+  return doc;
+}
+
 /** Cryptographically secure 8-digit numeric code, zero-padded (e.g. "00417293"). */
 function generateCode() {
   return String(crypto.randomInt(0, 1e8)).padStart(8, '0');
@@ -84,6 +121,11 @@ async function getOrRotateCode(sessionItem) {
     doc = await forceRotate(sessionItem, { keepGrace: false });
     return toState(doc, sessionItem, now);
   }
+
+  // Before either early return, and before the not-yet-due return below: all three
+  // hand back a stored code without writing, and every one of them is a path a live
+  // lecture sits on for its whole duration. See TTL_REFRESH_AFTER_MS.
+  doc = await keepAlive(Model, key, doc, now);
 
   if (doc.paused || sessionItem.manualCodeRotationMode !== 'interval') {
     return toState(doc, sessionItem, now);
