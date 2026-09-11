@@ -20,7 +20,7 @@ jobs:
     env:
       # This runner IS the production host. Left to itself the live-database suite
       # probes localhost:27017 and would open a connection to production Mongo, so
-      # it is switched off explicitly here: that suite skips and the other 31 run.
+      # it is switched off explicitly here: that suite skips and the other 35 run.
       # A test process must never touch production data.
       MONGO_TEST_URI: 'off'
     steps:
@@ -49,18 +49,29 @@ jobs:
       # Either way every deploy is blocked by a red job that looks like a code
       # regression and is not one. Pinning it here makes the suite independent of
       # whatever the host's ambient environment happens to hold.
-      - name: Run server test suite
-        env:
-          NODE_ENV: test
-        run: PATH=/usr/bin:$PATH /usr/bin/npm --prefix server test
-
       # Catches a broken client before the deploy job wipes web/dist and rebuilds
       # it in place — where a compile error would leave the served bundle missing.
+      #
+      # Runs BEFORE the server suite, not after, because two tests in
+      # webApp.routes.test.js gate themselves on web/dist/index.html existing
+      # (`const whenBuilt = isBuilt ? test : test.skip`) — the PWA manifest and
+      # iOS home-screen icon check, and the asset cache-header check. web/dist is
+      # gitignored, so a fresh checkout never has it, and with the build ordered
+      # last those two had never executed on any CI run: not failing, silently
+      # absent, and a skipped test is indistinguishable from a passing one in the
+      # summary line. Building first costs nothing — the same build already
+      # happened in this job — and has the side benefit of failing a broken client
+      # before spending time on the server suite.
       - name: Type-check and build the web client
         run: |
           PATH=/usr/bin:$PATH /usr/bin/npm --prefix web ci --include=dev --no-audit --no-fund
           PATH=/usr/bin:$PATH /usr/bin/npm --prefix web run build
           test -f web/dist/index.html || { echo "web build produced no dist/index.html"; exit 1; }
+
+      - name: Run server test suite
+        env:
+          NODE_ENV: test
+        run: PATH=/usr/bin:$PATH /usr/bin/npm --prefix server test
 
   deploy:
     needs: test

@@ -128,9 +128,18 @@ and execute `/usr/bin/node server/src/server.js`.
 `.github/workflows/deploy.yml` runs a **`test` job first**, and the deploy job does not
 start unless it passes (`needs: test`). That job takes its own checkout, installs with
 `--include=dev` (jest and the web build toolchain live in devDependencies, and the deploy
-itself installs `--omit=dev`, so the suite cannot run there), runs the server tests with
-`MONGO_TEST_URI=off` so nothing touches production Mongo, and type-checks and builds the
-web client. Previously nothing was tested before a release reached the server.
+itself installs `--omit=dev`, so the suite cannot run there), type-checks and builds the
+web client, and then runs the server tests with `MONGO_TEST_URI=off` so nothing touches
+production Mongo. Previously nothing was tested before a release reached the server.
+
+**The web build comes before the suite on purpose.** Two tests in
+`webApp.routes.test.js` gate themselves on `web/dist/index.html` existing — the PWA
+manifest / iOS home-screen icon check and the asset cache-header check — and `web/dist`
+is gitignored, so a fresh checkout never has it. With the build ordered last those two
+skipped on every CI run since the gate was added: not failing, silently absent, and a
+skipped test looks exactly like a passing one in Jest's summary line. Ordering the build
+first costs nothing, since the same build already ran in that job, and it fails a broken
+client before the server suite spends time.
 
 The test step also pins **`NODE_ENV: test`** rather than relying on Jest's default, which
 only applies when the variable is unset. This runner *is* the production host, so it may
