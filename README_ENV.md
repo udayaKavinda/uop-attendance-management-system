@@ -17,6 +17,18 @@ Two consequences worth remembering when editing that file:
   config** and fails the next reload with a duplicate-upstream error. Keep backups in
   `/etc/nginx/backups/`.
 - Always `sudo nginx -t` before `sudo systemctl reload nginx`.
+- **Production returns two `Strict-Transport-Security` headers and only one of them comes
+  from this repo.** `config/security.js` sets the first
+  (`max-age=31536000; includeSubDomains; preload`); the second (`max-age=15552000`,
+  helmet's default value) is emitted by something on the box —
+  [deploy/nginx-app-domain.conf](deploy/nginx-app-domain.conf) has no `add_header`
+  directives at all, and the server mounts `helmet()` exactly once. Nothing is broken:
+  RFC 6797 tells a browser to honour the first header and ignore the rest, so the
+  stronger preload policy is the one that applies. It is recorded here because a reader
+  comparing the live response against this repo will otherwise go looking for a bug that
+  is not in the code. Track down the source with
+  `grep -rn Strict-Transport-Security /etc/nginx/` and delete the duplicate so the live
+  headers match the config that is under version control.
 
 ## Environment variables
 
