@@ -41,7 +41,7 @@ Two consequences worth remembering when editing that file:
 NODE_ENV=production
 TZ=Asia/Colombo
 PORT=5000
-MONGO_URI=mongodb+srv://<user>:<password>@<cluster>.mongodb.net/attendance?appName=Cluster0
+MONGO_URI=mongodb://127.0.0.1:27017/attendance
 APP_BASE_URL=https://attendance.eng.pdn.ac.lk
 SESSION_SECRET=replace-with-a-long-random-value
 GOOGLE_CLIENT_ID=replace-me
@@ -62,45 +62,52 @@ sudo grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' /opt/attendance/app/.env | tr -d '='
   `Asia/Colombo`, but production should set it explicitly.
 - `APP_BASE_URL` builds the Google OAuth callback.
 - `MONGO_URI` is the real production value, not a development placeholder:
-  **production is back on the MongoDB Atlas cluster**, database `attendance`. It ran on
-  the VM's own standalone `mongod` at `127.0.0.1:27017` for a while in between, and that
-  `mongod` is still installed and still holds the data it had when it was live — so it is
-  a plausible-looking wrong answer, not an empty one. Confirm which one a box is actually
-  using rather than trusting any document, this one included:
+  **production runs on the VM's own `mongod`**, standalone, on `127.0.0.1:27017`, database
+  `attendance`. A MongoDB Atlas cluster also exists and has served production at times, but
+  its role now is **testing only** — `uop_attendance_test` there is where the live-database
+  suites point. Production data belongs on the VM.
+
+  Because both are real and both hold plausible-looking data, never infer which one a box
+  is using. Ask the process:
 
   ```bash
   sudo ss -tnp | grep "pid=$(pgrep -f 'node server/src/server.js')" | awk '{print $5}' | sort -u
   ```
 
-  A line reading `127.0.0.1:27017` means the local mongod; a remote address means Atlas.
+  `127.0.0.1:27017` means the local mongod, which is correct. A remote address means it is
+  on Atlas and should be moved back.
 
-  **Get the database name into the path, before the query string.** A URI ending
-  `...mongodb.net/?appName=Cluster0/attendance` connects successfully and silently uses
-  the driver's default database, `test` — which looks exactly like a working deploy
-  against an empty system. It should read `...mongodb.net/attendance?appName=Cluster0`.
+  **If you ever do point it at Atlas, get the database name into the path, before the
+  query string.** A URI ending `...mongodb.net/?appName=Cluster0/attendance` connects
+  successfully and silently uses the driver's default database, `test` — which looks
+  exactly like a working deploy against an empty system.
+  It must read `...mongodb.net/attendance?appName=Cluster0`.
 
-  Being a replica set again, transactions and change streams work; nothing in `server/src`
-  uses either, and there is no need to start. What Atlas gives back is automatic
-  snapshots, which is the reason the arithmetic below changed:
+  Two consequences of being standalone rather than a replica set. **Transactions and
+  change streams do not work** — neither is used anywhere in `server/src`, which is why
+  running standalone is viable, so keep it that way or the database has to become a
+  replica set. And **nothing snapshots this automatically**: Atlas did, a standalone
+  `mongod` does not, and there is no `mongodump` schedule in `/etc/cron.d` or root's
+  crontab.
 
-  **Production now holds a real semester**, so `/var/lib/mongodb` on one VM is no longer
-  the only copy — but a snapshot schedule is not a substitute for knowing you can restore.
-  Attendance is the one thing here that cannot be reconstructed from anywhere else: a
-  course can be retyped and a geofence redrawn; who sat in a lecture three weeks ago
-  cannot. A local dump is still worth keeping alongside the cluster's own:
+  That last point has teeth now in a way it did not when it was first written, because
+  **production holds a real semester**. `/var/lib/mongodb` on this single VM is the only
+  copy of every attendance record, and attendance is the one thing here that cannot be
+  reconstructed from anywhere else: a course can be retyped and a geofence redrawn; who
+  sat in a lecture three weeks ago cannot.
 
   ```bash
-  # a one-off, portable copy — restore with `mongorestore --archive=<file> --gzip`
-  mongodump --uri="$(sudo grep -oP '(?<=^MONGO_URI=).*' /opt/attendance/app/.env)" \
-    --archive=/var/backups/attendance-$(date +%F).gz --gzip
+  sudo mkdir -p /var/backups/mongo
+  # nightly dump, 14 days retained
+  echo '0 2 * * * root mongodump --uri="mongodb://127.0.0.1:27017/attendance" --archive=/var/backups/mongo/attendance-$(date +\%F).gz --gzip && find /var/backups/mongo -maxdepth 1 -mtime +14 -type f -delete' \
+    | sudo tee /etc/cron.d/attendance-mongo-backup
   ```
 
-- **Moving between the two has never migrated data automatically.** Going out to the VM's
-  mongod left the cluster's trial data behind deliberately; coming back to Atlas was done
-  by restoring a `mongodump` of the local database into the cluster, which is why the
-  semester roster is there now. Neither direction happens as a side effect of editing
-  `MONGO_URI` — pointing at a different database just means a different, possibly empty,
-  set of collections.
+- **Moving between the two never migrates data as a side effect.** Editing `MONGO_URI`
+  points the app at a different set of collections, nothing more; the semester roster
+  moves only when someone runs `mongodump`/`mongorestore` deliberately. Both databases
+  have held a plausible copy at different times, which is exactly why the socket check
+  above matters more than any document.
 
   A fresh production database cannot do anything until it is bootstrapped, in this order:
 
@@ -183,12 +190,12 @@ itself installs `--omit=dev`, so the suite cannot run there), type-checks and bu
 web client, and then runs the server tests with `MONGO_TEST_URI=off` so nothing touches
 production Mongo. Previously nothing was tested before a release reached the server.
 
-`MONGO_TEST_URI=off` still matters even though production is on Atlas again. The runner
-is the production host, and the address `jest.globalSetup.js` probes when the variable is
-unset — `127.0.0.1:27017` — is that host's own `mongod`, which is still installed and
-still holds the semester it was serving while it was live. Probing it would point the
-live-DB suites at real data rather than at a decoy that merely shared a name. `off` is the
-only value meaning "do not probe"; unset *and* empty both mean "go looking".
+`MONGO_TEST_URI=off` matters because the runner **is** the production host, and the
+address `jest.globalSetup.js` probes when the variable is unset — `127.0.0.1:27017` — is
+the live database itself, not a decoy that merely shares its name. The live-DB suites drop
+the database they are pointed at. `off` is the only value meaning "do not probe"; unset
+*and* empty both mean "go looking". For local work, point `MONGO_TEST_URI` at a scratch
+database — the Atlas `uop_attendance_test` is what this project uses.
 
 **The web build comes before the suite on purpose.** Two tests in
 `webApp.routes.test.js` gate themselves on `web/dist/index.html` existing — the PWA
