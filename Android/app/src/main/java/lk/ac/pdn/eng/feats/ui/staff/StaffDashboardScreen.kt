@@ -9,9 +9,12 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -82,16 +86,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
@@ -106,6 +117,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import lk.ac.pdn.eng.feats.R
 import lk.ac.pdn.eng.feats.data.net.CourseDto
 import lk.ac.pdn.eng.feats.data.net.GeofenceDto
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
@@ -512,6 +524,7 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
     // The lecturer's code exists for every session; the only choice is rotation.
     var codeRotates by remember { mutableStateOf(false) }
     var codeSeconds by remember { mutableStateOf("60") }
+    var showMap by remember { mutableStateOf(false) }
 
     val canCreate = courseId != null && start.isNotBlank() && end.isNotBlank() &&
         selectedBuildingIds.isNotEmpty()
@@ -592,12 +605,29 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
                 Spacer(Modifier.height(14.dp))
 
                 Text("Where is this lecture?", style = MaterialTheme.typography.labelLarge)
-                Text(
-                    "Students are checked against these building outlines. At least one is required.",
-                    color = Palette.Muted,
-                    fontSize = 12.sp,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
-                )
+                ) {
+                    Text(
+                        "Students are checked against these building outlines. At least one is required.",
+                        color = Palette.Muted,
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Text(
+                        "View map",
+                        color = Palette.Accent,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .padding(start = 6.dp)
+                            .clickable { showMap = true },
+                    )
+                }
+                if (showMap) {
+                    MapDialog(onDismiss = { showMap = false })
+                }
                 if (state.geofences.isEmpty()) {
                     ErrorBanner(
                         "No buildings have been drawn yet. An administrator needs to add one in the Geofences tool before sessions can be created.",
@@ -2014,6 +2044,102 @@ private fun LoadMoreRow(loading: Boolean, onClick: () -> Unit) {
             CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Palette.Accent)
         } else {
             PillButton("Load more", onClick = onClick, tone = PillTone.Accent)
+        }
+    }
+}
+
+private const val MAP_MIN_SCALE = 1f
+private const val MAP_MAX_SCALE = 4f
+
+/**
+ * Full-screen zoomable/pannable popup for the faculty building-key map, opened from
+ * the "View map" link next to the building picker on Create session. Pinch to zoom,
+ * drag to pan once zoomed, double-tap to toggle — mirrors MapDialog.tsx on the web.
+ */
+@Composable
+private fun MapDialog(onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        var scale by remember { mutableFloatStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .fillMaxHeight(0.85f),
+            shape = AppShapes.Card,
+            color = Palette.Card,
+        ) {
+            Column(Modifier.fillMaxSize().padding(12.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Building map", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Outlined.Close, contentDescription = "Close map")
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Palette.InactiveBg)
+                        .pointerInput(Unit) {
+                            detectTapGestures(onDoubleTap = {
+                                if (scale > MAP_MIN_SCALE) {
+                                    scale = MAP_MIN_SCALE
+                                    offset = Offset.Zero
+                                } else {
+                                    scale = 2.5f
+                                }
+                            })
+                        }
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoom, _ ->
+                                val next = (scale * zoom).coerceIn(MAP_MIN_SCALE, MAP_MAX_SCALE)
+                                scale = next
+                                offset = if (next == MAP_MIN_SCALE) Offset.Zero else offset + pan
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.campus_map),
+                        contentDescription = "Numbered map of the Faculty of Engineering buildings",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer(
+                                scaleX = scale,
+                                scaleY = scale,
+                                translationX = offset.x,
+                                translationY = offset.y,
+                            ),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = {
+                        scale = (scale / 1.4f).coerceIn(MAP_MIN_SCALE, MAP_MAX_SCALE)
+                        if (scale == MAP_MIN_SCALE) offset = Offset.Zero
+                    }) { Text("–", fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+                    Text(
+                        "${(scale * 100).toInt()}%",
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                        color = Palette.Muted,
+                        fontSize = 13.sp,
+                    )
+                    IconButton(onClick = {
+                        scale = (scale * 1.4f).coerceIn(MAP_MIN_SCALE, MAP_MAX_SCALE)
+                    }) { Text("+", fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+                }
+            }
         }
     }
 }

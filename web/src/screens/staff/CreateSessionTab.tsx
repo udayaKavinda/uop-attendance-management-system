@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Geofence } from '../../api/types';
 import { Card, ErrorBanner, PrimaryButton } from '../../components/Chrome';
+import { MapDialog } from '../../components/MapDialog';
 import { LabeledSelect, SectionHeader } from '../../components/StaffChrome';
 import type { StaffApi } from '../../hooks/useStaffDashboard';
 
@@ -166,6 +167,7 @@ export function CreateSessionTab({ staff }: { staff: StaffApi }) {
   // The lecturer's code exists for every session; the only choice is rotation.
   const [codeRotates, setCodeRotates] = useState(false);
   const [codeSeconds, setCodeSeconds] = useState('60');
+  const [showMap, setShowMap] = useState(false);
 
   const canCreate = courseId !== '' && start !== '' && end !== '' && buildingIds.length > 0;
 
@@ -231,8 +233,12 @@ export function CreateSessionTab({ staff }: { staff: StaffApi }) {
 
         <div className="field__label">Where is this lecture?</div>
         <p className="hint hint--spaced">
-          Students are checked against these building outlines. At least one is required.
+          Students are checked against these building outlines. At least one is required.{' '}
+          <button type="button" className="hint__link" onClick={() => setShowMap(true)}>
+            View map
+          </button>
         </p>
+        {showMap && <MapDialog onDismiss={() => setShowMap(false)} />}
         {state.geofences.length === 0 ? (
           <ErrorBanner message="No buildings have been drawn yet. An administrator needs to add one in the Geofences tool before sessions can be created." />
         ) : (
