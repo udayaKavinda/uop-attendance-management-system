@@ -61,11 +61,62 @@ sudo grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' /opt/attendance/app/.env | tr -d '='
 - `TZ` controls every weekly window and attendance date. The server safely defaults to
   `Asia/Colombo`, but production should set it explicitly.
 - `APP_BASE_URL` builds the Google OAuth callback.
-- `MONGO_URI` above is only the local-development shape. **Production points at a
-  MongoDB Atlas cluster, not the VM's own `mongod`** — that box also runs a local
-  MongoDB, so anyone inspecting `mongodb://127.0.0.1:27017/attendance` there is reading
-  a different, near-empty database and drawing the wrong conclusion. Read the live
-  `MONGO_URI` from `/opt/attendance/app/.env` before touching production data.
+- `MONGO_URI` is the real production value, not a development placeholder:
+  **production runs on the VM's own `mongod`**, standalone, on `127.0.0.1:27017`,
+  database `attendance`. It used to point at a MongoDB Atlas cluster, and
+  `/opt/attendance/app/.env.atlas.bak` still holds that connection string — kept as the
+  way back, not as the current configuration. Confirm which one a box is actually using
+  rather than trusting any document, this one included:
+
+  ```bash
+  sudo ss -tnp | grep "pid=$(pgrep -f 'node server/src/server.js')" | awk '{print $5}' | sort -u
+  ```
+
+  Every line reading `127.0.0.1:27017` means local; a remote address on 27017 means Atlas.
+
+  Two consequences of being standalone rather than a replica set. **Transactions and
+  change streams do not work** — neither is used anywhere in `server/src`, which is why
+  the move was viable, so keep it that way or the database has to go back to a replica
+  set. And **production is deliberately not backed up.** Atlas took automatic snapshots;
+  a standalone `mongod` takes none, and no `mongodump` schedule was added in
+  `/etc/cron.d` or root's crontab. That was a choice, not an oversight — the database
+  the switch replaced held only test data, and the new one started empty, so at the time
+  there was nothing worth preserving.
+
+  It is worth revisiting the first time the database holds a real semester rather than a
+  trial one, because the arithmetic changes: `/var/lib/mongodb` on that single VM is then
+  the only copy of every attendance record, and attendance is the one thing in this system
+  that cannot be reconstructed from anywhere else. A course can be retyped and a geofence
+  redrawn; who sat in a lecture three weeks ago cannot. If that day comes:
+
+  ```bash
+  sudo mkdir -p /var/backups/mongo
+  # nightly dump, 14 days retained
+  echo '0 2 * * * root mongodump --uri="mongodb://127.0.0.1:27017/attendance" --out=/var/backups/mongo/$(date +\%F) && find /var/backups/mongo -maxdepth 1 -mtime +14 -type d -exec rm -rf {} +' \
+    | sudo tee /etc/cron.d/attendance-mongo-backup
+  ```
+
+- **The switch did not migrate any data, on purpose.** What Atlas held — 19 people, 13
+  courses, 33 lecture sessions, 29 attendance records and 7 geofence polygons — was trial
+  data from building the system, not a real semester, so the local database was started
+  empty rather than restored into. Nothing was lost; the cluster was simply left behind.
+
+  The consequence is that a fresh production database cannot do anything until it is
+  bootstrapped, in this order:
+
+  1. The admin creates itself at boot, from `BOOTSTRAP_ADMIN_EMAIL` in
+     [server/src/utils/constants.js](server/src/utils/constants.js). It is a hard-coded
+     constant rather than an environment variable, so there is nothing to set and no way
+     to be locked out — but equally, **changing it takes a deploy, not an `.env` edit**.
+     Check the value in the source before assuming which account will come up as admin,
+     and remember the running server holds whatever was compiled in at its last deploy.
+  2. `settings` self-creates with defaults (50 m near, 100 m far, BLE on).
+  3. **Every other account signs in as a `student`** — `googleIdentity.service.js`
+     assigns that role to every new person — so each lecturer has to be promoted by the
+     admin before they can own a course.
+  4. **No session can be scheduled until a geofence exists.** Session creation requires
+     at least one building, geofence creation is `requireAdmin`, and the admin UI is
+     Android-only. Draw a building first or nothing else can proceed.
 - `CORS_ORIGINS` is an **optional** comma-separated browser-origin allowlist; production
   does not currently set it, and `config/cors.js` falls back to `APP_BASE_URL` when it is
   absent. Set it only when a browser origin other than the app's own must be allowed.
@@ -131,6 +182,12 @@ start unless it passes (`needs: test`). That job takes its own checkout, install
 itself installs `--omit=dev`, so the suite cannot run there), type-checks and builds the
 web client, and then runs the server tests with `MONGO_TEST_URI=off` so nothing touches
 production Mongo. Previously nothing was tested before a release reached the server.
+
+`MONGO_TEST_URI=off` matters more since production moved onto the VM's own `mongod`.
+That runner is the production host, so the address `jest.globalSetup.js` probes when the
+variable is unset — `127.0.0.1:27017` — is now the live database rather than a decoy that
+merely shared its name. `off` is the only value meaning "do not probe"; unset *and* empty
+both mean "go looking".
 
 **The web build comes before the suite on purpose.** Two tests in
 `webApp.routes.test.js` gate themselves on `web/dist/index.html` existing — the PWA

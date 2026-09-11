@@ -640,7 +640,10 @@ With no local mongod the suite skips itself and the other 35 run as normal, so a
 or CI runner without a database still goes green. Set `MONGO_TEST_URI` to override the
 target, or to `off` to skip the probe entirely — which is what CI does, because the
 deploy runner *is* the production host and a test process must never open a connection
-there.
+there. That has teeth now: production moved off Atlas onto that host's own `mongod`, so
+`127.0.0.1:27017` — the address this probe reaches for by default — is the live server.
+`off` is the only value that suppresses the probe; leaving the variable unset or empty
+both mean "go looking".
 
 That database is **dropped** before and after the run. The name is hard-coded and never
 derived from `MONGO_URI`, and the suite refuses to start if it is pointed at the database

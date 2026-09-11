@@ -18,10 +18,17 @@ jobs:
     runs-on: [self-hosted, linux, x64, attendance-prod]
     timeout-minutes: 15
     env:
-      # This runner IS the production host. Left to itself the live-database suite
-      # probes localhost:27017 and would open a connection to production Mongo, so
-      # it is switched off explicitly here: that suite skips and the other 35 run.
-      # A test process must never touch production data.
+      # This runner IS the production host, and since production moved off Atlas the
+      # address the probe would find — 127.0.0.1:27017 — IS the production mongod. It
+      # is no longer a near-empty decoy sharing a name; it is the live database, on the
+      # same box, one default away. globalSetup probes that address whenever
+      # MONGO_TEST_URI is unset OR empty, so 'off' is the only value that means "do not
+      # look": with it the live-database suite skips and the other 35 run.
+      #
+      # The suite would land in `uop_attendance_test` rather than `attendance`, and
+      # dbIntegration refuses outright if those two names ever match, so this is not the
+      # last line of defence. It is the first, and the cheap one. A test process has no
+      # business opening connections to the production server at all.
       MONGO_TEST_URI: 'off'
     steps:
       - name: Check out the commit being deployed
