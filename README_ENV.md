@@ -17,18 +17,23 @@ Two consequences worth remembering when editing that file:
   config** and fails the next reload with a duplicate-upstream error. Keep backups in
   `/etc/nginx/backups/`.
 - Always `sudo nginx -t` before `sudo systemctl reload nginx`.
-- **Production returns two `Strict-Transport-Security` headers and only one of them comes
-  from this repo.** `config/security.js` sets the first
-  (`max-age=31536000; includeSubDomains; preload`); the second (`max-age=15552000`,
-  helmet's default value) is emitted by something on the box —
-  [deploy/nginx-app-domain.conf](deploy/nginx-app-domain.conf) has no `add_header`
-  directives at all, and the server mounts `helmet()` exactly once. Nothing is broken:
-  RFC 6797 tells a browser to honour the first header and ignore the rest, so the
-  stronger preload policy is the one that applies. It is recorded here because a reader
-  comparing the live response against this repo will otherwise go looking for a bug that
-  is not in the code. Track down the source with
-  `grep -rn Strict-Transport-Security /etc/nginx/` and delete the duplicate so the live
-  headers match the config that is under version control.
+- **Security headers come from the app, not from nginx — do not add them here.** The live
+  site config used to carry `add_header Strict-Transport-Security "max-age=15552000"`,
+  so every response went out with *two* HSTS headers: that one and the stronger
+  `max-age=31536000; includeSubDomains; preload` from
+  [server/src/config/security.js](server/src/config/security.js). RFC 6797 has the
+  browser honour the first and ignore the rest, so the nginx line never actually took
+  effect — it only made the live response disagree with the config under version
+  control, and the two carried contradictory intent (six months, no preload, versus one
+  year with it). The directive has been removed; production now returns exactly one
+  HSTS header and it is the app's. Removing it was safe because nothing is inherited:
+  a block with no `add_header` of its own inherits its parent's, and there are no
+  `add_header` directives in `nginx.conf`, `conf.d/`, or `snippets/`. Change the policy
+  in `security.js`, never in the site config.
+- **A "backup" that is a symlink is not a backup.** `/etc/nginx/backups/` has held
+  `attendance.eng.pdn.ac.lk.conf.bak-<date>` pointing at the live file, so restoring
+  from it restores nothing. Harmless where it sits — nginx globs `sites-enabled`, not
+  `backups` — but it is exactly the thing someone grabs mid-incident. Use `cp -a`.
 
 ## Environment variables
 
@@ -38,11 +43,18 @@ TZ=Asia/Colombo
 PORT=5000
 MONGO_URI=mongodb://127.0.0.1:27017/attendance
 APP_BASE_URL=https://attendance.eng.pdn.ac.lk
-CORS_ORIGINS=https://localhost
 SESSION_SECRET=replace-with-a-long-random-value
 GOOGLE_CLIENT_ID=replace-me
 GOOGLE_CLIENT_SECRET=replace-me
-SESSION_EXPIRE_JOB_MS=60000
+```
+
+Those eight are exactly what the live `/opt/attendance/app/.env` sets. Everything else the
+server reads — `CORS_ORIGINS`, `SESSION_EXPIRE_JOB_MS`, `CSP_REPORT_ONLY`,
+`CSP_EXTRA_CONNECT_SRC`, `MONGO_TEST_URI` — is optional, is **not** set in production, and
+falls back to the default described below. Verify the real set without exposing any value:
+
+```bash
+sudo grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' /opt/attendance/app/.env | tr -d '='
 ```
 
 - `SESSION_SECRET` is mandatory in production; the process exits at boot without it.
@@ -61,10 +73,11 @@ SESSION_EXPIRE_JOB_MS=60000
 - `SESSION_SECRET` has a development fallback (`'dev-only-secret'`), so a non-production
   process will start with a publicly known signing key. Production cannot: `config/env.js`
   exits at boot if it is unset.
-- `FRONTEND_URL` and `REACT_APP_API_BASE` are present in the live `.env` and **read by
-  nothing** — leftovers from the React SPA that was removed (see the nginx note at the top
-  of this file). Safe to delete; kept here so the next person to read that file knows they
-  are dead rather than assuming they matter.
+- `FRONTEND_URL` and `REACT_APP_API_BASE` were leftovers from the React SPA that was
+  removed (see the nginx note at the top of this file), read by nothing. They have since
+  been deleted from the live `.env` and are recorded here only so that finding them in an
+  old backup or a copied deployment does not suggest they ever mattered. Do not re-add
+  them. The same goes for `BLE_SECRET`, below.
 - `CSP_REPORT_ONLY=1` downgrades the Content-Security-Policy to report-only. Useful for
   a few hours after a client change, to see violations in the browser console without
   breaking anything — but **production must not run with it set**, and it once sat there
@@ -72,6 +85,13 @@ SESSION_EXPIRE_JOB_MS=60000
   restart to enforce; confirm with
   `curl -sI http://127.0.0.1:5000/api/healthz | grep -i content-security-policy`, which
   must print `Content-Security-Policy:` and not `-Report-Only`.
+- `CSP_EXTRA_CONNECT_SRC` is an **optional** comma-separated list appended to the CSP
+  `connect-src` allow-list in [server/src/config/security.js](server/src/config/security.js).
+  The policy is otherwise `'self'` only, so a public page that has to reach a third-party
+  origin needs that origin added here rather than the directive being loosened in code.
+  Production does not currently set it. Everything else in the policy — `script-src`,
+  `frame-ancestors`, `form-action` and the rest — is fixed in `security.js` and has no
+  environment override on purpose.
 - `BLE_SECRET` is **no longer used and must not be re-added**. It was required at boot
   and read by nothing: BLE tokens are 8 random bytes from `crypto.randomBytes`, so they
   are unforgeable because they are unpredictable and checked against a live pool, not
@@ -121,7 +141,7 @@ saying why:
 | --- | --- |
 | `NODE_ENV=production`, no `SESSION_SECRET` | `config/env.js` calls `process.exit(1)` while being required. 14 suites report `Jest worker encountered 4 child process exceptions` — nothing about the real cause |
 | `NODE_ENV=production` + `SESSION_SECRET` | `middlewares/testAuth.js` switches its test-only auth bypass off; 130 tests fail on 401s |
-| `NODE_ENV=test` | 476 pass, 21 skipped (the live-DB suite, by `MONGO_TEST_URI=off`) |
+| `NODE_ENV=test` | 485 pass, 21 skipped (the live-DB suite, by `MONGO_TEST_URI=off`) |
 
 Either failure blocks every deploy behind a red job that reads like a code regression and
 is not one. `NODE_ENV` is set on the **step**, not the job, so the web build below it is

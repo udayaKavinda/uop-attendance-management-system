@@ -183,6 +183,13 @@ heard a token.
 | `seedRate` | 0 | Target concurrent seeders; 0 disables seeding. |
 | `seedWindowMs` | 60000 | Seeder **and** decoy window length. |
 | `webAllowNonIos` | false | Whether the browser client at `/app` serves non-iOS devices. A UX gate only — see "Clients". |
+| `studentEmailDomain` | `eng.pdn.ac.lk` | Domain a Google account must carry to sign in as a student. Empty disables the check. Not a verification control — it gates who exists, not who is present. |
+| `minSupportedVersionCode` | 0 | Oldest Android `versionCode` allowed to call the API; 0 accepts any. The force-upgrade lever. |
+
+Those ten rows are the whole `Settings` document — exactly the fields
+`GET`/`PATCH /api/admin/settings` reads and writes. The last two are listed for
+completeness because they share that document and that screen, but neither affects
+banding; everything above them does.
 
 A note on the default: GPS is routinely accurate to only 20–50m indoors, so a tight
 `nearBufferM` pushes genuinely-present students into the code path. 50m is a deliberate
