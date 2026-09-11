@@ -1,6 +1,6 @@
 /** Shared application constants (env-independent). */
 
-const BOOTSTRAP_ADMIN_EMAIL = 'feats.eng.admin@gmail.com';
+const BOOTSTRAP_ADMIN_EMAIL = 'udayakavindadev@gmail.com';
 const CAPACITOR_RETURN_ORIGINS = ['https://localhost'];
 /**
  * Where the iOS web client is served from — deliberately the SAME origin as the
