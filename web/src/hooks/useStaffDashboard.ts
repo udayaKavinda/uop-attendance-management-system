@@ -121,8 +121,22 @@ export function useStaffDashboard() {
     setState((s) => ({ ...s, ...next }));
   }, []);
 
-  const setFlash = useCallback((flash: string) => patch({ flash }), [patch]);
-  const setError = useCallback((error: string) => patch({ error }), [patch]);
+  // One action has one outcome, so each setter clears the other. Neither used to,
+  // and the error banner is dismissed only by clicking it (StaffDashboard wires
+  // clearError to onClick; the flash gets a 2.5s timer, the error gets nothing) —
+  // so a session-clash error survived the retry that fixed it, every later action
+  // and every tab switch, sitting in red above a green "Session created." The
+  // obvious reading of that screen is that the session was not created, so the
+  // real cost was lecturers re-creating work that had already succeeded.
+  //
+  // refresh() below also preserves a stale error and is deliberately left alone:
+  // deactivate() calls setError() and then refresh(), so clearing there would
+  // swallow the message it had just set. Fixing the setters is enough, because
+  // refresh only ever sets an error on failure and so never restores the old one.
+  //
+  // Mirrors the same fix in the Android client's StaffViewModel.
+  const setFlash = useCallback((flash: string) => patch({ flash, error: null }), [patch]);
+  const setError = useCallback((error: string) => patch({ error, flash: null }), [patch]);
   const clearFlash = useCallback(() => patch({ flash: null }), [patch]);
   const clearError = useCallback(() => patch({ error: null }), [patch]);
 
