@@ -141,11 +141,22 @@ must go through `normalizedAccuracy` for that reason.
 The band from the automatic attempt has to outlive the attempt itself: the GPS fix
 buffer drops anything older than 90 seconds, and by the time a student reads the failure
 screen, asks the lecturer, and types 8 digits, their fixes are long gone. So the verdict
-(band, centroid, distance) is stored separately for 10 minutes in
+(band, centroid, distance) is kept for 10 minutes by
 `services/attemptVerdict.service.js`.
 
-Like the OAuth exchange-code store, the sign-in nonce store, and the GPS fix buffer
-itself, this is in-memory and single-process.
+Both halves live in MongoDB, on one `AttendanceAttempt` document per
+`(student, session)` — the fixes and the band they resolved to, written in the same
+request and cleared together. They were two per-process `Map`s, which cost a real
+incident: a deploy in the gap between the automatic attempt and the code submission
+dropped the verdict, `get` returned null, and null is correctly read as `unknown`, which
+is written as `flagged`. A student measured inside the building was recorded as not
+verified. The Maps also pinned the app to one process, since a second instance would
+answer for fixes it had never accumulated.
+
+The two halves keep different lifetimes on that shared document, and that is the part to
+be careful with. Fixes matter for 90 seconds; the verdict has to outlive them by minutes.
+So expiry is measured against the verdict's own `verdictTs`, never against fix age, and
+nothing may delete the document merely because its fixes went stale.
 
 ## Upgrades
 
@@ -265,7 +276,15 @@ checked against it.
   lockout on the code endpoint (removed — see below).
 - BLE range is extended deliberately by seeding, so "BLE == in the room" is approximate.
   Restricting seeding to primary-verified students bounds the chain to one hop.
-- All in-memory stores block horizontal scaling.
+- The OAuth exchange-code and sign-in nonce stores are still in-memory, and are what now
+  blocks horizontal scaling. Attempt state no longer does: it moved to MongoDB, where two
+  instances share one buffer instead of each holding a partial one that never reaches the
+  three-fix minimum.
+- Every GPS fix is now a database round trip rather than a heap write — roughly three DB
+  ops per fix against one before. Measured at ~256 ms median per submission over Atlas,
+  and the collection tops out near 10 MB even with 2000 students checking in at once, but
+  the write *rate* at that scale (~2,000 ops/sec) is the number to check against the
+  cluster tier before a full-faculty rollout.
 - **GPS position is asserted by the client.** The server validates that a fix is a
   plausible coordinate, not that it came from a real GPS chip, so a caller holding a
   valid student session can submit fabricated fixes at a building and be marked present.

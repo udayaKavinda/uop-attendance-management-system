@@ -99,10 +99,15 @@ depends on it.
 - Every band decision runs on distance alone — there is no accuracy floor below which an
   attempt is forced to `unknown`; a low-accuracy fix simply gets less weight in the
   centroid than a precise one.
-- Intermediate fixes live only in memory for the attempt. Accepted attendance stores the
-  centroid, contributing fix count, and distance for audit.
-- The band survives the attempt for 10 minutes so a later code submission can be judged
-  against it (`services/attemptVerdict.service.js`).
+- Intermediate fixes are held in MongoDB for the life of the attempt, in one
+  `AttendanceAttempt` document per `(student, session)` — never in process memory, so a
+  deploy mid-lecture does not cost a student the verdict they had already earned. Accepted
+  attendance stores the centroid, contributing fix count, and distance for audit.
+- The band lives on that same document and survives the attempt for 10 minutes, so a later
+  code submission can be judged against it (`services/attemptVerdict.service.js`). Its
+  expiry is measured against its own `verdictTs`, never against fix age: the fixes are
+  gone after 90 seconds, while the student is still reading the failure screen and walking
+  to the front of the hall for the code.
 
 ### Bluetooth and peer seeding
 
@@ -334,8 +339,18 @@ existing `flagged` one so the stored reason/distance reflects the latest evidenc
 than freezing on the first submission. Which bands write a row at all is specified under
 "Verification contract" above.
 
-### BleToken / ManualCode / Settings
+### AttendanceAttempt / BleToken / ManualCode / Settings
 
+- `AttendanceAttempt`: `student`, `session` (both as strings, unique together), `fixes[]`
+  (`lat`, `lng`, `accuracy`, `ts`, capped at 120 by `$slice` on write so a chatty client
+  cannot grow one document without bound), and the verdict those fixes resolved to —
+  `band`, `centroid`, `distanceM`, `verdictTs`. One document, because the two halves share
+  a key, a request and a lifecycle; they were two per-process `Map`s only because they
+  were two variables. `updatedAt` drives a 900 s TTL index, sized to the verdict's
+  lifetime rather than the 90 s fix window, since the verdict is what has to outlive the
+  student's walk to the front of the hall. A document can legitimately hold either half
+  alone: fixes with no band yet (below the three-fix minimum), or a band with no fixes
+  (the fail-closed `unknown` recorded when a session's buildings have all been deleted).
 - `BleToken`: `sessionId`, `owner` (null for the primary row), `role` (`primary|seed`),
   `token`, `prevToken` (the value still accepted during the rotation grace),
   `generatedAt`, `leaseUntil` (seed rows), `slot`, and `updatedAt` — which also drives a
@@ -606,22 +621,25 @@ Streaming GPS fixes can no longer consume the code budget.
 - Stale/out-of-window broadcast closure.
 - Out-of-window lecturer-code removal (every session, since every session has a code).
 - Expired seed-token cleanup (verification independently checks leases).
-- Expired attempt-verdict sweep (10-minute TTL).
-- GPS fix-buffer sweep, every `FIX_WINDOW_MS` (90 s), dropping buffers with no live
-  fix left. `addFix` prunes stale fixes but only for the key being written, and
-  `clearFixes` runs only on a **pass** — so every attempt that never passed (location
-  denied, out of range, app closed mid-scan) used to keep its key for the life of the
-  process. Measured at ~10.9 MB retained for 2000 abandoned attempts, with no ceiling
-  across a semester; one sweep releases all of it. It cannot change a verdict, only
-  memory: a buffer in that state holds nothing but fixes the next `addFix` would drop
-  anyway, and `evaluateFix` always goes through `addFix` first. Both this timer and the
-  verdict sweep are `unref`'d, so neither holds the process open.
+- Abandoned attempt cleanup is a TTL index on `attendanceattempts` (900 s on `updatedAt`),
+  not a timer. `clearFixes` only runs on a **pass**, so every attempt that never passed —
+  location denied, out of range, app closed mid-scan — leaves a row behind, and those are
+  the common case rather than the exception. As a per-process Map this was measured at
+  ~10.9 MB retained for 2000 abandoned attempts with no ceiling across a semester; as a
+  collection the TTL bounds it, and at full faculty scale (2000 students checking in at
+  once) the whole collection measures ~10 MB, which is the ceiling rather than a rate.
+  `gpsFix.sweep()` is the same cleanup driven explicitly, and requires **both** halves to
+  be dead: a sweep keyed on stale fixes alone would delete the verdict out from under a
+  student on their way to the front of the hall for the code.
 - Short active-session cache invalidated on relevant staff mutations, and re-checked
   against the schedule window on every hit — the entry is an admission decision, so
   age alone must not keep it valid past `endTime`.
-- OAuth exchange/nonces, GPS attempt fixes, and attempt verdicts are in-memory and
-  therefore assume a single Node process; use a shared store before
-  horizontal scaling.
+- GPS attempt fixes and attempt verdicts are in MongoDB (`attendanceattempts`), so they
+  survive a restart and are visible to every instance — two app processes accumulate into
+  the same buffer rather than each holding a partial one that never reaches the three-fix
+  minimum.
+- OAuth exchange codes and sign-in nonces are still in-memory and therefore still assume a
+  single Node process; they are what remains to move before horizontal scaling.
 
 ## Testing
 
@@ -629,15 +647,20 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-506 tests across 36 suites. 485 of those run with every Mongoose model mocked and need
-no database. The remaining suite, `dbIntegration.test.js`, talks to a real MongoDB —
-schema defaults, validators, `populate` and unique indexes cannot be verified by mocking
-the layer that implements them.
+537 tests across 37 suites. 486 of those run with every Mongoose model mocked and need
+no database. Two suites talk to a real MongoDB, because what they assert is behaviour of
+the database rather than of our code:
 
-It needs no setup: `jest.globalSetup.js` probes `mongodb://127.0.0.1:27017` before the
-run and, if a mongod answers, points the suite at the **`uop_attendance_test`** database.
-With no local mongod the suite skips itself and the other 35 run as normal, so a machine
-or CI runner without a database still goes green. Set `MONGO_TEST_URI` to override the
+- `dbIntegration.test.js` — schema defaults, validators, `populate` and unique indexes
+  cannot be verified by mocking the layer that implements them.
+- `gpsStateDurability.test.js` — a verdict surviving a restart, two instances sharing one
+  attempt document, concurrent `$push` keeping every fix, the unique index, and TTL
+  semantics. A fake can only demonstrate that the fake agrees with itself.
+
+Neither needs setup: `jest.globalSetup.js` probes `mongodb://127.0.0.1:27017` before the
+run and, if a mongod answers, points them at the **`uop_attendance_test`** database.
+With no local mongod both skip themselves and the other 35 suites run as normal, so a
+machine or CI runner without a database still goes green. Set `MONGO_TEST_URI` to override the
 target, or to `off` to skip the probe entirely — which is what CI does, because the
 deploy runner *is* the production host and a test process must never open a connection
 there. That has teeth now: production moved off Atlas onto that host's own `mongod`, so
