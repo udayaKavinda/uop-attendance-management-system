@@ -68,6 +68,13 @@ jobs:
           PATH=/usr/bin:$PATH /usr/bin/npm --prefix web run build
           test -f web/dist/index.html || { echo "web build produced no dist/index.html"; exit 1; }
 
+      # The web workspace had no tests at all until the staff dashboard's error
+      # banner turned out to carry the same bug the Android one had already been
+      # fixed for. Wired in here deliberately: a suite nothing runs is worth about
+      # as much as no suite, which is the lesson from the two webApp tests above.
+      - name: Run web client tests
+        run: PATH=/usr/bin:$PATH /usr/bin/npm --prefix web test
+
       - name: Run server test suite
         env:
           NODE_ENV: test
