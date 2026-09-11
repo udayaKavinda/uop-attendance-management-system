@@ -24,6 +24,7 @@ import lk.ac.pdn.eng.feats.data.net.GpsFixDto
 import lk.ac.pdn.eng.feats.data.net.RunningCourseDto
 import lk.ac.pdn.eng.feats.data.net.SeedingDto
 import lk.ac.pdn.eng.feats.location.GpsLocationSource
+import lk.ac.pdn.eng.feats.location.LocationUnavailableException
 import lk.ac.pdn.eng.feats.location.MockLocationException
 import lk.ac.pdn.eng.feats.location.LocationPermissions
 import lk.ac.pdn.eng.feats.ui.container
@@ -47,6 +48,13 @@ data class CheckInState(
     val helpSubmitting: Boolean = false,
     val helpError: String? = null,
     val error: String? = null,
+    /**
+     * Why the GPS half of the attempt could not run, when that is something the
+     * student can act on. Deliberately separate from [error]: the attempt is not
+     * over — Bluetooth may still carry it — and the 10-second course poll clears
+     * [error] on every success, which would wipe this before it was read.
+     */
+    val locationNotice: String? = null,
     val checkingStatus: Boolean = false,
     /** Courses this student registered ahead of time — see CourseRegistrationScreen. */
     val registeredIds: Set<String> = emptySet(),
@@ -191,13 +199,25 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
      * again on every retry instead of silently running GPS-only forever.
      */
     fun tryAgain() {
-        _state.update { it.copy(needsHelp = false, error = null) }
+        // The reason is cleared here as well as at the start of the next window:
+        // if `begin()` stops to ask about Bluetooth, no window starts, and a stale
+        // "turn on precise location" would sit under a prompt about a different
+        // radio — after the student may already have fixed it.
+        _state.update { it.copy(needsHelp = false, error = null, locationNotice = null) }
     }
 
     private suspend fun runWindow(courseId: String) = coroutineScope {
         val app = getApplication<Application>()
         _state.update {
-            it.copy(phase = CheckInPhase.Preparing, error = null, needsHelp = false, secondsLeft = WINDOW_SECONDS)
+            it.copy(
+                phase = CheckInPhase.Preparing,
+                error = null,
+                // A fresh attempt re-checks the permission, so last attempt's reason
+                // must not linger over this one.
+                locationNotice = null,
+                needsHelp = false,
+                secondsLeft = WINDOW_SECONDS,
+            )
         }
 
         // Only scan when the radio is usable AND a lecturer is actually broadcasting;
@@ -205,13 +225,23 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
         val bleUsable = BlePermissions.scanBlocker(app) == null && bluetoothWorthScanning(courseId)
         val gpsUsable = LocationPermissions.hasFineLocation(app)
 
+        // Whatever else this window does, if location cannot run the student is told
+        // why here — not inside gpsPath, which is never even launched when
+        // `gpsUsable` is false, and not through `error`, which the failure panel
+        // does not render and the 10-second course poll clears on its next success.
+        // That combination is why a student who chose "Approximate" on the Android
+        // 12+ permission sheet saw nothing but "we couldn't confirm you're in the
+        // lecture" and had no way to discover that precision was the problem.
+        if (!gpsUsable) {
+            _state.update { it.copy(locationNotice = LocationPermissions.permissionDeniedMessage(app)) }
+        }
+
         if (!bleUsable && !gpsUsable) {
             _state.update {
                 it.copy(
                     phase = CheckInPhase.Idle,
                     needsHelp = true,
                     secondsLeft = 0,
-                    error = "We could not use Bluetooth or your location. Ask your lecturer for the code.",
                 )
             }
             return@coroutineScope
@@ -300,11 +330,15 @@ class LectureEntryViewModel(app: Application) : AndroidViewModel(app) {
             // position, so end the whole attempt and let the screen close the app.
             cancelCheckIn()
             _mockLocationDetected.value = true
+        } catch (e: LocationUnavailableException) {
+            // Bluetooth may still carry the attempt, so this never ends it — but the
+            // student has to be told, because every reason this throws is one they
+            // can fix: precise location off, permission denied, location switched
+            // off. It used to vanish into a log, which is why a phone that never
+            // produced a fix looked exactly like one that was out of range.
+            Log.w("LectureEntry", "GPS path stopped: ${e.message}")
+            _state.update { it.copy(locationNotice = e.message) }
         } catch (e: Exception) {
-            // No provider, permission revoked mid-window, etc. Bluetooth may still
-            // win, so this never ends the attempt — but it used to vanish entirely,
-            // which is why a student whose GPS never started looked identical to one
-            // who was simply out of range. Leave a trace for the next report.
             Log.w("LectureEntry", "GPS path stopped: ${e.javaClass.simpleName}: ${e.message}")
         }
     }

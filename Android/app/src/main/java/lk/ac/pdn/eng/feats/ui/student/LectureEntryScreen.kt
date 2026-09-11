@@ -345,6 +345,22 @@ private fun NeedsHelpPanel(vm: LectureEntryViewModel, onBegin: () -> Unit) {
             fontSize = 12.sp,
             textAlign = TextAlign.Center,
         )
+        // The one thing the student can actually act on, when there is one. The
+        // panel above is deliberately vague about *why* verification failed —
+        // saying "you are 300 m away" would tell a cheat how far off they are —
+        // but a permission the student can switch on is not that kind of reason,
+        // and withholding it just leaves them retrying something that cannot work.
+        val notice = vm.state.collectAsState().value.locationNotice
+        if (notice != null) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                notice,
+                color = Palette.WarnText,
+                fontWeight = FontWeight.Medium,
+                fontSize = 12.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
         Spacer(Modifier.height(16.dp))
         PrimaryButton(
             text = "Try again",

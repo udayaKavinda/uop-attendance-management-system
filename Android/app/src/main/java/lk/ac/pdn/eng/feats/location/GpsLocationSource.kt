@@ -39,6 +39,10 @@ object LocationPermissions {
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
+    fun hasCoarseLocation(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
     // Android 12+ requires coarse and fine to be requested together. Geofence
     // verification still proceeds only when fine location is granted.
     fun permissions(): Array<String> = arrayOf(
@@ -46,8 +50,25 @@ object LocationPermissions {
         Manifest.permission.ACCESS_FINE_LOCATION,
     )
 
-    fun permissionDeniedMessage(): String =
-        "Location permission is required to verify your position for this session."
+    /**
+     * Why location is unusable, in the student's terms.
+     *
+     * The two cases have to read differently. From Android 12 the permission
+     * sheet offers Precise and Approximate side by side, and a student who picks
+     * Approximate has *granted* location as far as they are concerned — they
+     * tapped Allow. Fine is denied, so verification cannot run, and telling them
+     * "location permission is required" sends them to a setting that already
+     * looks correct. Observed on a real device: the attempt produced no fixes at
+     * all and ended on the generic "we couldn't confirm you're in the lecture",
+     * with nothing anywhere naming precision as the cause.
+     */
+    fun permissionDeniedMessage(context: Context): String =
+        if (hasCoarseLocation(context)) {
+            "This app has approximate location only. Turn on \"Use precise location\" for " +
+                "UOP Attendance in Settings → Apps → Permissions → Location, then try again."
+        } else {
+            "Location permission is required to verify your position for this session."
+        }
 }
 
 /**
@@ -61,7 +82,7 @@ class GpsLocationSource(private val context: Context) {
     @Suppress("MissingPermission") // caller is required to have checked hasFineLocation() first
     fun fixFlow(intervalMs: Long = 3000L): Flow<GpsFix> = callbackFlow {
         if (!LocationPermissions.hasFineLocation(context)) {
-            close(LocationUnavailableException(LocationPermissions.permissionDeniedMessage()))
+            close(LocationUnavailableException(LocationPermissions.permissionDeniedMessage(context)))
             return@callbackFlow
         }
         val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
@@ -94,7 +115,7 @@ class GpsLocationSource(private val context: Context) {
             }.isSuccess
         }
         if (registered.isEmpty()) {
-            close(LocationUnavailableException(LocationPermissions.permissionDeniedMessage()))
+            close(LocationUnavailableException(LocationPermissions.permissionDeniedMessage(context)))
             return@callbackFlow
         }
 
