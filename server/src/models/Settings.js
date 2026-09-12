@@ -46,6 +46,22 @@ const settingsSchema = new mongoose.Schema({
   nearBufferLogic: { type: String, default: 'accuracy_weighted_centroid' },
   farBufferLogic: { type: String, default: 'accuracy_weighted_centroid' },
 
+  /**
+   * How many live GPS fixes each strategy needs before it may decide, keyed by
+   * strategy id. Sparse on purpose: a strategy absent from this map uses its own
+   * `defaultMinFixes`, so shipping a new strategy does not require a migration
+   * and an admin only stores the ones they actually changed.
+   *
+   * Keyed by strategy rather than by band because the number is a property of
+   * how the strategy reads its sample, not of which buffer it is checking — and
+   * near and far pick strategies independently, so a per-band field would have
+   * to be set twice to say one thing. Bounds (`floorMinFixes`, `MAX_MIN_FIXES`)
+   * live with the strategies in `services/geofenceLogic.service.js`; the write
+   * path rejects out-of-range values and the read path clamps, so stored data
+   * that predates a bounds change still resolves.
+   */
+  minFixesByStrategy: { type: Map, of: Number, default: undefined },
+
   /** Target concurrent BLE seeder count. 0 disables peer seeding entirely. */
   seedRate: { type: Number, default: 0, min: 0 },
   /** Real seeder AND decoy window duration, ms — identical for both so neither is distinguishable. */

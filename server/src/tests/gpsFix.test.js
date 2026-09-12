@@ -38,33 +38,27 @@ describe('gpsFix', () => {
     });
   });
 
-  describe('removeOutliersByMedianDistance', () => {
-    it('drops a fix far from the tight cluster of the rest', () => {
+  describe('sampleForVerdict', () => {
+    // The outlier trimmer that used to live here is gone. It filtered by
+    // consensus underneath rules that are not all consensus rules — it refused
+    // `any_point_within` the pass its own description promises, and it ran
+    // before accuracy weighting so a cluster of 100 m readings could discard a
+    // 5 m one. Outlier resistance is a strategy choice now (`median_distance`,
+    // `majority_points_within`); see the comment on sampleForVerdict.
+    it('hands back every live fix once the minimum is met, glitches included', () => {
       const fixes = [
         fix(6.9000, 79.8000),
         fix(6.9001, 79.8000),
-        fix(6.9000, 79.8001),
-        fix(6.9001, 79.8001),
-        fix(10.0000, 79.8000), // ~344km away — a clear outlier
+        fix(10.0000, 79.8000), // ~344 km away and deliberately kept
       ];
-      const survivors = gpsFix.removeOutliersByMedianDistance(fixes);
-      expect(survivors).toHaveLength(4);
-      expect(survivors.some((f) => f.lat === 10)).toBe(false);
+      expect(gpsFix.sampleForVerdict(fixes)).toHaveLength(3);
+      expect(gpsFix.sampleForVerdict(fixes).some((f) => f.lat === 10)).toBe(true);
     });
 
-    it('returns null when there are fewer than MIN_FIXES fixes', () => {
-      expect(gpsFix.removeOutliersByMedianDistance([fix(1, 1), fix(1, 1)])).toBeNull();
-    });
-
-    // Regression: this used to fall back to returning the UNTRIMMED list, handing
-    // back the very outlier it had just identified. A student with 2 perfect
-    // in-room fixes plus one glitch then banded `far` instead of "keep collecting".
-    it('reports "not ready" rather than the untrimmed set when trimming leaves too few', () => {
-      const fixes = [
-        fix(6.9000, 79.8000), fix(6.9000, 79.8000),
-        fix(10.0000, 79.8000), // one wild glitch, at exactly MIN_FIXES total
-      ];
-      expect(gpsFix.removeOutliersByMedianDistance(fixes)).toBeNull();
+    it('returns null below the minimum, which reads as "keep collecting"', () => {
+      expect(gpsFix.sampleForVerdict([fix(1, 1), fix(1, 1)])).toBeNull();
+      expect(gpsFix.sampleForVerdict([fix(1, 1), fix(1, 1)], 2)).toHaveLength(2);
+      expect(gpsFix.sampleForVerdict([fix(1, 1)], 1)).toHaveLength(1);
     });
   });
 

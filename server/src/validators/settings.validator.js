@@ -1,6 +1,7 @@
-const { STRATEGIES } = require('../services/geofenceLogic.service');
+const { STRATEGIES, MAX_MIN_FIXES } = require('../services/geofenceLogic.service');
 
 const STRATEGY_IDS = new Set(STRATEGIES.map((s) => s.id));
+const STRATEGY_BY_ID = new Map(STRATEGIES.map((s) => [s.id, s]));
 
 /**
  * Body for PATCH /api/admin/settings. Every field is independently optional —
@@ -36,6 +37,55 @@ function validateSettingsBody(body) {
       }
       result[logic] = b[logic];
     }
+  }
+
+  /**
+   * A partial map: only the strategies named are changed, and the rest keep
+   * whatever they had. A merge rather than a replace because the dashboard edits
+   * one strategy at a time, and a replacing PATCH would silently reset every
+   * other strategy to its default on each save.
+   *
+   * Rejects rather than clamps. The read path clamps, because it must always
+   * produce a number mid-lecture, but an admin typing 1 against
+   * `all_points_within` has asked for something that would turn the strictest
+   * strategy into the loosest, and telling them so is better than quietly
+   * storing 3.
+   */
+  if ('minFixesByStrategy' in b) {
+    const raw = b.minFixesByStrategy;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ok: false, status: 400, error: 'minFixesByStrategy must be an object keyed by strategy id' };
+    }
+    const entries = Object.entries(raw);
+    if (entries.length === 0) {
+      return { ok: false, status: 400, error: 'minFixesByStrategy must name at least one strategy' };
+    }
+    const merged = {};
+    for (const [id, value] of entries) {
+      const strategy = STRATEGY_BY_ID.get(id);
+      if (!strategy) {
+        return { ok: false, status: 400, error: `Unknown geofence logic id: ${id}` };
+      }
+      // Strict: `Number(value)` would accept "3" and, worse, `true` as 1. This is
+      // the write path, so a client sending the wrong type should hear about it
+      // rather than have it coerced into a policy change.
+      if (typeof value !== 'number' || !Number.isInteger(value)) {
+        return { ok: false, status: 400, error: `minFixesByStrategy.${id} must be a whole number` };
+      }
+      const n = value;
+      if (n < strategy.floorMinFixes || n > MAX_MIN_FIXES) {
+        return {
+          ok: false,
+          status: 400,
+          error: `"${strategy.label}" needs between ${strategy.floorMinFixes} and ${MAX_MIN_FIXES} fixes`
+            + (strategy.floorMinFixes > 1
+              ? ' — below that it stops being distinguishable from the other strategies.'
+              : '.'),
+        };
+      }
+      merged[id] = n;
+    }
+    result.minFixesByStrategy = merged;
   }
 
   if ('seedRate' in b) {

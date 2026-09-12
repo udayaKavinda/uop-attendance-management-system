@@ -14,7 +14,17 @@ describe('settings.service buffers()', () => {
       farBufferM: 200,
       nearBufferLogic: 'any_point_within',
       farBufferLogic: 'best_accuracy_fix',
+      minFixesByStrategy: null,
     });
+  });
+
+  // Passed through raw, not resolved: which strategy's minimum applies is decided
+  // per band inside gpsFix.evaluateBand, so resolving here would mean choosing a
+  // strategy in the wrong place. Absent config becomes null, never {}.
+  test('passes the per-strategy minimum map through untouched', () => {
+    const configured = { any_point_within: 1, accuracy_weighted_centroid: 5 };
+    expect(buffers({ minFixesByStrategy: configured }).minFixesByStrategy).toBe(configured);
+    expect(buffers({}).minFixesByStrategy).toBeNull();
   });
 
   test('defaults nearBufferM/farBufferM to 50/100 when missing or non-finite', () => {

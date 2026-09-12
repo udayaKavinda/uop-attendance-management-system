@@ -246,11 +246,27 @@ data class ManualCodeConfigReq(
     val regenerate: Boolean? = null,
 )
 
-/** One selectable option for `nearBufferLogic`/`farBufferLogic`, described by the server. */
+/**
+ * One selectable option for `nearBufferLogic`/`farBufferLogic`, described by the server.
+ *
+ * The bounds travel with the option rather than being hardcoded here, because they
+ * differ per strategy and the server is what enforces them — duplicating the
+ * numbers client-side would mean an app release to stay in step with a server one.
+ */
 data class GeofenceLogicOptionDto(
     val id: String? = null,
     val label: String? = null,
     val description: String? = null,
+    /** Sample size this strategy uses when nothing is configured. */
+    val defaultMinFixes: Int? = null,
+    /**
+     * Lowest value an admin may set. 3 for the multi-point strategies: below the
+     * trim minimum every strategy returns the same answer, so allowing 1 would
+     * turn "all points within" into "any point within" under the wrong name.
+     */
+    val floorMinFixes: Int? = null,
+    /** Highest value an admin may set — a room with a weak fix rate can never reach more. */
+    val maxMinFixes: Int? = null,
 )
 
 /** Global settings singleton. Readable by any staff; only admins may write. */
@@ -273,6 +289,12 @@ data class SettingsDto(
     val farBufferLogic: String? = null,
     /** The fixed set of selectable strategies, sent alongside the settings values. */
     val geofenceLogicOptions: List<GeofenceLogicOptionDto>? = null,
+    /**
+     * GPS fixes each strategy needs before it may decide, keyed by strategy id.
+     * Always complete and already resolved by the server, so the dashboard can
+     * render a number without reproducing the fallback rules.
+     */
+    val minFixesByStrategy: Map<String, Int>? = null,
     /** Target concurrent BLE seeder count; 0 disables peer seeding. */
     val seedRate: Int? = null,
     /** Real-seeder AND decoy window duration, ms — identical for both by design. */
@@ -291,6 +313,12 @@ data class SettingsReq(
     val farBufferM: Int? = null,
     val nearBufferLogic: String? = null,
     val farBufferLogic: String? = null,
+    /**
+     * Partial on purpose: only the strategies named are changed, and the server
+     * merges the rest. Sending the whole resolved map back would write every
+     * strategy's default as if an admin had chosen it.
+     */
+    val minFixesByStrategy: Map<String, Int>? = null,
     val seedRate: Int? = null,
     val seedWindowMs: Long? = null,
     val studentEmailDomain: String? = null,

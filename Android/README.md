@@ -46,9 +46,26 @@ Tabs: **Courses**, **Create session**, **Sessions**, **Lecturers**, **Geofences*
 lecturer directory, building polygons, the Bluetooth kill switch, the two distance
 thresholds, each band's independently selectable geofence logic (a dropdown per band —
 accuracy-weighted centroid, any/majority/all points within the buffer, median distance, or
-best-accuracy-fix-only), peer-seeding parameters, the student sign-in email domain, the
+best-accuracy-fix-only) together with **how many GPS fixes that option needs before it may
+decide**, peer-seeding parameters, the student sign-in email domain, the
 minimum app version that's allowed to run, and — under **Web client** — whether the
 browser client at `/app` serves non-iOS devices.
+
+The fixes-needed field sits under whichever logic option is selected, and is labelled by
+the option rather than by the band — the number belongs to the strategy, and near and far
+pick strategies independently, so one strategy used on both bands has one minimum, not
+two. A second field appears only when the two bands differ. The server sends each
+option's own bounds (`floorMinFixes`/`maxMinFixes`) with the settings, so the dashboard
+never hardcodes them: the multi-point options will not go below 3, because below that
+sample size every option returns the same answer and "all points within" would silently
+become "any point within".
+
+What the choice of option actually decides is how a stray GPS reading is treated, because
+**nothing filters the readings** — there is no outlier pass in front of the strategies
+(see [../server/README.md](../server/README.md#gps-validation) for why one was removed).
+`median distance` and `most points within` absorb a bad reading by construction; the
+default accuracy-weighted centroid is pulled by one, and `all points within` is failed by
+one. The dropdown's own description for each option says which it is.
 
 That last switch is off by default and exists as an escape hatch for when this app is
 unavailable: iPhone and iPad students have no native app yet, so they check in through a

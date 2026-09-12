@@ -217,7 +217,7 @@ saying why:
 | --- | --- |
 | `NODE_ENV=production`, no `SESSION_SECRET` | `config/env.js` calls `process.exit(1)` while being required. 14 suites report `Jest worker encountered 4 child process exceptions` — nothing about the real cause |
 | `NODE_ENV=production` + `SESSION_SECRET` | `middlewares/testAuth.js` switches its test-only auth bypass off; 130 tests fail on 401s |
-| `NODE_ENV=test` | 486 pass, 89 skipped (the three live-DB suites, by `MONGO_TEST_URI=off`) |
+| `NODE_ENV=test` | 526 pass, 95 skipped (the three live-DB suites, by `MONGO_TEST_URI=off`) |
 
 Either failure blocks every deploy behind a red job that reads like a code regression and
 is not one. `NODE_ENV` is set on the **step**, not the job, so the web build below it is

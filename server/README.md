@@ -85,7 +85,8 @@ independently runs a selectable strategy (`Settings.nearBufferLogic`/`farBufferL
 against `nearBufferM`/`farBufferM`. See `services/geofenceLogic.service.js`'s
 `STRATEGIES` for the full list (accuracy-weighted centroid, any/majority/all points
 within, median distance, best-accuracy-fix-only) — near is always evaluated first, and
-far only runs if near didn't already pass.
+far only runs if near didn't already pass. Each strategy also carries how large a GPS
+sample it needs before it may answer; see **GPS validation** below.
 
 The client is never told its band: `status: "collecting"` covers both "still gathering
 fixes" and "gathered enough but not passing", so a modified app cannot learn how far out
@@ -101,14 +102,60 @@ depends on it.
 - **How fast fixes actually arrive is the platform's choice, not ours.** `fixFlow` asks for
   an update every 3 s, but `LocationManager` delivers when it has something new. Measured
   indoors on an API 31 phone reporting 100 m accuracy: roughly one fix every 20-25 s, with
-  the three-fix minimum reached around 55-60 s into the 90 s window — inside it, but not by
-  much. Plan for the GPS path to be tight indoors rather than assume the ~30 fixes a 3 s
-  cadence would imply (the figure the rate-limit table below uses is a worst case for
-  budgeting, not a typical one). A student who never reaches three fixes bands nothing and
-  falls through to the lecturer's code, which is the intended behaviour, not a failure.
-- Outliers are dropped against the median; survivors are averaged weighted by 1/accuracy².
-  If trimming leaves fewer than 3 trustworthy fixes the attempt reports "not ready" and
-  waits for more, rather than banding on fixes it has already judged unreliable.
+  the default three-fix minimum reached around 55-60 s into the 90 s window — inside it,
+  but not by much. Plan for the GPS path to be tight indoors rather than assume the ~30
+  fixes a 3 s cadence would imply (the figure the rate-limit table below uses is a worst
+  case for budgeting, not a typical one). A student who never reaches the selected
+  strategy's minimum bands nothing and falls through to the lecturer's code, which is the
+  intended behaviour, not a failure — and it is the main reason the minimum is tunable
+  per strategy at all: `any_point_within` at 1 reached a verdict in ~3 s on the same
+  phone and spot where the default took ~63 s.
+- **Nothing filters the fixes.** Every live fix reaches the selected strategy, and the
+  accuracy-weighted centroid averages all of them weighted by 1/accuracy². Below the
+  strategy's minimum the attempt reports "not ready" and waits for more; above it, the
+  whole sample is used as-is.
+
+  There *was* an outlier trimmer here, dropping any fix further from the marginal median
+  than `max(15, 2 × median distance)` before any strategy ran. It was removed because it
+  was doing consensus filtering underneath rules that are not all consensus rules, and it
+  was measurably wrong twice over: with readings scattered 55-106 m out plus one dead
+  inside the polygon, the inside fix was the outlier and was discarded, so
+  `any_point_within` reported 55 m and refused the pass its own description guarantees;
+  and because trimming ran *before* accuracy weighting and judged position only, four
+  identical 100 m-accuracy readings outvoted one 5 m reading and threw it away, leaving
+  the centroid at 111 m when the one trustworthy fix was inside the building. That second
+  case is the normal indoor case, not an odd one — a coarse network fix repeats the same
+  coordinate, so the bad cluster agrees with itself.
+
+  **Outlier resistance is now a strategy choice.** `median_distance` and
+  `majority_points_within` are inherently robust to a stray reading and an admin who
+  wants that picks one; `accuracy_weighted_centroid` is again exposed to a glitch that
+  also reports good accuracy, and `all_points_within` is broken by any stray reading at
+  all. `bandMatrixLive.test.js` pins both sides of that trade against a real database.
+- **How many fixes are "enough" is a property of the strategy, not a global constant.**
+  Each entry in `geofenceLogic.service.js`'s `STRATEGIES` declares a `defaultMinFixes`
+  and a `floorMinFixes`, and an admin can raise any of them per strategy from the Android
+  dashboard (`Settings.minFixesByStrategy`, bounded above by `MAX_MIN_FIXES` = 10).
+
+  The floors are the part worth understanding. **At a sample of one, every strategy
+  returns the same answer** — a single-element list has the same minimum, maximum and
+  median, the accuracy-weighted centroid *is* that fix, and so is the best-accuracy fix.
+  So `all_points_within`, the strictest option, would become exactly `any_point_within`,
+  the loosest, while still carrying a description warning about stray readings. The four
+  multi-point strategies therefore floor at 3; `any_point_within` and
+  `best_accuracy_fix` ask a question about one reading and may floor at 1, but still
+  *default* to 2 — which is a settling allowance rather than a safety margin, since
+  nothing filters the sample and a second reading cannot outvote a bad first one. What it
+  avoids is deciding off a cold start's first reading, routinely the coarsest a device
+  produces (measured at 100 m indoors while later fixes improved).
+- The two bands resolve their minimums independently, and **near must be ready before
+  anything is decided**, even when it is the band needing the larger sample. Banding
+  `suspicious` off a ready far-check while near still had too few fixes would hand the
+  student the weaker of two verdicts they might have earned, and the two are not
+  interchangeable: `near` passes on GPS alone, `suspicious` only ever via the code.
+  Likewise, once near says "not near", the far strategy's own minimum must be met before
+  `suspicious` and `far` can be told apart — that distinction is what decides whether a
+  correct code marks the student present or flags them.
 - A reported accuracy of `0` means "unknown" (Android returns it when `hasAccuracy()` is
   false), not "perfect", and is normalised to a pessimistic 50 m for both centroid
   weighting and best-fix selection.
@@ -377,7 +424,7 @@ than freezing on the first submission. Which bands write a row at all is specifi
   were two variables. `updatedAt` drives a 900 s TTL index, sized to the verdict's
   lifetime rather than the 90 s fix window, since the verdict is what has to outlive the
   student's walk to the front of the hall. A document can legitimately hold either half
-  alone: fixes with no band yet (below the three-fix minimum), or a band with no fixes
+  alone: fixes with no band yet (below the deciding strategy's minimum), or a band with no fixes
   (the fail-closed `unknown` recorded when a session's buildings have all been deleted).
 - `BleToken`: `sessionId`, `owner` (null for the primary row), `role` (`primary|seed`),
   `token`, `prevToken` (the value still accepted during the rotation grace),
@@ -398,7 +445,9 @@ than freezing on the first submission. Which bands write a row at all is specifi
 - `Settings` stores the Bluetooth kill switch, the two distance buffers, the
   independently selectable near/far buffer-logic strategy ids (`nearBufferLogic`,
   `farBufferLogic`, default `accuracy_weighted_centroid` — see
-  `services/geofenceLogic.service.js`), the seeding parameters (`seedRate`, and
+  `services/geofenceLogic.service.js`), the per-strategy GPS sample requirement
+  (`minFixesByStrategy`, a sparse map keyed by strategy id — absent strategies use their
+  own `defaultMinFixes`, so adding a strategy needs no migration), the seeding parameters (`seedRate`, and
   `seedWindowMs` — the window length given identically to real seeders and decoys so the
   two are indistinguishable), the student sign-in email
   domain (`studentEmailDomain`, empty disables the check), the minimum Android
@@ -542,8 +591,8 @@ becomes visible to staff is the Excel export under `/api/admin/courses`.
 
 | Method/path | Access | Purpose |
 |---|---|---|
-| `GET /api/admin/settings` | staff | current policies |
-| `PATCH /api/admin/settings` | admin | BLE kill switch, distance buffers, per-band geofence-logic strategy, seeding, student email domain, minimum app version |
+| `GET /api/admin/settings` | staff | current policies, plus the two things the dashboard cannot derive on its own: `geofenceLogicOptions` (every selectable strategy with its `label`, `description`, and its own `defaultMinFixes`/`floorMinFixes`/`maxMinFixes`) and `minFixesByStrategy` **resolved for every strategy**, not just the ones an admin stored. Both are returned on the PATCH response too — the client replaces its whole cached settings object, and it reads this endpoint once per dashboard, so a reply that omitted them would blank the dropdowns and the bounds until the screen was recreated |
+| `PATCH /api/admin/settings` | admin | BLE kill switch, distance buffers, per-band geofence-logic strategy, per-strategy GPS sample minimum (`minFixesByStrategy` — a **partial** map; named strategies are merged over the stored ones, because `$set` on a Map replaces it and editing one strategy would otherwise reset the rest), seeding, student email domain, minimum app version |
 | `GET /api/admin/geofences` | staff | active selectable buildings |
 | `POST/PATCH/DELETE /api/admin/geofences/:id?` | admin | building polygon management. Both `DELETE` and a `PATCH` setting `active: false` are refused (400) while any live session still uses the building — switching one off is the same outage as deleting it, since banding filters on `{ deleted: false, active: true }` and cannot tell the two apart. Re-activating is never blocked. Renames and polygon edits are unaffected |
 | `GET /api/admin/lecturers?q=&page=&limit=` | staff | lecturer directory — readable by any staff member on purpose, so an owner can find a co-owner to add to their own course |
@@ -668,8 +717,8 @@ Streaming GPS fixes can no longer consume the code budget.
   age alone must not keep it valid past `endTime`.
 - GPS attempt fixes and attempt verdicts are in MongoDB (`attendanceattempts`), so they
   survive a restart and are visible to every instance — two app processes accumulate into
-  the same buffer rather than each holding a partial one that never reaches the three-fix
-  minimum.
+  the same buffer rather than each holding a partial one that never reaches the selected
+  strategy's minimum.
 - OAuth exchange codes and sign-in nonces are still in-memory and therefore still assume a
   single Node process; they are what remains to move before horizontal scaling.
 
@@ -679,7 +728,7 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-575 tests across 38 suites. 486 of those run with every Mongoose model mocked and need
+621 tests across 39 suites. 526 of those run with every Mongoose model mocked and need
 no database. Three suites talk to a real MongoDB, because what they assert is behaviour of
 the database rather than of our code:
 
@@ -699,7 +748,7 @@ the database rather than of our code:
 
 None needs setup: `jest.globalSetup.js` probes `mongodb://127.0.0.1:27017` before the
 run and, if a mongod answers, points them at the **`uop_attendance_test`** base database.
-With no local mongod all three skip themselves and the other 35 suites run as normal, so a
+With no local mongod all three skip themselves and the other 36 suites run as normal, so a
 machine or CI runner without a database still goes green. Set `MONGO_TEST_URI` to override the
 target, or to `off` to skip the probe entirely — which is what CI does, because the
 deploy runner *is* the production host and a test process must never open a connection
@@ -734,10 +783,17 @@ sessions a week apart, which must not collide), the staff list's hiding and
 lecturer scoping through real `populate`, both expiry sweeps, soft delete, student-facing
 course resolution, and the unique `(student, session, attendanceDate)` attendance index.
 
+`minFixesPerStrategy.test.js` covers the per-strategy sample requirement as its own
+suite rather than as extra cases in `gpsFix.test.js`, because the interesting behaviour is
+a relationship between three pieces — the registry's floors, the admin's stored map, and
+`evaluateBand`'s readiness — and each can be wrong in a way the other two hide. It also
+asserts the "every strategy coincides at one fix" arithmetic directly, so the floors are
+justified by measurement rather than by the comment beside them.
+
 The mocked suites cover authentication, route access, BLE rotation and
 broadcasting (including the previous-token grace vs. the broadcaster poll interval),
 seeder slot claiming and the cap under contention, distance banding at the exact buffer
-boundary, accuracy-unknown normalisation, outlier trimming, the code-escalation outcomes
+boundary, accuracy-unknown normalisation, the unfiltered sample contract, the code-escalation outcomes
 for every band, flag-reason rendering, the geofence-logic strategy registry (including
 `any_point_within`/`median_distance`/`best_accuracy_fix`/`all_points_within` exercised
 end-to-end through a live `POST /api/attendance` GPS stream, not just unit-tested against

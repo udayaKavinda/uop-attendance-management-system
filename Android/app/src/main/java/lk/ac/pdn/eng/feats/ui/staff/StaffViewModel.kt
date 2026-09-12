@@ -670,6 +670,33 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         "Far-buffer logic updated.",
     )
 
+    /**
+     * How many GPS fixes one strategy needs before it may decide.
+     *
+     * Sends a single-entry map, never the whole resolved one the server handed
+     * back: the server merges, so posting every strategy would write each one's
+     * default as though an admin had chosen it. Bounds are checked here too —
+     * the server is the authority and rejects with its own message, but a local
+     * check turns a typo into an immediate answer instead of a round trip.
+     */
+    fun setMinFixes(strategyId: String, minFixes: Int) {
+        val option = _state.value.settings?.geofenceLogicOptions
+            ?.firstOrNull { it.id == strategyId }
+        val floor = option?.floorMinFixes ?: 1
+        val max = option?.maxMinFixes ?: 10
+        if (minFixes < floor || minFixes > max) {
+            setError(
+                "\"${option?.label ?: strategyId}\" needs between $floor and $max fixes." +
+                    if (floor > 1) " Below that it stops being different from the other options." else "",
+            )
+            return
+        }
+        patchSettings(
+            SettingsReq(minFixesByStrategy = mapOf(strategyId to minFixes)),
+            "Minimum fixes updated for ${option?.label ?: strategyId}.",
+        )
+    }
+
     fun setSeedingParams(seedRate: Int, seedWindowMs: Long) =
         patchSettings(SettingsReq(seedRate = seedRate, seedWindowMs = seedWindowMs), "Seeding settings updated.")
 

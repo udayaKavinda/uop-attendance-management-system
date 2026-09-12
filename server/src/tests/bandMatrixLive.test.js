@@ -97,6 +97,7 @@ function windowAroundNow(now = new Date()) {
 describeDb('live MongoDB — verification contract end to end', () => {
   let student;
   let other;
+  let admin;
   let course;
   let geofence;
   let session;
@@ -143,6 +144,12 @@ describeDb('live MongoDB — verification contract end to end', () => {
     });
     other = await Person.create({
       email: 'e19002@eng.pdn.ac.lk', studentId: 'stu-2', role: 'student', name: 'Student Two',
+    });
+    // Only an admin may write settings, and the per-strategy minimum is a settings
+    // field, so the band tests below drive it through the real admin route rather
+    // than reaching into the document.
+    admin = await Person.create({
+      email: 'admin@eng.pdn.ac.lk', studentId: 'admin-1', role: 'admin', name: 'Admin',
     });
     course = await Course.create({
       code: 'CS101', name: 'Live Bands', batch: 'E19', lecturers: [lecturer._id], active: true,
@@ -254,17 +261,48 @@ describeDb('live MongoDB — verification contract end to end', () => {
       expect((await attemptFor(student)).fixes).toHaveLength(2);
     });
 
-    test('one wild outlier among good fixes is trimmed, not banded on', async () => {
-      // Three fixes in the room and one 25 km glitch: the student never left.
+    /**
+     * The price of removing the outlier trimmer, asserted rather than left to be
+     * discovered. Three fixes in the room and one 25 km glitch: under the default
+     * accuracy-weighted centroid the glitch now drags the average out of the
+     * polygon, so a student who never left the room does not pass on GPS alone.
+     *
+     * This is the behaviour the trimmer was originally added to prevent, and the
+     * mitigation is now an admin choice rather than a hidden pre-filter — the
+     * next test shows `median_distance` absorbing the same glitch.
+     */
+    test('a wild glitch now drags the default centroid, and is not filtered out', async () => {
       await post(student, { fix: INSIDE });
       await post(student, { fix: INSIDE });
       await post(student, { fix: VERY_FAR });
       const res = await post(student, { fix: INSIDE });
 
-      expect(res.body.status).toBe('accepted');
+      expect(res.body).toEqual({ status: 'collecting' });
+      expect(await recordFor(student)).toBeNull();
+      const attempt = await attemptFor(student);
+      expect(attempt.band).toBe('far');
+      expect(attempt.fixes).toHaveLength(4); // nothing was discarded
+    });
+
+    test('`median_distance` is the option that absorbs that glitch', async () => {
+      await settingsService.updateSettings({
+        nearBufferLogic: 'median_distance', farBufferLogic: 'median_distance',
+      });
+
+      // Same four submissions as above, in the same order. The pass lands on the
+      // third — the one that *is* the glitch — because the median of [0, 0, 25140]
+      // is 0, so the extreme reading is present in the sample and simply ignored.
+      // Asserting the stored record rather than the last response, since passing
+      // clears the attempt and a fourth fix opens an empty one.
+      await post(student, { fix: INSIDE });
+      await post(student, { fix: INSIDE });
+      await post(student, { fix: VERY_FAR });
+      await post(student, { fix: INSIDE });
+
       const row = await recordFor(student);
+      expect(row.status).toBe('present');
       expect(row.band).toBe('inside');
-      expect(row.centroid.fixCount).toBe(3); // the outlier was dropped
+      expect(row.centroid.distanceM).toBe(0);
     });
 
     test('attempts are isolated per student', async () => {
@@ -644,6 +682,79 @@ describeDb('live MongoDB — verification contract end to end', () => {
       // The 75 m pair fails the 50 m near buffer for every fix, which is the
       // "one stray reading fails the whole attempt" cost this strategy warns of.
       expect((await attemptFor(student)).band).toBe('suspicious');
+    });
+
+    /**
+     * The per-strategy sample requirement, end to end through a real `Settings`
+     * document. A Mongoose `Map` is the part a fake cannot vouch for: it is what
+     * the merge below writes into, and what `minFixesFor` reads back out.
+     */
+    test('`any_point_within` decides on two fixes, where the centroid needs three', async () => {
+      await settingsService.updateSettings({ nearBufferLogic: 'any_point_within' });
+
+      await post(student, { fix: INSIDE });
+      const second = await post(student, { fix: INSIDE });
+
+      expect(second.body.status).toBe('accepted');
+      expect((await recordFor(student)).centroid.fixCount).toBe(2);
+    });
+
+    test('a raised per-strategy minimum holds the same strategy back', async () => {
+      await settingsService.updateSettings({
+        nearBufferLogic: 'any_point_within',
+        minFixesByStrategy: { any_point_within: 4 },
+      });
+
+      await post(student, { fix: INSIDE });
+      await post(student, { fix: INSIDE });
+      const third = await post(student, { fix: INSIDE });
+      expect(third.body).toEqual({ status: 'collecting' });
+      expect(await recordFor(student)).toBeNull();
+
+      const fourth = await post(student, { fix: INSIDE });
+      expect(fourth.body.status).toBe('accepted');
+      expect((await recordFor(student)).centroid.fixCount).toBe(4);
+    });
+
+    test('saving one strategy minimum leaves the others alone', async () => {
+      // `$set` on a Map replaces the whole map, so the controller merges. Without
+      // that, editing one strategy in the dashboard would silently reset every
+      // other strategy to its default.
+      await request(app).patch('/api/admin/settings').set(headers(admin))
+        .send({ minFixesByStrategy: { any_point_within: 5 } })
+        .expect(200);
+
+      const res = await request(app).patch('/api/admin/settings').set(headers(admin))
+        .send({ minFixesByStrategy: { median_distance: 7 } })
+        .expect(200);
+
+      expect(res.body.minFixesByStrategy.any_point_within).toBe(5);
+      expect(res.body.minFixesByStrategy.median_distance).toBe(7);
+      // Untouched strategies still report their defaults, not null or absent.
+      expect(res.body.minFixesByStrategy.accuracy_weighted_centroid).toBe(3);
+
+      const stored = await Settings.findOne({});
+      expect(stored.minFixesByStrategy.get('any_point_within')).toBe(5);
+      expect(stored.minFixesByStrategy.get('median_distance')).toBe(7);
+    });
+
+    test('the settings response carries each strategy its own bounds', async () => {
+      const res = await request(app).get('/api/admin/settings').set(headers(admin)).expect(200);
+
+      const byId = Object.fromEntries(res.body.geofenceLogicOptions.map((o) => [o.id, o]));
+      expect(byId.any_point_within).toMatchObject({ floorMinFixes: 1, defaultMinFixes: 2 });
+      expect(byId.all_points_within).toMatchObject({ floorMinFixes: 3, defaultMinFixes: 3 });
+      expect(byId.any_point_within.maxMinFixes).toBeGreaterThan(2);
+    });
+
+    test('a minimum below a multi-point strategy floor is refused, not clamped', async () => {
+      const res = await request(app).patch('/api/admin/settings').set(headers(admin))
+        .send({ minFixesByStrategy: { all_points_within: 1 } })
+        .expect(400);
+
+      expect(res.body.error).toContain('All points within geofence');
+      const stored = await Settings.findOne({});
+      expect(stored.minFixesByStrategy?.get('all_points_within')).toBeUndefined();
     });
 
     test('`any_point_within` passes on the best fix, not the average', async () => {

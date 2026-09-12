@@ -96,6 +96,8 @@ const mongoose = require('mongoose');
 const Course = require('../models/Course');
 const LectureSession = require('../models/LectureSession');
 const Attendance = require('../models/Attendance');
+// The in-memory fake from gpsStateFakes, via the jest.mock at the top of this file.
+const AttendanceAttempt = require('../models/AttendanceAttempt');
 
 const app = require('../app');
 
@@ -149,6 +151,20 @@ function makePerson(overrides = {}) {
 function authHeader(person) { return { 'x-test-user': JSON.stringify({ ...person, _id: String(person._id) }) }; }
 const csrfHeader = { 'x-requested-with': 'fetch' };
 function headers(person) { return { ...authHeader(person), ...csrfHeader }; }
+
+/**
+ * The band recorded on the in-flight attempt, or null when none has resolved.
+ *
+ * The wire deliberately cannot tell "still collecting" from "collected enough but
+ * not passing", so a test that needs to know which one happened has to look at the
+ * stored verdict rather than at the response.
+ */
+async function attemptBandOf(student, session) {
+  const doc = await AttendanceAttempt.findOne({
+    student: String(student._id), session: String(session._id),
+  });
+  return doc?.band ?? null;
+}
 
 /** Streams `count` identical fixes, returning the last response. */
 async function streamFixes(student, courseId, fix, count = 3) {
@@ -369,13 +385,64 @@ describe('POST /api/attendance — admin-configurable geofence settings', () => 
 
     mockSettingsStore.nearBufferLogic = 'any_point_within';
     const other = makePerson();
-    let last2;
-    // eslint-disable-next-line no-await-in-loop
-    for (const fix of walk) last2 = await request(app).post('/api/attendance').set(headers(other)).send({ courseId: course._id, fix });
-    expect(last2.body.status).toBe('accepted');
+    const send = (fix) => request(app).post('/api/attendance').set(headers(other)).send({ courseId: course._id, fix });
+
+    // `any_point_within` needs only two fixes (its defaultMinFixes), not three:
+    // the question it asks is about a single reading, so a smaller sample is a
+    // coherent answer. Assert the pass lands on the SECOND submission — sending
+    // the third and reading that response would show `collecting`, because the
+    // pass clears the attempt and the next fix opens an empty one.
+    expect((await send(walk[0])).body).toEqual({ status: 'collecting' });
+    expect((await send(walk[1])).body.status).toBe('accepted');
     expect(Attendance.create).toHaveBeenCalledWith(
       expect.objectContaining({ method: 'gps', status: 'present', band: 'inside' }),
     );
+  });
+
+  test('a raised per-strategy minimum holds `any_point_within` back until the sample is big enough', async () => {
+    mockSettingsStore.nearBufferLogic = 'any_point_within';
+    mockSettingsStore.minFixesByStrategy = { any_point_within: 4 };
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const send = () => request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, fix: INSIDE });
+
+    expect((await send()).body).toEqual({ status: 'collecting' });
+    expect((await send()).body).toEqual({ status: 'collecting' });
+    expect((await send()).body).toEqual({ status: 'collecting' });
+    expect(Attendance.create).not.toHaveBeenCalled();
+    expect((await send()).body.status).toBe('accepted');
+  });
+
+  test('near keeps collecting rather than banding off a ready far check with the smaller sample', async () => {
+    // near needs 3 (centroid), far needs 1 (any_point, floored down by the admin).
+    // At two fixes far could already answer `suspicious`, but near — the band that
+    // might yet pass the student outright on GPS alone — cannot, so nothing is
+    // decided. Handing over the weaker of two available verdicts would cost the
+    // student a pass they had not yet been denied.
+    mockSettingsStore.nearBufferLogic = 'accuracy_weighted_centroid';
+    mockSettingsStore.farBufferLogic = 'any_point_within';
+    mockSettingsStore.minFixesByStrategy = { any_point_within: 1 };
+    const student = makePerson();
+    const session = makeSession({ buildings: [addBuilding()] });
+    const course = makeCourse();
+    Course.findById.mockResolvedValue(course);
+    LectureSession.find.mockResolvedValue([session]);
+
+    const send = (fix) => request(app).post('/api/attendance').set(headers(student))
+      .send({ courseId: course._id, fix });
+
+    expect((await send(SUSPICIOUS)).body).toEqual({ status: 'collecting' });
+    expect((await send(SUSPICIOUS)).body).toEqual({ status: 'collecting' });
+    expect(await attemptBandOf(student, session)).toBeNull();
+
+    // Third fix: near can finally answer, says "not near", and far then bands it.
+    expect((await send(SUSPICIOUS)).body).toEqual({ status: 'collecting' });
+    expect(await attemptBandOf(student, session)).toBe('suspicious');
   });
 
   test('farBufferLogic "all_points_within" fails when the default strategy would pass as suspicious', async () => {

@@ -14,8 +14,10 @@ or records a `flagged` row instead. A student who never passes and never submits
 leaves no record at all.
 
 Two supporting mechanisms: **peer seeding**, where a few students who heard the beacon —
-from the lecturer or from another student — rebroadcast it to extend range hop by hop, and admin-tunable **distance bands** with
-a selectable geofence strategy per band.
+from the lecturer or from another student — rebroadcast it to extend range hop by hop, and
+admin-tunable **distance bands**: each band picks its own geofence strategy, and each
+strategy carries how many GPS fixes it needs before it may decide. Nothing filters those
+fixes, so choosing the strategy *is* choosing how a stray reading is treated.
 
 The Android app closes itself rather than submitting a GPS fix the platform reports as
 mocked ([Android/README.md](Android/README.md#attendance-flow)), and every staff mutation
@@ -72,7 +74,7 @@ cd Android
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-Server tests: 575 across 38 suites (486 run without a database; the three live-DB suites
+Server tests: 621 across 39 suites (526 run without a database; the three live-DB suites
 skip themselves when none is reachable, and each uses its own database so they can run in
 parallel). `server/README.md` has the breakdown.
 

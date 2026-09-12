@@ -36,8 +36,14 @@ async function isBleEnabled() {
 }
 
 /**
- * The two distance thresholds (normalized so `near` can never exceed `far`)
- * plus each band's selected geofence-logic strategy id.
+ * The two distance thresholds (normalized so `near` can never exceed `far`),
+ * each band's selected geofence-logic strategy id, and the admin's per-strategy
+ * sample requirements.
+ *
+ * `minFixesByStrategy` is passed through raw rather than resolved here: the
+ * resolution needs the strategy id, and which strategy applies is decided
+ * per-band inside `gpsFix.evaluateBand`. Resolving eagerly would mean picking a
+ * strategy in the wrong place.
  */
 function buffers(settings) {
   const nearBufferM = Number.isFinite(settings.nearBufferM) ? settings.nearBufferM : 50;
@@ -47,6 +53,7 @@ function buffers(settings) {
     farBufferM: Math.max(nearBufferM, farBufferM),
     nearBufferLogic: settings.nearBufferLogic || DEFAULT_STRATEGY_ID,
     farBufferLogic: settings.farBufferLogic || DEFAULT_STRATEGY_ID,
+    minFixesByStrategy: settings.minFixesByStrategy || null,
   };
 }
 

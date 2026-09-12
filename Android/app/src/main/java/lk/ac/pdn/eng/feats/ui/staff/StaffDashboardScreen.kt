@@ -120,6 +120,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import lk.ac.pdn.eng.feats.R
 import lk.ac.pdn.eng.feats.data.net.CourseDto
 import lk.ac.pdn.eng.feats.data.net.GeofenceDto
+import lk.ac.pdn.eng.feats.data.net.GeofenceLogicOptionDto
 import lk.ac.pdn.eng.feats.data.net.LecturerDto
 import lk.ac.pdn.eng.feats.data.net.ManualCodeStatusDto
 import lk.ac.pdn.eng.feats.data.net.StaffSessionDto
@@ -1098,6 +1099,13 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
                 nearSelected?.description?.let {
                     Text(it, color = Palette.Muted, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
                 }
+                nearSelected?.let {
+                    MinFixesField(
+                        option = it,
+                        current = settings.minFixesByStrategy?.get(it.id) ?: it.defaultMinFixes ?: 3,
+                        onSave = { value -> vm.setMinFixes(it.id.orEmpty(), value) },
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
                 LabeledDropdown(
                     label = "Far-buffer logic",
@@ -1108,6 +1116,18 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
                 )
                 farSelected?.description?.let {
                     Text(it, color = Palette.Muted, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+                // Only shown when the two bands use different strategies. The
+                // minimum belongs to the strategy, not the band, so with one
+                // strategy on both bands a second identical field would look like
+                // a second setting and then disagree with the first on save.
+                if (farSelected != null && farSelected.id != nearSelected?.id) {
+                    MinFixesField(
+                        option = farSelected,
+                        current = settings.minFixesByStrategy?.get(farSelected.id)
+                            ?: farSelected.defaultMinFixes ?: 3,
+                        onSave = { value -> vm.setMinFixes(farSelected.id.orEmpty(), value) },
+                    )
                 }
             }
         }
@@ -1291,6 +1311,57 @@ private fun LoadingRow() {
     ) {
         androidx.compose.material3.CircularProgressIndicator(color = Palette.Accent)
     }
+}
+
+/**
+ * How many GPS fixes the selected strategy needs before it may decide.
+ *
+ * Labelled by the strategy rather than by the band, because that is what the
+ * number belongs to: near and far pick strategies independently, and the same
+ * strategy on both bands has one minimum, not two.
+ */
+@Composable
+private fun MinFixesField(
+    option: GeofenceLogicOptionDto,
+    current: Int,
+    onSave: (Int) -> Unit,
+) {
+    var text by remember(option.id, current) { mutableStateOf(current.toString()) }
+    val floor = option.floorMinFixes ?: 1
+    val max = option.maxMinFixes ?: 10
+
+    Spacer(Modifier.height(10.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        AppTextField(
+            text,
+            { text = it.filter(Char::isDigit) },
+            "Fixes needed ($floor–$max)",
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+            modifier = Modifier.weight(1f),
+        )
+        PillButton(
+            "Save",
+            onClick = { text.toIntOrNull()?.let(onSave) },
+            tone = PillTone.Accent,
+        )
+    }
+    Spacer(Modifier.height(4.dp))
+    Text(
+        if (floor > 1) {
+            "This option compares several readings, so it needs at least $floor. " +
+                "Fewer would make it behave like \"any point within geofence\" instead."
+        } else {
+            // Deliberately does not claim anything is cross-checked at a larger
+            // sample: nothing filters the readings at any size, so a bad one is
+            // taken at face value whatever this is set to. Saying otherwise was
+            // true only while the outlier trimmer existed.
+            "Fewer fixes means a faster verdict. This option takes the single best " +
+                "reading either way, so a bad one counts — pick \"median distance\" if " +
+                "one stray reading should not decide."
+        },
+        color = Palette.Muted,
+        fontSize = 11.5.sp,
+    )
 }
 
 @Composable

@@ -111,20 +111,45 @@ those thresholds is a separately selectable strategy per band
 `services/geofenceLogic.service.js`. The near band is always evaluated first — it's the
 stronger claim — and the far band's strategy only runs if near didn't already pass.
 
-| Strategy id | What it checks |
-|---|---|
-| `accuracy_weighted_centroid` (default) | Distance from the accuracy-weighted average of all surviving fixes. |
-| `any_point_within` | Passes if the single closest fix lands inside the buffer. |
-| `majority_points_within` | Passes if more than half the surviving fixes land inside the buffer. |
-| `all_points_within` | Passes only if every surviving fix lands inside the buffer. |
-| `median_distance` | The middle distance across all fixes — robust to one outlier fix either way. |
-| `best_accuracy_fix` | Only the single most-precise fix's distance is checked; the rest are ignored. |
+`minFixes` is how many live fixes the strategy needs before it may answer: the shipped
+default, and the lowest an admin may configure it to. Both travel with the strategy —
+see "Why the sample size lives with the strategy" — and the ceiling for all of them is
+`MAX_MIN_FIXES` (10).
 
-Every strategy shares the same upstream pipeline: the outlier-trimming pass
-(`removeOutliersByMedianDistance`) runs first regardless of which strategy is selected,
-so a strategy only ever sees fixes that already cleared it. If trimming leaves fewer than
-`MIN_FIXES` (3) trustworthy fixes, the attempt reports "not ready" and waits for more
-rather than banding on data it has already judged unreliable.
+| Strategy id | What it checks | minFixes (default / floor) |
+|---|---|---|
+| `accuracy_weighted_centroid` (default) | Distance from the accuracy-weighted average of every collected fix. | 3 / 3 |
+| `any_point_within` | Passes if the single closest fix lands inside the buffer. | 2 / **1** |
+| `majority_points_within` | Passes if more than half of the collected fixes land inside the buffer. | 3 / 3 |
+| `all_points_within` | Passes only if every collected fix lands inside the buffer. | 3 / 3 |
+| `median_distance` | The middle distance across all fixes — the outlier-resistant option now that nothing pre-filters. | 3 / 3 |
+| `best_accuracy_fix` | Only the single most-precise fix's distance is checked; the rest are ignored. | 2 / **1** |
+
+Every strategy sees **every** live fix. There is no filtering pass in front of them: once
+a strategy's minimum sample size is met (see "Why the sample size lives with the
+strategy"), the whole sample is handed over as-is.
+
+An outlier-trimming pass used to run first, regardless of the selected strategy, dropping
+any fix further from the marginal median than `max(15, 2 × median distance)`. It was
+removed because a filter that asks "which readings agree with the majority?" cannot sit
+underneath rules that are explicitly not majority rules. `any_point_within` promises to
+pass on a single fix inside the buffer, and the trimmer discarded exactly that fix
+whenever it was the minority — measured: readings scattered 55-106 m out plus one dead
+inside the polygon, verdict 55 m, no pass. `best_accuracy_fix` was overruled on position
+agreement when its entire premise is to trust the accuracy field instead.
+
+Worse, trimming ran *before* the accuracy weighting and judged position only, so four
+identical 100 m-accuracy readings could outvote one 5 m reading and discard it — the
+centroid then reported 111 m while the single trustworthy fix was inside the building.
+The 1/accuracy² weighting exists to let a 5 m fix dominate a 100 m one 400:1 and never
+got to run. That is the ordinary indoor case rather than a contrived one: a coarse
+network fix repeats the same coordinate, so the unreliable cluster agrees with itself.
+
+The cost of removing it is real and is not hidden: `accuracy_weighted_centroid` is again
+exposed to a glitch that also reports good accuracy, which is the incident the trimmer
+was originally added for. Outlier resistance became a *choice* instead — `median_distance`
+and `majority_points_within` absorb a stray reading by construction, and an admin who
+needs that selects one.
 
 `all_points_within` is a genuine footgun with real GPS: one stray reading out of ~30 fails
 the whole attempt, so a student who never left the room can still be flagged. It is offered
@@ -198,6 +223,7 @@ heard a token.
 | `farBufferM` | 100 | Far-band threshold, meters. Must be ≥ `nearBufferM`. |
 | `nearBufferLogic` | `accuracy_weighted_centroid` | Strategy deciding "within `nearBufferM`" — see "Selectable geofence logic". |
 | `farBufferLogic` | `accuracy_weighted_centroid` | Strategy deciding "within `farBufferM`" — see "Selectable geofence logic". |
+| `minFixesByStrategy` | per strategy | GPS fixes a strategy needs before it may decide, keyed by strategy id. Sparse: absent strategies use their own default. See below. |
 | `seedRate` | 0 | Target concurrent seeders; 0 disables seeding. |
 | `seedWindowMs` | 60000 | Seeder **and** decoy window length. |
 | `webAllowNonIos` | false | Whether the browser client at `/app` serves non-iOS devices. A UX gate only — see "Clients". |
@@ -275,7 +301,48 @@ the room and still pass, and can then calibrate. This is also why the API answer
 ambiguity is the point, and any future field added to a student-facing payload has to be
 checked against it.
 
+### Why the sample size lives with the strategy
+
+The GPS minimum used to be one constant, `MIN_FIXES = 3`, applied before any strategy
+ran. It moved onto the strategies because they do not mean the same thing at the same
+sample size.
+
+At a sample of **one**, `fixDistances` holds a single element — so its minimum, maximum
+and median are the same number, the accuracy-weighted centroid *is* that fix, and the
+best-accuracy fix is that fix too. Every strategy returns an identical answer. Allowing
+`all_points_within` to be configured down to 1 would therefore not make the strictest
+option more permissive; it would turn it into `any_point_within` while keeping a
+description that warns about stray readings. That is why the four multi-point strategies
+floor at 3 and only `any_point_within` and `best_accuracy_fix` — which genuinely ask
+about one reading — may go to 1.
+
+They still default to 2, and it is worth being precise about how little that buys: with
+nothing filtering the sample, `any_point_within` takes the closest fix and
+`best_accuracy_fix` the most precise one, so a second reading cannot outvote a bad first
+one. What the default avoids is forming a whole verdict from the first reading of a cold
+start, routinely the coarsest a device produces. It is a settling allowance, not a safety
+margin, and an admin who wants the fastest verdict can set 1.
+
+The ceiling (10) is not arbitrary either: measured indoors on an API 31 phone reporting
+100 m accuracy, fixes arrived every 20-25 s — about four in the whole 90-second window. A
+minimum above that is not strictness, it is a band that can never be reached in a bad
+room.
+
+What this buys is speed where it is safe. `any_point_within` at 2 reaches a verdict in
+roughly half the time the old flat 3 did, which matters most in exactly the rooms where
+fixes are slowest. It also makes configurations expressible that were not before: a
+strict near band (centroid, 3 fixes) alongside a lenient far band.
+
 ## Known limits
+
+- **A single GPS glitch can decide a verdict under the default strategy.** Nothing
+  filters the fixes any more (see "Selectable geofence logic" for why the trimmer was
+  removed), so one wild reading that also reports good accuracy pulls the
+  accuracy-weighted centroid with it: measured, three in-room fixes plus one 25 km glitch
+  band as `far`, and the student falls through to the lecturer's code. The mitigation is
+  to select `median_distance` or `majority_points_within`, which absorb a stray reading by
+  construction — it is a deliberate trade of a hidden safeguard for strategies that mean
+  what their names say.
 
 - The 50–100m suspicious band always auto-passes on a correct code now — a student in the
   canteen who has the code from a group chat passes silently. Mitigations in place are
@@ -291,7 +358,7 @@ checked against it.
 - The OAuth exchange-code and sign-in nonce stores are still in-memory, and are what now
   blocks horizontal scaling. Attempt state no longer does: it moved to MongoDB, where two
   instances share one buffer instead of each holding a partial one that never reaches the
-  three-fix minimum.
+  minimum fix count.
 - Every GPS fix is now a database round trip rather than a heap write — roughly three DB
   ops per fix against one before. Measured at ~256 ms median per submission over Atlas,
   and the collection tops out near 10 MB even with 2000 students checking in at once, but
