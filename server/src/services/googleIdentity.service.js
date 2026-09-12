@@ -193,7 +193,6 @@ async function signInWithGoogleIdToken(idToken, expectedNonce) {
 module.exports = {
   isIdTokenSignInConfigured,
   issueSignInNonce,
-  consumeSignInNonce,
   upsertGooglePerson,
   signInWithGoogleIdToken,
   EmailDomainRejectedError,

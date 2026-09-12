@@ -22,29 +22,13 @@
 
 const mongoose = require('mongoose');
 
-const URI = process.env.MONGO_TEST_URI || '';
+const { liveDbUri, describeLive } = require('./helpers/liveDb');
 
-function databaseNameOf(uri) {
-  const match = /^mongodb(?:\+srv)?:\/\/[^/]+\/([^?]+)/.exec(String(uri || ''));
-  return match ? decodeURIComponent(match[1]) : '';
-}
-
-const TEST_DB = databaseNameOf(URI);
-const APP_DB = databaseNameOf(process.env.MONGO_URI || 'mongodb://localhost:27017/attendance');
-
-if (URI && (!TEST_DB || TEST_DB === APP_DB)) {
-  throw new Error(
-    `[gpsStateDurability] refusing to run: MONGO_TEST_URI points at "${TEST_DB || '(no database)'}", `
-    + 'which is the database the application uses.',
-  );
-}
-
-const describeDb = URI ? describe : describe.skip;
-
-if (!URI) {
-  // eslint-disable-next-line no-console
-  console.warn('[gpsStateDurability] no MONGO_TEST_URI — skipping live-database suite.');
-}
+// Its own database. Sharing one with dbIntegration meant that suite's
+// dropDatabase() removed the unique and TTL indexes this one exists to assert,
+// whenever Jest ran them in parallel. See helpers/liveDb.js.
+const URI = liveDbUri('gpsstate');
+const describeDb = describeLive(URI, 'gpsStateDurability');
 
 const AttendanceAttempt = require('../models/AttendanceAttempt');
 

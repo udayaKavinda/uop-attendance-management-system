@@ -249,8 +249,16 @@ async function recordGpsFixAttendance(studentPk, courseId, fix) {
  * failed. What it grants depends on how far out the student's last GPS verdict
  * put them — a correct code is proof the lecturer is nearby and willing to
  * vouch, not proof of location, so it never turns a far/unknown attempt into a
- * silent pass. `inside`/`near`/`suspicious` all auto-pass on a correct code;
- * `far`/`unknown` are flagged instead, with a reason for the export cell.
+ * silent pass. `far`/`unknown` are flagged instead, with a reason for the
+ * export cell.
+ *
+ * `passes` below also accepts `inside` and `near`, but no stored verdict can
+ * ever hold either: `recordGpsFixAttendance` clears both halves of the attempt
+ * in the same request that passes on them, so the only bands that survive to be
+ * read here are the three that do NOT pass on GPS alone. Those two are kept as a
+ * defensive floor rather than removed — if clear-on-pass ever changes, the safe
+ * reading of a stale `inside` verdict is "present", not "flagged" — and
+ * `bandMatrixLive.test.js` pins the unreachability so the claim stays true.
  */
 async function recordHelpCodeAttendance(studentPk, courseId, code) {
   const resolved = await resolveActiveSessionForCourse(courseId);

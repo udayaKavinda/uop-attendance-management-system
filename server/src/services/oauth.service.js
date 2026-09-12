@@ -204,7 +204,6 @@ module.exports = {
   pickOAuthReturnBase,
   parseNativeReturnTarget,
   nativeReturnUrl,
-  issueOAuthExchangeCode,
   consumeOAuthExchangeCode,
   redirectAfterOAuth,
   buildNativeReturnHtml,

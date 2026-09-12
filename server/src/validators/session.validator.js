@@ -116,5 +116,4 @@ module.exports = {
   validateSessionCreateBody,
   validateBroadcastBody,
   checkSessionOverlap,
-  ALLOWED_DAYS,
 };

@@ -13,7 +13,7 @@ async function getSettings() {
   const doc = await Settings.findOneAndUpdate(
     {},
     { $setOnInsert: { bleEnabled: true } },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
   );
   _cache = { value: doc, ts: Date.now() };
   return doc;
@@ -23,7 +23,7 @@ async function updateSettings(patch) {
   const doc = await Settings.findOneAndUpdate(
     {},
     { $set: patch },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
   );
   _cache = { value: doc, ts: Date.now() };
   return doc;

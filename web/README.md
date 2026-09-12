@@ -178,7 +178,8 @@ src/
                 port of StaffViewModel.kt)
   platform/     iOS / standalone detection, screen wake lock
   components/   Chrome.tsx (shared student/login chrome), StaffChrome.tsx (dashboard
-                widgets — tabs, session card, pills)
+                widgets — tabs, session card, pills), CoursePicker, HelpCodeDialog,
+                MapDialog (the zoomable campus map behind "View map" on Create session)
   screens/      check-in, login, admin notice, unsupported-platform,
                 StaffDashboard.tsx (lecturer dashboard shell)
   screens/staff/  CoursesTab, CreateSessionTab, SessionsTab, AttendanceMatrixScreen
@@ -187,6 +188,28 @@ src/
 `src/api/types.ts` mirrors the server's controllers, the same way
 `Android/…/data/net/Dto.kt` does for the native app. When an endpoint changes, both
 need updating.
+
+## Tests
+
+```bash
+npm test -- --run      # vitest, 46 tests across 3 files
+```
+
+- `geo/watchFixes.test.ts` — the fix stream: the 3 s throttle, `accuracy: 0`
+  normalisation, the secure-context and missing-`geolocation` guards, and above all which
+  errors are fatal. `watchPosition` is a *stream*, and iOS routinely emits a transient
+  `TIMEOUT` or `POSITION_UNAVAILABLE` mid-window and then goes on delivering fixes
+  perfectly well; only `PERMISSION_DENIED` may reach `onError`, because the caller treats
+  any error as the end of the attempt. Getting this wrong killed windows that still had
+  70 good seconds left in them.
+- `hooks/useCheckIn.test.ts` — the 90-second window: wall-clock (not tick-counted)
+  expiry, the course poll, help-code validation and outcomes, and teardown on unmount.
+- `hooks/useStaffDashboard.test.ts` — the lecturer state machine.
+
+Verified once by hand against the running client, since no unit test can: a permission
+denial ends the attempt immediately with the reason on screen rather than running out a
+silent 90 seconds, and two transient `POSITION_UNAVAILABLE` errors followed by good fixes
+still reach "You're marked present".
 
 ## Not verified here
 

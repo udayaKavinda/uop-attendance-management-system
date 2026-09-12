@@ -1740,7 +1740,17 @@ private fun ManualCodeSection(
             return@Column
         }
         if (status.running != true) {
-            Text("The code appears during the scheduled session window.", color = Palette.Muted, fontSize = 12.sp)
+            // `running` is the server's isWithinScheduleWindow, which requires the
+            // session to be ACTIVE as well as in its window — so this also shows
+            // for a session sitting in its window waiting for Collect. Saying
+            // "during the scheduled session window" there is simply untrue: the
+            // card directly above it reads "Within session", and the lecturer is
+            // left waiting for a code that will never appear on its own.
+            Text(
+                "The code appears once you tap Collect, inside the session's scheduled window.",
+                color = Palette.Muted,
+                fontSize = 12.sp,
+            )
             return@Column
         }
         val code = status.code ?: return@Column

@@ -64,8 +64,9 @@ sudo grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' /opt/attendance/app/.env | tr -d '='
 - `MONGO_URI` is the real production value, not a development placeholder:
   **production runs on the VM's own `mongod`**, standalone, on `127.0.0.1:27017`, database
   `attendance`. A MongoDB Atlas cluster also exists and has served production at times, but
-  its role now is **testing only** — `uop_attendance_test` there is where the live-database
-  suites point. Production data belongs on the VM.
+  its role now is **testing only** — `uop_attendance_test` there is the base name the
+  live-database suites derive their own databases from (`_schema`, `_gpsstate`, `_bands`;
+  see `server/README.md`). Production data belongs on the VM.
 
   Because both are real and both hold plausible-looking data, never infer which one a box
   is using. Ask the process:
@@ -195,7 +196,8 @@ address `jest.globalSetup.js` probes when the variable is unset — `127.0.0.1:2
 the live database itself, not a decoy that merely shares its name. The live-DB suites drop
 the database they are pointed at. `off` is the only value meaning "do not probe"; unset
 *and* empty both mean "go looking". For local work, point `MONGO_TEST_URI` at a scratch
-database — the Atlas `uop_attendance_test` is what this project uses.
+database — the Atlas `uop_attendance_test` is what this project uses, and each live suite
+suffixes it with its own name so they never drop one another's data.
 
 **The web build comes before the suite on purpose.** Two tests in
 `webApp.routes.test.js` gate themselves on `web/dist/index.html` existing — the PWA
@@ -215,7 +217,7 @@ saying why:
 | --- | --- |
 | `NODE_ENV=production`, no `SESSION_SECRET` | `config/env.js` calls `process.exit(1)` while being required. 14 suites report `Jest worker encountered 4 child process exceptions` — nothing about the real cause |
 | `NODE_ENV=production` + `SESSION_SECRET` | `middlewares/testAuth.js` switches its test-only auth bypass off; 130 tests fail on 401s |
-| `NODE_ENV=test` | 485 pass, 21 skipped (the live-DB suite, by `MONGO_TEST_URI=off`) |
+| `NODE_ENV=test` | 486 pass, 88 skipped (the three live-DB suites, by `MONGO_TEST_URI=off`) |
 
 Either failure blocks every deploy behind a red job that reads like a code regression and
 is not one. `NODE_ENV` is set on the **step**, not the job, so the web build below it is

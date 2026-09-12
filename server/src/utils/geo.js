@@ -92,7 +92,6 @@ function distanceToNearestGeofenceMeters(lat, lng, polygons) {
 
 module.exports = {
   haversineMeters,
-  toLocalMeters,
   isPointInPolygon,
   distanceToPolygonBoundary,
   distanceToNearestGeofenceMeters,

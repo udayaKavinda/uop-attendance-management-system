@@ -250,12 +250,40 @@ Requirements: Android Studio/JDK 17 and an Android SDK with compile SDK 36.
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-App configuration: application id `lk.ac.pdn.eng.feats`, min SDK 24, target SDK 37,
-version `1.8.0` (`versionCode 8`). The server's `minSupportedVersionCode` setting is
-compared against this `versionCode` on every launch.
+App configuration: application id `lk.ac.pdn.eng.feats`, min SDK 24, compile and target
+SDK 36, version `2.0.0` (`versionCode 10`). The server's `minSupportedVersionCode` setting
+is compared against this `versionCode` on every launch. `targetSdk` must never exceed
+`compileSdk`: targeting an API level the app was not compiled against opts into that
+level's behaviour changes without the SDK that defines them, and Play rejects the upload.
 
 For a signed release, create the ignored `keystore.properties` described in the root
 `README_ENV.md`. Use a keystore path valid on the machine performing the build.
+
+### Pointing a debug build at a local server
+
+Release always talks to `https://attendance.eng.pdn.ac.lk`, and nothing below changes
+that. Debug builds accept an override in the same gitignored `local.properties`:
+
+```properties
+LOCAL_API_BASE=http://localhost:5000
+```
+
+With `adb reverse tcp:5000 tcp:5000`, `localhost` on the phone reaches the development
+machine — preferable to a LAN address because it survives changing networks. Cleartext for
+it is allowed by `src/debug/res/xml/network_security_config.xml`, which exempts only the
+loopback names; the main config still forbids cleartext everywhere, for every build.
+
+This exists because verifying a GPS band on real hardware means driving a database whose
+geofence and session are known, and the only such database is a local one. Mocking the
+device's position is not an alternative: the app shuts itself down on a fix the platform
+reports as mocked (see **Attendance flow**), so band testing works the other way round —
+leave GPS real and move the geofence until the device measures the distance the band under
+test needs.
+
+Native Google sign-in keeps working against a local server. The client obtains an ID token
+and the server verifies it against `GOOGLE_CLIENT_ID`; no redirect URI is involved, so the
+same web client id is valid on any host. Browser sign-in is the half that will not work
+locally without `GOOGLE_CLIENT_SECRET`.
 
 ## Source layout
 

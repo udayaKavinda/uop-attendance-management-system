@@ -72,8 +72,9 @@ cd Android
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-Server tests: 537 across 37 suites (486 run without a database; the two live-DB suites
-skip themselves when none is reachable). `server/README.md` has the breakdown.
+Server tests: 574 across 38 suites (486 run without a database; the three live-DB suites
+skip themselves when none is reachable, and each uses its own database so they can run in
+parallel). `server/README.md` has the breakdown.
 
 The API defaults to `http://localhost:5000`; the Android production base is
 `https://attendance.eng.pdn.ac.lk`.

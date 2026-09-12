@@ -40,6 +40,33 @@ val googleWebClientId: String =
         ?: (project.findProperty("GOOGLE_WEB_CLIENT_ID") as String?)
         ?: ""
 
+/**
+ * Optional server override for **debug builds only** — release always points at
+ * production, and nothing here can change that.
+ *
+ * Needed because verifying a GPS band on real hardware means driving a database
+ * whose geofence and session are known, and the only such database is a local
+ * one. Without this the app can only ever talk to production, so the choice was
+ * to test bands against live data or not to test them on hardware at all.
+ *
+ * Set it in `local.properties` (machine-local, gitignored):
+ *
+ *     LOCAL_API_BASE=http://localhost:5000
+ *
+ * `localhost` works on a USB-attached phone via `adb reverse tcp:5000 tcp:5000`,
+ * which is preferable to a LAN address because it survives changing networks.
+ * Cleartext for it is permitted by `src/debug/res/xml/network_security_config.xml`
+ * and only there — the main config still forbids it everywhere.
+ *
+ * Native Google sign-in keeps working against a local server: the client posts an
+ * ID token and the server verifies it against GOOGLE_CLIENT_ID, with no redirect
+ * URI involved, so the same web client id is valid on any host.
+ */
+val localApiBase: String =
+    localProperties.getProperty("LOCAL_API_BASE")
+        ?: (project.findProperty("LOCAL_API_BASE") as String?)
+        ?: ""
+
 android {
     namespace = "lk.ac.pdn.eng.feats"
     compileSdk = 36
@@ -124,6 +151,12 @@ android {
         debug {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
+            }
+            // Debug-only server override; see localApiBase above. Absent from
+            // local.properties, a debug build is identical to before and points
+            // at production.
+            if (localApiBase.isNotBlank()) {
+                buildConfigField("String", "DEFAULT_API_BASE", "\"$localApiBase\"")
             }
         }
     }

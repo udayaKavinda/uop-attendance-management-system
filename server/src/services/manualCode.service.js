@@ -100,7 +100,7 @@ async function forceRotate(sessionItem, { keepGrace }) {
       generatedAt: Date.now(),
       paused: false,
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
   );
   return doc;
 }
@@ -156,7 +156,7 @@ async function getOrRotateCode(sessionItem) {
       prevCode: overdueBy <= GRACE_MS ? doc.code : null,
       generatedAt: now,
     },
-    { new: true },
+    { returnDocument: 'after' },
   );
   return toState(doc, sessionItem, now);
 }

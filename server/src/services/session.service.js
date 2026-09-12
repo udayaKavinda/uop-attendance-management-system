@@ -207,7 +207,6 @@ async function getRunningSessionsForStaff(scope, now = new Date()) {
 }
 
 module.exports = {
-  BROADCAST_WINDOW_ERROR,
   scheduleWindowError,
   isWithinScheduleWindow,
   isScheduledNow,

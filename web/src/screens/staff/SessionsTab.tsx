@@ -277,7 +277,12 @@ function ManualCodeSection({
       {status == null ? (
         <p className="hint">Loading code…</p>
       ) : status.running !== true ? (
-        <p className="hint">The code appears during the scheduled session window.</p>
+        // `running` is the server's isWithinScheduleWindow, which requires the
+        // session to be ACTIVE as well as in its window — so this also shows for
+        // a session sitting in its window waiting for Collect, where "during the
+        // scheduled session window" is untrue and leaves the lecturer waiting for
+        // a code that will never appear on its own.
+        <p className="hint">The code appears once you tap Collect, inside the session&rsquo;s scheduled window.</p>
       ) : status.code == null ? null : (
         <>
           <div className="code-box">

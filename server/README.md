@@ -72,6 +72,14 @@ the "get help" code to produce **any** `Attendance` record at all — raw GPS fi
 never write one for these three bands, so a student who never falls back to the code
 leaves no trace, exactly like one who never checked in (rendered as `-`, not blank).
 
+Those same three are also the **only** bands a code submission can ever see. A pass on
+`inside`/`near` clears both halves of the attempt in the request that produced it, so no
+stored verdict can hold either by the time a code arrives; `recordHelpCodeAttendance`
+still treats them as passing, but purely as a defensive floor, and `bandMatrixLive.test.js`
+pins the unreachability so that comment cannot quietly become false. A code submitted
+*after* an automatic pass therefore reads its verdict as `unknown` — and is harmless,
+because nothing ever downgrades an existing `present` row.
+
 "Within the near/far buffer" is deliberately not just a fixed distance check — each band
 independently runs a selectable strategy (`Settings.nearBufferLogic`/`farBufferLogic`)
 against `nearBufferM`/`farBufferM`. See `services/geofenceLogic.service.js`'s
@@ -647,8 +655,8 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-537 tests across 37 suites. 486 of those run with every Mongoose model mocked and need
-no database. Two suites talk to a real MongoDB, because what they assert is behaviour of
+574 tests across 38 suites. 486 of those run with every Mongoose model mocked and need
+no database. Three suites talk to a real MongoDB, because what they assert is behaviour of
 the database rather than of our code:
 
 - `dbIntegration.test.js` — schema defaults, validators, `populate` and unique indexes
@@ -656,10 +664,18 @@ the database rather than of our code:
 - `gpsStateDurability.test.js` — a verdict surviving a restart, two instances sharing one
   attempt document, concurrent `$push` keeping every fix, the unique index, and TTL
   semantics. A fake can only demonstrate that the fake agrees with itself.
+- `bandMatrixLive.test.js` — the whole verification contract driven over real HTTP against
+  real models: every band, all three evidence paths, and the combinations that only appear
+  once BLE and GPS run together in one window. It exists because the mocked route suites
+  stub `BleToken` with a store whose `find({ sessionId })` returns **at most one
+  document**, so a session can only ever hold a primary row there — and peer seeding's
+  whole purpose is a *second* row on the same session. The seed branch of `verifyToken`,
+  which decides `seedRelayed` and which must refuse to let a seeded student seed again,
+  had no end-to-end coverage on either side of that gap.
 
-Neither needs setup: `jest.globalSetup.js` probes `mongodb://127.0.0.1:27017` before the
-run and, if a mongod answers, points them at the **`uop_attendance_test`** database.
-With no local mongod both skip themselves and the other 35 suites run as normal, so a
+None needs setup: `jest.globalSetup.js` probes `mongodb://127.0.0.1:27017` before the
+run and, if a mongod answers, points them at the **`uop_attendance_test`** base database.
+With no local mongod all three skip themselves and the other 35 suites run as normal, so a
 machine or CI runner without a database still goes green. Set `MONGO_TEST_URI` to override the
 target, or to `off` to skip the probe entirely — which is what CI does, because the
 deploy runner *is* the production host and a test process must never open a connection
@@ -668,10 +684,25 @@ there. That has teeth now: production moved off Atlas onto that host's own `mong
 `off` is the only value that suppresses the probe; leaving the variable unset or empty
 both mean "go looking".
 
-That database is **dropped** before and after the run. The name is hard-coded and never
-derived from `MONGO_URI`, and the suite refuses to start if it is pointed at the database
-the application itself uses — an accidental `MONGO_TEST_URI=.../attendance` fails loudly
-instead of destroying local data. It
+**Each live suite gets its own database**, named by suffixing that base — `…_schema`,
+`…_gpsstate`, `…_bands` — from `tests/helpers/liveDb.js`, which also holds the guard
+below. This is not tidiness. Jest runs suites in parallel workers unless told otherwise,
+and `npm test` does not tell it otherwise — only the documented `npm test -- --runInBand`
+does. While all three shared one database, `dbIntegration`'s `dropDatabase()` ran in its
+own `beforeAll`/`afterAll` against the database a parallel `gpsStateDurability` was using,
+and dropping a database takes its **indexes** with it — including the unique
+`(student, session)` and TTL indexes that suite exists to assert. Measured on a machine
+with a local mongod: bare `npx jest` failed 4, 7 and 6 tests across three consecutive
+runs, always in `gpsStateDurability`, never the same set twice, and always green again
+under `--runInBand`. A race that only appears in the command the README *doesn't* use is
+worse than one that always fails, so the isolation is enforced in code and the flag is now
+an optimisation rather than a correctness requirement.
+
+Each suite **drops its own** database before and after its run. The base name is
+hard-coded and never derived from `MONGO_URI`, and a suite refuses to start if it is
+pointed at the database the application itself uses — an accidental
+`MONGO_TEST_URI=.../attendance` fails loudly instead of destroying local data.
+`dbIntegration`
 covers the persisted `active: false` on create, the one-time `occurrenceDate` required
 validator, the `buildings` minimum, the unique `(code, batch)` course index, one-time
 date resolution either side of `endTime`, overlap detection (including two one-time
@@ -718,3 +749,37 @@ through `assign-lecturer` (as opposed to the admin path), pagination on the thre
 list endpoints, the lecturer directory's staff-wide (not admin-only) access, and
 `isScheduledNow`/`getRunningSessionsForStaff`'s active-independent window check specifically
 (distinct from the Collect-gate and sweep cases above, which are now covered).
+
+### What was confirmed on real hardware
+
+Tests establish that the rules are implemented; they cannot establish that a radio
+transmits or that a GPS chip produces a usable fix. The following was run end to end
+against a local server and database, driving the shipped clients — a lecturer on an
+SM-X115 (Android 14) tapping Collect and broadcasting, a student on an SM-M015G
+(Android 12), and the web client in a browser.
+
+| Path | Result |
+|---|---|
+| BLE, primary token | `present/inside/bluetooth`, `seedRelayed: false` |
+| Peer seeding | seeder slot 0 claimed by the accepted student, real `BleToken` seed row |
+| GPS `inside` | `present/inside/gps`, 3 fixes, 0 m |
+| GPS `near` | `present/near/gps`, 25 m |
+| GPS `suspicious` | **no record**, verdict stored at 76 m; + code → `present/suspicious/code_override` |
+| GPS `far` | **no record**, verdict stored at 43.9 km; + code → `flagged/far`, "GPS location is 43.9km from the nearest session building." |
+| GPS `unknown` (all buildings deactivated) | **no record**, verdict with zero fixes; + code → `flagged/unknown`, "Could not verify location." |
+| Web client, GPS | `present/inside/gps`, 3 fixes, 0 m |
+| Web client, transient GPS errors | two `POSITION_UNAVAILABLE` then fixes → still `present` |
+| Web client, permission denied | attempt ends at once with the reason, not after a silent 90 s |
+
+Bands were produced by **moving the geofence** relative to a stationary device, not by
+mocking its position. That is not a convenience: the Android app shuts itself down on a
+fix the platform reports as mocked, so a mock-location harness cannot drive the client at
+all. Leaving GPS real and moving the building measures the same distances through the same
+code the student's phone runs.
+
+Two things this could not reach. **Legacy BLE permissions** (API ≤ 30, where scanning
+needs `ACCESS_FINE_LOCATION` and the system Location toggle rather than
+`BLUETOOTH_SCAN`) have no device to run on — the three available are API 31, 34 and 36.
+And **a student hearing only a seeder**, as opposed to the lecturer, needs the two phones
+far enough apart to separate the beacons; the seed branch is covered end to end in
+`bandMatrixLive.test.js` instead, which is where the token provenance is actually decided.

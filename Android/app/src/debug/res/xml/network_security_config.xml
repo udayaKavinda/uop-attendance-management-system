@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug builds only. Overrides the main config, which forbids cleartext
+  everywhere and still does for every release build.
+
+  This exists so a debug build can talk to a developer's own server over
+  `adb reverse` while verifying GPS bands and BLE against a database whose
+  geofence and session are known. The exemption is limited to the loopback
+  names that can only ever mean this machine — it is not a blanket
+  cleartextTrafficPermitted="true".
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <!-- The host machine as seen from an emulator. -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

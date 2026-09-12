@@ -56,7 +56,7 @@ async function getToken(sessionId) {
   doc = await Model.findOneAndUpdate(
     filter,
     { token, prevToken, generatedAt: now, updatedAt: new Date() },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );
   return { token, prevToken, rotatesIn: ROTATION_MS / 1000 };
 }
@@ -161,7 +161,7 @@ async function claimSeedSlot(sessionId, ownerId, leaseUntil, maxSeeders, now = D
             updatedAt: new Date(),
           },
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
       );
       return { token: doc.token, leaseUntil: doc.leaseUntil, slot };
     } catch (err) {
@@ -202,7 +202,7 @@ async function getSeedToken(sessionId, ownerId) {
   const updated = await Model.findOneAndUpdate(
     filter,
     { token, prevToken: doc.token, generatedAt: now, updatedAt: new Date() },
-    { new: true },
+    { returnDocument: 'after' },
   );
   return {
     token: updated.token, prevToken: updated.prevToken, leaseUntil: updated.leaseUntil, rotatesIn: ROTATION_MS / 1000,

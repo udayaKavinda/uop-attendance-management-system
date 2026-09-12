@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react';
 
 /*
  * Web counterparts of the staff-only widgets in ui/staff/StaffDashboardScreen.kt,
@@ -226,9 +225,4 @@ export function LabeledSelect({
       </select>
     </label>
   );
-}
-
-/** Wrapper matching AppCard's panel variant. */
-export function Panel({ children }: { children: ReactNode }) {
-  return <div className="panel">{children}</div>;
 }

@@ -26,7 +26,7 @@ export function TopBar({ email, onSignOut }: { email: string; onSignOut: () => v
 }
 
 /** AppFooter — same line the native app shows. */
-export function Footer() {
+function Footer() {
   return (
     <div className="footer">
       Copyright © 2026 Computing Centre - Faculty of Engineering - University of Peradeniya. All

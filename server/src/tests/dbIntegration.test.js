@@ -17,36 +17,12 @@
 
 const mongoose = require('mongoose');
 
-const URI = process.env.MONGO_TEST_URI || '';
+const { liveDbUri, describeLive } = require('./helpers/liveDb');
 
-/**
- * This suite calls dropDatabase(), so the database it is pointed at must be a
- * scratch one. Refuses to run against the name the application itself uses
- * (MONGO_URI, defaulting to the documented local `attendance`) rather than
- * quietly destroying a developer's data because two URIs looked similar.
- */
-function databaseNameOf(uri) {
-  const match = /^mongodb(?:\+srv)?:\/\/[^/]+\/([^?]+)/.exec(String(uri || ''));
-  return match ? decodeURIComponent(match[1]) : '';
-}
-
-const TEST_DB = databaseNameOf(URI);
-const APP_DB = databaseNameOf(process.env.MONGO_URI || 'mongodb://localhost:27017/attendance');
-
-if (URI && (!TEST_DB || TEST_DB === APP_DB)) {
-  throw new Error(
-    `[dbIntegration] refusing to run: MONGO_TEST_URI points at "${TEST_DB || '(no database)'}", `
-    + `which is the database the application uses. This suite drops the database it connects to — `
-    + 'point it at a scratch name such as uop_attendance_test.',
-  );
-}
-
-const describeDb = URI ? describe : describe.skip;
-
-if (!URI) {
-  // eslint-disable-next-line no-console
-  console.warn('[dbIntegration] no local MongoDB found and MONGO_TEST_URI not set — skipping live-database suite.');
-}
+// Its own database, not the shared scratch one: this suite calls dropDatabase(),
+// which would take a parallel live suite's indexes with it. See helpers/liveDb.js.
+const URI = liveDbUri('schema');
+const describeDb = describeLive(URI, 'dbIntegration');
 
 const Course = require('../models/Course');
 const LectureSession = require('../models/LectureSession');
