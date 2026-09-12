@@ -162,8 +162,10 @@ carried no information.
 
 ### Lecturer code and peer seeding
 
-The 8-digit code exists for every session and appears in the session card during its
-scheduled window. Students only ever see it asked for behind **Get help** — never on the
+The 8-digit code exists for every session and appears in the session card once the
+lecturer taps **Collect**, inside the scheduled window. Being in the window is not enough
+on its own: the server's `manualCode.getStatus` gates on `isWithinScheduleWindow`, which
+requires `active` as well, so a session sitting at "Within session" has no code yet. Students only ever see it asked for behind **Get help** — never on the
 first screen, so it is an escalation path rather than a shortcut.
 
 Student devices request `BLUETOOTH_ADVERTISE` with their attendance permissions on

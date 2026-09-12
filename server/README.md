@@ -98,6 +98,14 @@ depends on it.
 ### GPS validation
 
 - Android streams one precise fix at a time for up to 90 seconds.
+- **How fast fixes actually arrive is the platform's choice, not ours.** `fixFlow` asks for
+  an update every 3 s, but `LocationManager` delivers when it has something new. Measured
+  indoors on an API 31 phone reporting 100 m accuracy: roughly one fix every 20-25 s, with
+  the three-fix minimum reached around 55-60 s into the 90 s window — inside it, but not by
+  much. Plan for the GPS path to be tight indoors rather than assume the ~30 fixes a 3 s
+  cadence would imply (the figure the rate-limit table below uses is a worst case for
+  budgeting, not a typical one). A student who never reaches three fixes bands nothing and
+  falls through to the lecturer's code, which is the intended behaviour, not a failure.
 - Outliers are dropped against the median; survivors are averaged weighted by 1/accuracy².
   If trimming leaves fewer than 3 trustworthy fixes the attempt reports "not ready" and
   waits for more, rather than banding on fixes it has already judged unreliable.
@@ -393,8 +401,11 @@ than freezing on the first submission. Which bands write a row at all is specifi
   `services/geofenceLogic.service.js`), the seeding parameters (`seedRate`, and
   `seedWindowMs` — the window length given identically to real seeders and decoys so the
   two are indistinguishable), the student sign-in email
-  domain (`studentEmailDomain`, empty disables the check), and the minimum Android
-  `versionCode` (`minSupportedVersionCode`, `0` disables the check).
+  domain (`studentEmailDomain`, empty disables the check), the minimum Android
+  `versionCode` (`minSupportedVersionCode`, `0` disables the check), and
+  `webAllowNonIos` — whether the browser client at `/app` serves non-iOS devices
+  (off by default; it is the one field here an unauthenticated caller can read, via
+  `GET /api/web-config`, because the client has to decide before anyone signs in).
 
 ## API reference
 
@@ -435,6 +446,7 @@ unexpected can be reflected back; `bodyErrors.routes.test.js` pins both halves.
 | GET | `/auth/google` | public/rate-limited | browser OAuth fallback |
 | GET | `/auth/google/callback` | public/rate-limited | OAuth callback. On success redirects to `/login/success`; on failure to `/?error=<code>` where `<code>` is one of `domain` (plus `&domain=<host>`), `no_email`, `session`, or `auth`. Codes, never `err.message` — this lands in a URL and the message can carry driver internals. Both clients map the codes to copy (`signInFailureMessage` in web, `oauthReturnFrom` on Android); keep the three in step |
 | POST | `/api/auth/exchange-code` | public/rate-limited | consume native fallback exchange code |
+| GET | `/auth/native-return?target=` | public/rate-limited | Bounce page that hands the browser OAuth result back to the native app. `target` is **re-built from validated parts**, never echoed: `parseNativeReturnTarget` checks it structurally (allow-listed base, path shape, `code` hex, `error` from the fixed set, `domain` only alongside `error=domain`) and `nativeReturnUrl` reassembles it, so nothing caller-supplied reaches the redirect. The page carries no script — the hop is a meta refresh — which is why it can send `default-src 'none'` rather than the `script-src 'unsafe-inline'` the old inline redirect needed. A malformed target is a bare 400. |
 | GET | `/api/me` | authenticated | current account and role |
 | POST | `/api/logout` | public | destroy session — deliberately ungated, so it is idempotent and can never fail; with no session it is a no-op returning `{ success: true }`. The CSRF header is still required. |
 | GET | `/api/healthz` | public | process/database health |

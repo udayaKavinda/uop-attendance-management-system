@@ -43,9 +43,11 @@ deliberately ambiguous `collecting`, and is banded by the same server logic. It 
 one fewer way to pass, which is why it is offered to iOS only by default
 (`webAllowNonIos`) — Android users have a client that can also hear the beacon.
 
-Peer seeding is absent there by consequence, not omission: only students verified by a
-**primary** BLE token are ever selected as seeders, so a GPS-verified student is passed
-over on every platform, native app included.
+Peer seeding is absent there by consequence, not omission: seeding is offered only to
+students whose radio actually heard the room — the lecturer's beacon or another student's
+relay — so a **GPS-verified** student is passed over on every platform, native app
+included. A browser check-in is GPS-only by construction, which puts it outside that set
+whatever it asks for.
 
 That platform gate is a UX decision, not a security boundary — the browser decides by
 reading its own user agent, which anyone can spoof. It does not need to be more: the web
