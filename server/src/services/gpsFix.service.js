@@ -56,6 +56,78 @@ function normalizedAccuracy(fix) {
   return Math.max(1, raw);
 }
 
+/** A fix's arrival time, or 0 for a fix built by hand in a test. */
+function timestampOf(fix) {
+  const raw = Number(fix?.ts);
+  return Number.isFinite(raw) ? raw : 0;
+}
+
+/**
+ * The single most precise fix in a sample — what `best_accuracy_fix` is entirely
+ * built on — chosen so that the answer depends on the sample's *contents* and
+ * never on the order they happen to sit in.
+ *
+ * Three rules, applied in order:
+ *
+ *  1. Smallest `normalizedAccuracy`, not the raw field. An accuracy-unknown fix
+ *     reports 0, and 0 means "no accuracy information", not "perfect" — without
+ *     normalizing, such a fix wins "most precise" and then decides the whole
+ *     verdict on its own.
+ *  2. On a tie, the **newest** reading wins, matching how the rest of the attempt
+ *     treats fresher evidence (attemptVerdict.record overwrites for the same
+ *     reason).
+ *  3. Still tied — same accuracy, same millisecond — the **farther** reading
+ *     wins.
+ *
+ * Rules 2 and 3 are the part that was missing, and it mattered. Phones quantize
+ * accuracy (5, 10, 20 m are all common repeated values), so ties are ordinary
+ * rather than rare, and a plain `<` reduce silently kept whichever tied fix the
+ * array held first. Measured: four fixes all at accuracy 5, two inside the
+ * polygon and two ~503 m out, banded `inside` when the inside pair came first and
+ * `far` when it came second — the same evidence, two opposite verdicts, decided
+ * by nothing.
+ *
+ * Rule 3 needs a justification rather than just a coin-toss, because at that
+ * point the sample is genuinely self-contradictory: two readings, equally
+ * precise, equally fresh, in different places, and nothing left to separate them
+ * on. Taking the farther one declines to grant a pass on evidence that cannot
+ * support it — and the student is not stranded, because `far`/`suspicious` write
+ * nothing and the lecturer's code is still there. It also keeps the choice
+ * meaningful; ordering on coordinates would be just as deterministic and say
+ * nothing at all.
+ *
+ * @param {Array} fixes non-empty
+ * @param {number[]} distances distance of `fixes[i]`, same order — already
+ *   computed by the caller, so rule 3 costs nothing.
+ */
+function mostPreciseFix(fixes, distances) {
+  let bestIndex = 0;
+  for (let i = 1; i < fixes.length; i += 1) {
+    const accuracy = normalizedAccuracy(fixes[i]);
+    const bestAccuracy = normalizedAccuracy(fixes[bestIndex]);
+    if (accuracy > bestAccuracy) continue;
+    if (accuracy < bestAccuracy) {
+      bestIndex = i;
+      continue;
+    }
+    const ts = timestampOf(fixes[i]);
+    const bestTs = timestampOf(fixes[bestIndex]);
+    if (ts < bestTs) continue;
+    if (ts > bestTs) {
+      bestIndex = i;
+      continue;
+    }
+    if (distanceAt(distances, i) > distanceAt(distances, bestIndex)) bestIndex = i;
+  }
+  return fixes[bestIndex];
+}
+
+/** A fix's precomputed distance, or -Infinity when the caller supplied none. */
+function distanceAt(distances, index) {
+  const raw = Array.isArray(distances) ? Number(distances[index]) : NaN;
+  return Number.isFinite(raw) ? raw : -Infinity;
+}
+
 /** Drops anything outside the live window. Pure — the age rule, in one place. */
 function liveFixes(fixes, now = Date.now()) {
   return (fixes || []).filter((f) => now - f.ts <= FIX_WINDOW_MS);
@@ -223,9 +295,9 @@ function isPassBand(band) {
 /**
  * One band's verdict against its own strategy and its own sample size.
  *
- * Each band trims and measures independently because the two may need different
- * numbers of fixes: near and far pick strategies separately, and a strategy's
- * minimum travels with it. Recomputing the metrics per band is pure arithmetic
+ * Each band measures independently because the two may need different numbers
+ * of fixes: near and far pick strategies separately, and a strategy's minimum
+ * travels with it. Recomputing the metrics per band is pure arithmetic
  * over at most `MAX_BUFFERED_FIXES` points, so the duplication costs nothing
  * worth sharing state to avoid.
  *
@@ -239,13 +311,9 @@ function evaluateBand(fixes, polygons, strategyId, bufferM, configuredMinFixes) 
   const centroid = { ...accuracyWeightedCentroid(survivors), fixCount: survivors.length };
   const fixDistances = survivors.map((f) => distanceToNearestGeofenceMeters(f.lat, f.lng, polygons));
   const centroidDistanceM = distanceToNearestGeofenceMeters(centroid.lat, centroid.lng, polygons);
-  // normalizedAccuracy, not the raw field: an accuracy-unknown (0) fix must not
-  // win "most precise" and then dominate the whole verdict under best_accuracy_fix.
-  const bestAccuracyFix = survivors.reduce(
-    (best, f) => (normalizedAccuracy(f) < normalizedAccuracy(best) ? f : best),
-  );
+  const bestFix = mostPreciseFix(survivors, fixDistances);
   const bestAccuracyFixDistanceM = distanceToNearestGeofenceMeters(
-    bestAccuracyFix.lat, bestAccuracyFix.lng, polygons,
+    bestFix.lat, bestFix.lng, polygons,
   );
   const metrics = { fixDistances, centroidDistanceM, bestAccuracyFixDistanceM };
 
@@ -301,6 +369,7 @@ module.exports = {
   sweep,
   liveFixes,
   sampleForVerdict,
+  mostPreciseFix,
   accuracyWeightedCentroid,
   computeCentroid,
   isPassBand,

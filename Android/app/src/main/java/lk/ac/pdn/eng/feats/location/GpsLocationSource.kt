@@ -106,9 +106,11 @@ class GpsLocationSource(private val context: Context) {
 
         // Registering the same listener against several providers is supported and
         // simply interleaves their fixes. The server already handles a mixed stream:
-        // it trims outliers by median distance and weights the centroid by 1/accuracy²,
-        // so a coarse network fix informs the result without being able to dominate a
-        // precise satellite one (gpsFix.service.js).
+        // its default strategy weights the centroid by 1/accuracy², so a coarse
+        // network fix informs the result without being able to dominate a precise
+        // satellite one (gpsFix.service.js). Nothing is filtered out, though, so an
+        // admin who wants a stray reading ignored picks a strategy that does that
+        // — see geofenceLogic.service.js.
         val registered = providers.filter { provider ->
             runCatching {
                 manager.requestLocationUpdates(provider, intervalMs, 0f, listener, Looper.getMainLooper())

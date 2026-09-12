@@ -82,15 +82,28 @@ const CSRF = { 'X-Requested-With': 'jest' };
 const authHeader = (person) => ({ 'x-test-user': JSON.stringify(person) });
 const headers = (person) => ({ ...authHeader(person), ...CSRF });
 
-/** A session window that is open right now, so no clock faking is needed. */
+/**
+ * A session window that is open right now, so no clock faking is needed.
+ *
+ * Clamped to the calendar day rather than simply now +/- 30 minutes. A session
+ * is a weekday plus a half-open [start, end) compared in minutes-since-midnight,
+ * so it cannot cross midnight — and an unclamped window built at 23:50 produced
+ * `23:20` to `00:20`, an end that sorts *before* its own start. Every request in
+ * this file was then correctly rejected as outside the window, so the whole
+ * suite failed for the last half hour of every day and the first half hour of
+ * the next. The bug was the helper's, not the schedule rule's.
+ */
 function windowAroundNow(now = new Date()) {
   const pad = (n) => String(n).padStart(2, '0');
-  const start = new Date(now.getTime() - 30 * 60_000);
-  const end = new Date(now.getTime() + 30 * 60_000);
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  // End is exclusive, so it must stay strictly ahead of the current minute.
+  const startMin = Math.max(0, minutes - 30);
+  const endMin = Math.min(24 * 60 - 1, minutes + 30);
+  const hhmm = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
   return {
     lectureDay: DAY_INDEX[now.getDay()],
-    startTime: `${pad(start.getHours())}:${pad(start.getMinutes())}`,
-    endTime: `${pad(end.getHours())}:${pad(end.getMinutes())}`,
+    startTime: hhmm(startMin),
+    endTime: hhmm(endMin),
   };
 }
 

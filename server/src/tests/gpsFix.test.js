@@ -86,6 +86,72 @@ describe('gpsFix', () => {
     });
   });
 
+  describe('mostPreciseFix (best_accuracy_fix tie-break)', () => {
+    const SQUARE = [[80.591528, 7.254029], [80.592072, 7.254029], [80.592072, 7.254571], [80.591528, 7.254571]];
+    const at = (lat, accuracy, ts) => ({ lat, lng: 80.591800, accuracy, ts });
+    const INSIDE_LAT = 7.254300;
+    const FAR_LAT = 7.259093; // ~503 m out
+
+    // The whole point: phones quantize accuracy, so equal values are ordinary.
+    // Which tied fix decides the verdict must come from the data, not from the
+    // order the array happens to be in.
+    it('picks the NEWEST fix when accuracies tie', () => {
+      const older = at(FAR_LAT, 5, 1_000);
+      const newer = at(INSIDE_LAT, 5, 2_000);
+      expect(gpsFix.mostPreciseFix([older, newer])).toBe(newer);
+      expect(gpsFix.mostPreciseFix([newer, older])).toBe(newer);
+    });
+
+    it('gives the same verdict however the tied fixes are ordered', () => {
+      const inside = [at(INSIDE_LAT, 5, 3_000), at(INSIDE_LAT, 5, 4_000)];
+      const far = [at(FAR_LAT, 5, 1_000), at(FAR_LAT, 5, 2_000)];
+      const insideFirst = gpsFix.evaluateBand([...inside, ...far], [SQUARE], 'best_accuracy_fix', 50, null);
+      const farFirst = gpsFix.evaluateBand([...far, ...inside], [SQUARE], 'best_accuracy_fix', 50, null);
+      expect(insideFirst.withinBuffer).toBe(farFirst.withinBuffer);
+      expect(insideFirst.distanceM).toBeCloseTo(farFirst.distanceM, 6);
+      // ...and the answer is the newer pair's, which is inside.
+      expect(insideFirst.withinBuffer).toBe(true);
+      expect(insideFirst.distanceM).toBe(0);
+    });
+
+    it('still prefers a genuinely better accuracy over a newer one', () => {
+      const precise = at(INSIDE_LAT, 3, 1_000);
+      const coarseButNewer = at(FAR_LAT, 80, 9_000);
+      expect(gpsFix.mostPreciseFix([precise, coarseButNewer])).toBe(precise);
+      expect(gpsFix.mostPreciseFix([coarseButNewer, precise])).toBe(precise);
+    });
+
+    it('normalizes accuracy 0 to unknown before comparing, ties included', () => {
+      const unknownButNewest = at(INSIDE_LAT, 0, 9_000); // normalises to 50
+      const known = at(FAR_LAT, 10, 1_000);
+      expect(gpsFix.mostPreciseFix([unknownButNewest, known])).toBe(known);
+      // Two accuracy-unknown fixes DO tie at 50, so the newer one wins.
+      const unknownOlder = at(FAR_LAT, 0, 1_000);
+      expect(gpsFix.mostPreciseFix([unknownOlder, unknownButNewest])).toBe(unknownButNewest);
+      expect(gpsFix.mostPreciseFix([unknownButNewest, unknownOlder])).toBe(unknownButNewest);
+    });
+
+    // Same accuracy, same millisecond, different places: the sample contradicts
+    // itself, so the farther reading wins rather than the array's first element.
+    it('falls back to the farther fix when accuracy AND timestamp both tie', () => {
+      const insideFix = at(INSIDE_LAT, 5, 7_000);
+      const farFix = at(FAR_LAT, 5, 7_000);
+      expect(gpsFix.mostPreciseFix([insideFix, farFix], [0, 503])).toBe(farFix);
+      expect(gpsFix.mostPreciseFix([farFix, insideFix], [503, 0])).toBe(farFix);
+    });
+
+    it('gives one answer for identically-stamped fixes however they are ordered', () => {
+      const stamped = (lat) => at(lat, 5, 7_000);
+      const inside = [stamped(INSIDE_LAT), stamped(INSIDE_LAT)];
+      const far = [stamped(FAR_LAT), stamped(FAR_LAT)];
+      const insideFirst = gpsFix.evaluateBand([...inside, ...far], [SQUARE], 'best_accuracy_fix', 50, null);
+      const farFirst = gpsFix.evaluateBand([...far, ...inside], [SQUARE], 'best_accuracy_fix', 50, null);
+      expect(insideFirst.withinBuffer).toBe(false);
+      expect(farFirst.withinBuffer).toBe(false);
+      expect(insideFirst.distanceM).toBeCloseTo(farFirst.distanceM, 6);
+    });
+  });
+
   describe('accuracyWeightedCentroid', () => {
     it('weights a more accurate (lower-accuracy-value) fix more heavily', () => {
       const fixes = [

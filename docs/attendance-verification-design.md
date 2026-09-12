@@ -163,6 +163,28 @@ value, so the same fix was simultaneously the least-trusted input to the centroi
 "the most precise fix we have" for `best_accuracy_fix`. Any new consumer of `accuracy`
 must go through `normalizedAccuracy` for that reason.
 
+### Which fix is "the most precise one"
+
+`best_accuracy_fix` rests entirely on picking one reading out of the sample, so that
+choice has to be a function of the sample's contents and never of the order the fixes
+happen to sit in. `mostPreciseFix` applies three rules in order: smallest
+`normalizedAccuracy`; then, on a tie, the **newest** reading; then, if accuracy and
+timestamp both tie, the **farther** reading.
+
+The tie rules are not hypothetical. Phones quantize accuracy — 5 m, 10 m and 20 m repeat
+constantly — so equal values are the ordinary case, and the previous `reduce` silently
+kept whichever tied fix came first in the array. Measured: four fixes all at accuracy 5,
+two inside the polygon and two ~503 m out, banded `inside` when the inside pair arrived
+first and `far` when it arrived second. Same evidence, opposite verdicts, decided by
+nothing.
+
+Preferring the newer reading matches how the rest of the attempt treats fresher evidence
+(the stored verdict is overwritten for the same reason). The final fallback prefers the
+farther reading because at that point the sample genuinely contradicts itself — two
+readings, equally precise, equally fresh, in different places — and declining to grant a
+pass on evidence that cannot support one is the safe reading. The student is not
+stranded: non-passing bands write nothing, and the lecturer's code is still available.
+
 ## Verdict retention
 
 The band from the automatic attempt has to outlive the attempt itself: the GPS fix

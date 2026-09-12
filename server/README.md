@@ -159,6 +159,14 @@ depends on it.
 - A reported accuracy of `0` means "unknown" (Android returns it when `hasAccuracy()` is
   false), not "perfect", and is normalised to a pessimistic 50 m for both centroid
   weighting and best-fix selection.
+- `best_accuracy_fix` picks its one reading by `mostPreciseFix`, which breaks ties so the
+  answer never depends on the order fixes arrived in: lowest normalised accuracy, then the
+  **newest** reading, then the **farther** one. Ties are ordinary rather than rare because
+  phones quantize accuracy — measured, four fixes all at accuracy 5 (two inside the
+  polygon, two ~503 m out) banded `inside` or `far` purely according to which pair came
+  first in the array. The last rule prefers the farther reading because a sample that
+  contradicts itself that completely should not buy a pass; see
+  [docs/attendance-verification-design.md](../docs/attendance-verification-design.md).
 - Every band decision runs on distance alone — there is no accuracy floor below which an
   attempt is forced to `unknown`; a low-accuracy fix simply gets less weight in the
   centroid than a precise one.
