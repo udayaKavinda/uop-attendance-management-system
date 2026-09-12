@@ -124,11 +124,15 @@ jest.mock('../models/Attendance', () => ({
   }),
 }));
 
-jest.mock('../models/Settings', () => ({
-  findOneAndUpdate: jest.fn().mockResolvedValue({
-    bleEnabled: true, nearBufferM: 50, farBufferM: 100,
-  }),
-}));
+jest.mock('../models/Settings', () => {
+  const settings = { bleEnabled: true, nearBufferM: 50, farBufferM: 100 };
+  return {
+    // `findOne` is the read path: getSettings reads before it ever considers an
+    // upsert, so that a plain read cannot stamp `updatedAt` on the singleton.
+    findOne: jest.fn().mockResolvedValue(settings),
+    findOneAndUpdate: jest.fn().mockResolvedValue(settings),
+  };
+});
 
 const request = require('supertest');
 const app = require('../app');

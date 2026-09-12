@@ -51,6 +51,9 @@ function resetSettings() {
 }
 resetSettings();
 jest.mock('../models/Settings', () => ({
+  // `findOne` is the read path: getSettings reads before it ever considers an
+  // upsert, so that a plain read cannot stamp `updatedAt` on the singleton.
+  findOne: jest.fn(() => Promise.resolve(mockSettingsStore)),
   findOneAndUpdate: jest.fn((_filter, update) => {
     if (update.$set) Object.assign(mockSettingsStore, update.$set);
     return Promise.resolve(mockSettingsStore);

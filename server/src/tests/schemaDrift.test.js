@@ -159,6 +159,62 @@ describeDb('live MongoDB — schema drift is refused, not migrated', () => {
     });
   });
 
+  /**
+   * Reading configuration must not rewrite it. An upsert is an update even when
+   * `$setOnInsert` matches nothing, and Mongoose stamps `updatedAt` on every
+   * update — so the previous `getSettings` wrote to the singleton on every cache
+   * miss, which is every 5 seconds for the length of a lecture.
+   */
+  describe('reading settings does not write them', () => {
+    const settingsService = require('../services/settings.service');
+    const Settings = require('../models/Settings');
+
+    const stampOf = async () => (await Settings.findOne({}).lean()).updatedAt.getTime();
+    // The service holds a 5s module-local cache and exposes no way to clear it,
+    // so every test that needs a real database round-trip has to wait it out.
+    // Deleting the document is not enough on its own: a cached read never looks.
+    const pastTheCache = () => new Promise((resolve) => { setTimeout(resolve, 5200); });
+
+    it('creates the singleton when one does not exist', async () => {
+      await Settings.deleteMany({});
+      await pastTheCache();
+
+      const created = await settingsService.getSettings();
+
+      expect(created).toBeTruthy();
+      expect(await Settings.countDocuments()).toBe(1);
+    }, 20000);
+
+    it('never creates a second singleton, however many readers race', async () => {
+      await Settings.deleteMany({});
+      await pastTheCache();
+
+      await Promise.all(Array.from({ length: 12 }, () => settingsService.getSettings()));
+
+      expect(await Settings.countDocuments()).toBe(1);
+    }, 20000);
+
+    it('leaves updatedAt alone across a cache miss', async () => {
+      await settingsService.getSettings();
+      const before = await stampOf();
+
+      await pastTheCache();
+      await settingsService.getSettings();
+
+      expect(await stampOf()).toBe(before);
+    }, 20000);
+
+    it('still moves updatedAt when an admin actually changes something', async () => {
+      await settingsService.getSettings();
+      const before = await stampOf();
+
+      await pastTheCache();
+      await settingsService.updateSettings({ nearBufferM: 55 });
+
+      expect(await stampOf()).toBeGreaterThan(before);
+    }, 20000);
+  });
+
   describe('the models write what the current code reads', () => {
     it('Attendance carries createdAt/updatedAt and no hand-rolled timestamp', () => {
       const paths = Object.keys(Attendance.schema.paths);

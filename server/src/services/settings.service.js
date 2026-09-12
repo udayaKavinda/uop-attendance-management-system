@@ -7,10 +7,25 @@ const { DEFAULT_STRATEGY_ID } = require('./geofenceLogic.service');
 const CACHE_TTL_MS = 5000;
 let _cache = null; // { value, ts }
 
-/** Reads the singleton, creating it with defaults on first call (atomic upsert). */
+/**
+ * Reads the singleton, creating it with defaults the first time.
+ *
+ * The read is a real read. This used to be a bare `findOneAndUpdate` with
+ * `$setOnInsert`, which looks read-only but is not: an upsert is an *update*,
+ * and Mongoose stamps `updatedAt` on every update — so each cache miss wrote to
+ * the document it was only supposed to look at. Settings are consulted on every
+ * attendance submission and every code poll, so a lecture in progress rewrote
+ * this singleton every 5 seconds for its whole duration, and `updatedAt` meant
+ * "when someone last read the settings" rather than "when an admin last changed
+ * them", which is the only question anyone asks of it.
+ *
+ * The upsert is kept for the one case that needs it — the document genuinely
+ * missing — where it is still atomic, so two workers racing on a fresh database
+ * cannot create two singletons.
+ */
 async function getSettings() {
   if (_cache && Date.now() - _cache.ts < CACHE_TTL_MS) return _cache.value;
-  const doc = await Settings.findOneAndUpdate(
+  const doc = await Settings.findOne({}) || await Settings.findOneAndUpdate(
     {},
     { $setOnInsert: { bleEnabled: true } },
     { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
