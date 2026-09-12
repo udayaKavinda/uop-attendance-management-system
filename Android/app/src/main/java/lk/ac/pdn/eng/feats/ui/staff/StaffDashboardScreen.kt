@@ -128,6 +128,7 @@ import lk.ac.pdn.eng.feats.ui.components.AppCard
 import lk.ac.pdn.eng.feats.ui.components.AppTextField
 import lk.ac.pdn.eng.feats.ui.components.EmptyState
 import lk.ac.pdn.eng.feats.ui.components.ErrorBanner
+import lk.ac.pdn.eng.feats.ui.components.LoadingState
 import lk.ac.pdn.eng.feats.ui.components.PillButton
 import lk.ac.pdn.eng.feats.ui.components.PillTone
 import lk.ac.pdn.eng.feats.ui.components.PrimaryButton
@@ -322,7 +323,12 @@ private fun CoursesTab(state: StaffState, vm: StaffViewModel, onOpenMatrix: (Str
             }
         }
 
-        if (visibleCourses.isEmpty()) {
+        if (visibleCourses.isEmpty() && state.loading) {
+            // `loading` used to be set and never read, so the first paint of a
+            // cold dashboard asserted "No courses / Add a course above to get
+            // started" before the request had come back.
+            item { LoadingState("Loading courses…") }
+        } else if (visibleCourses.isEmpty()) {
             item {
                 val msg = if (state.isAdmin && state.selectedLecturerFilter != null) {
                     "This lecturer has no courses yet. Add one above."
@@ -962,7 +968,12 @@ private fun SessionsTab(state: StaffState, vm: StaffViewModel) {
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = Palette.Muted) },
             )
         }
-        if (filtered.isEmpty()) {
+        if (filtered.isEmpty() && state.loading && query.isBlank()) {
+            // Only while the list itself is still arriving. With a search typed,
+            // "no sessions" is a true answer about the query and must not be
+            // replaced by a spinner on every refresh.
+            item { LoadingState("Loading sessions…") }
+        } else if (filtered.isEmpty()) {
             item { EmptyState("🗓️", "No sessions", "Create a session to see it here.") }
         } else {
             items(filtered, key = { it.id ?: it.hashCode().toString() }) { session ->

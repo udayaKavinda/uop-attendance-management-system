@@ -114,6 +114,10 @@ export function bleEnabled(state: StaffState): boolean {
  * Lecturers only — administration is Android-only, so there is no admin branch
  * anywhere below (see AdminNoticeScreen).
  */
+const POLL_INTERVAL_MS = 10_000;
+/** 6 x 10 s = one settings read a minute. */
+const SETTINGS_POLL_EVERY_TICKS = 6;
+
 export function useStaffDashboard() {
   const [state, setState] = useState<StaffState>(INITIAL);
 
@@ -140,8 +144,9 @@ export function useStaffDashboard() {
   const clearFlash = useCallback(() => patch({ flash: null }), [patch]);
   const clearError = useCallback(() => patch({ error: null }), [patch]);
 
-  /** Reloads page 1 of every list — at startup and after any mutation. */
-  const refresh = useCallback(async () => {
+  /** Reloads page 1 of every list. Wrapped by `refresh` below, which also
+   *  re-reads the shared settings/geofences. */
+  const refreshLists = useCallback(async () => {
     patch({ loading: true });
     const [coursesRes, sessionsRes] = await Promise.all([api.adminCourses(1), api.allSessions(1)]);
 
@@ -187,11 +192,17 @@ export function useStaffDashboard() {
     return true;
   }, [patch]);
 
-  // Initial load. Settings and geofences are staff-readable, not admin-only:
-  // every lecturer needs the BLE switch to word the card, and the building list
-  // to create a session at all.
-  useEffect(() => {
-    void refresh();
+  /**
+   * Settings and geofences are staff-readable, not admin-only: every lecturer
+   * needs the BLE switch to word the card, and the building list to create a
+   * session at all.
+   *
+   * Re-read on every refresh rather than once on mount. Loaded once, they were
+   * stale for the life of the dashboard — an admin switching Bluetooth off, or
+   * adding a building, changed nothing on a lecturer's already-open page until
+   * they reloaded it. Mirrors the same fix in the Android client's StaffViewModel.
+   */
+  const loadSharedConfig = useCallback(() => {
     void api.settings().then((res) => {
       if (res.ok) patch({ settings: res.data });
       else setError(`Could not load Bluetooth/geofence settings: ${res.message}`);
@@ -200,7 +211,17 @@ export function useStaffDashboard() {
       if (res.ok) patch({ geofences: res.data.items ?? [] });
       else setError(`Could not load buildings: ${res.message}`);
     });
-  }, [refresh, patch, setError]);
+  }, [patch, setError]);
+
+  const refresh = useCallback(async () => {
+    await refreshLists();
+    loadSharedConfig();
+  }, [refreshLists, loadSharedConfig]);
+
+  // Initial load.
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   /**
    * Stops on 401 for the same reason the native poll does: this state outlives a
@@ -211,11 +232,20 @@ export function useStaffDashboard() {
     let cancelled = false;
     let timer: number | undefined;
 
+    let ticks = 0;
+
     const tick = async () => {
       if (cancelled) return;
       const keepGoing = await refreshRunningNow();
       if (cancelled || !keepGoing) return;
-      timer = window.setTimeout(tick, 10_000);
+      // Every sixth tick, so global settings cannot sit stale on a dashboard
+      // nobody is touching. `refresh()` re-reads them too, but it only runs
+      // after a mutation, and a lecturer who opens this page and just watches
+      // it would otherwise never see an admin switch Bluetooth off. Mirrors the
+      // Android StaffViewModel's poll.
+      ticks += 1;
+      if (ticks % SETTINGS_POLL_EVERY_TICKS === 0) loadSharedConfig();
+      timer = window.setTimeout(tick, POLL_INTERVAL_MS);
     };
     void tick();
 
@@ -223,7 +253,7 @@ export function useStaffDashboard() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [refreshRunningNow]);
+  }, [refreshRunningNow, loadSharedConfig]);
 
   // ── Courses ────────────────────────────────────────────────────────────────
 

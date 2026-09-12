@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Course, Lecturer } from '../../api/types';
-import { Card, EmptyState, PrimaryButton, TextField } from '../../components/Chrome';
+import { Card, EmptyState, ListLoading, PrimaryButton, TextField } from '../../components/Chrome';
 import {
   LoadMoreRow,
   PillButton,
@@ -144,7 +144,9 @@ export function CoursesTab({
         />
       </Card>
 
-      {visibleCourses.length === 0 ? (
+      {visibleCourses.length === 0 && state.loading ? (
+        <ListLoading text="Loading courses…" />
+      ) : visibleCourses.length === 0 ? (
         <EmptyState icon="📚" title="No courses" text="Add a course above to get started." />
       ) : (
         <>

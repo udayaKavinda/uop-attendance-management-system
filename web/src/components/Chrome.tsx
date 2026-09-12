@@ -93,6 +93,23 @@ export function EmptyState({ icon, title, text }: { icon: string; title: string;
   );
 }
 
+/**
+ * Shown in place of an [EmptyState] while a list is still being fetched.
+ *
+ * An empty list and a list that has not arrived yet render identically, and the
+ * empty copy is not neutral — "Add a course above to get started" reads as a
+ * statement about the lecturer's account. On a slow connection that was the
+ * first thing they saw after signing in, and it was wrong.
+ */
+export function ListLoading({ text }: { text: string }) {
+  return (
+    <div className="empty">
+      <div className="spinner" role="status" aria-label="Loading" />
+      <p className="empty__text">{text}</p>
+    </div>
+  );
+}
+
 /** LoadingGate. */
 export function LoadingGate({ message = 'Please wait.' }: { message?: string }) {
   return (

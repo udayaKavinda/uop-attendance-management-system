@@ -129,11 +129,6 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
         pollRunning()
         observeBroadcastService()
-        // Both are staff-readable, not admin-only: every lecturer needs the BLE
-        // switch to know whether broadcasting is even offered, and the building
-        // list to create a session at all.
-        loadGlobalSettings()
-        loadGeofences()
     }
 
     /** Mirror the foreground service's state and surface its self-stop reasons. */
@@ -202,6 +197,19 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
 
             if (sessionsRes is ApiResult.Success) reconcileBroadcast(sessionsRes.data.items)
         }
+        // Re-read with every refresh rather than once in `init`.
+        //
+        // Both are staff-readable, not admin-only: every lecturer needs the BLE
+        // switch to know whether broadcasting is even offered, and the building
+        // list to create a session at all. Loading them once made them permanently
+        // stale for the life of the dashboard — measured: an admin changed the
+        // far-band strategy on the server and this screen kept showing the old one
+        // through every tab switch and every other refresh, until the app was
+        // force-stopped. A lecturer whose admin had just switched Bluetooth off
+        // would likewise keep reading a card that promised Bluetooth, and a
+        // building added minutes ago never appeared in the session form.
+        loadGlobalSettings()
+        loadGeofences()
     }
 
     fun loadMoreCourses() {
@@ -322,6 +330,7 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun pollRunning() {
         viewModelScope.launch {
+            var tick = 0
             while (isActive) {
                 // Stops on 401 for the same reason the student poll does: this
                 // ViewModel is resolved from the Activity's store and outlives
@@ -329,7 +338,16 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
                 // and a stale poll's 401 can land after a fresh sign-in and force
                 // that new session straight back out. See LectureEntryViewModel.
                 if (!refreshRunningNow()) return@launch
-                delay(10_000)
+                // Every sixth tick, so global settings cannot sit stale on a
+                // dashboard nobody is touching. `refresh()` already re-reads them,
+                // but it only runs after a mutation — a lecturer who opens this
+                // screen and then just watches it would otherwise never see an
+                // admin switch Bluetooth off, and would keep reading a card that
+                // promises a beacon nobody is allowed to broadcast. One small GET
+                // a minute, against a server-side singleton that is itself cached.
+                tick += 1
+                if (tick % SETTINGS_POLL_EVERY_TICKS == 0) loadGlobalSettings()
+                delay(POLL_INTERVAL_MS)
             }
         }
     }
@@ -636,6 +654,12 @@ class StaffViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     // ── Settings (admin: mode policy, seeding, buffers, manual-code kill-switch) ───────
+
+    private companion object {
+        const val POLL_INTERVAL_MS = 10_000L
+        /** 6 x 10 s = one settings read a minute. */
+        const val SETTINGS_POLL_EVERY_TICKS = 6
+    }
 
     private fun loadGlobalSettings() {
         viewModelScope.launch {

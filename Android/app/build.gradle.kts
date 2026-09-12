@@ -80,8 +80,8 @@ android {
         // an upload whose targetSdk is above the latest stable platform. This was
         // 37 against compileSdk 36.
         targetSdk = 36
-        versionCode = 10
-        versionName = "2.0.0"
+        versionCode = 11
+        versionName = "2.1.0"
 
         // Fixed production server. Must match the server's APP_BASE_URL so the
         // native OAuth return is allowed.
@@ -164,6 +164,17 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    testOptions {
+        unitTests {
+            // The JVM android.jar is stubs that throw on every call, so any code
+            // path containing an android.util.Log line is untestable without this
+            // — including apiCall's network-failure branch, which exists to keep
+            // OkHttp's transport text away from students and therefore has to be
+            // pinned by a test. Returning defaults makes those stubs no-ops.
+            isReturnDefaultValues = true
+        }
     }
 
     buildFeatures {

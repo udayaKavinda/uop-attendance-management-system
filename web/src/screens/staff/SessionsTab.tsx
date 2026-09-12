@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ManualCodeStatus, StaffSession } from '../../api/types';
-import { EmptyState, TextField } from '../../components/Chrome';
+import { EmptyState, ListLoading, TextField } from '../../components/Chrome';
 import {
   ConfirmDialog,
   LoadMoreRow,
@@ -40,7 +40,12 @@ export function SessionsTab({ staff }: { staff: StaffApi }) {
         placeholder="Course, time, or type…"
       />
 
-      {filtered.length === 0 ? (
+      {filtered.length === 0 && state.loading && query.trim() === '' ? (
+        // Only while the list itself is still arriving. With a search typed,
+        // "no sessions" is a true answer about the query and must not be
+        // replaced by a spinner on every refresh.
+        <ListLoading text="Loading sessions…" />
+      ) : filtered.length === 0 ? (
         <EmptyState icon="🗓️" title="No sessions" text="Create a session to see it here." />
       ) : (
         <>

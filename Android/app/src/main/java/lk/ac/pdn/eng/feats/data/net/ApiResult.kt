@@ -1,5 +1,6 @@
 package lk.ac.pdn.eng.feats.data.net
 
+import android.util.Log
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import retrofit2.HttpException
@@ -53,8 +54,27 @@ suspend fun <T> apiCall(block: suspend () -> T): ApiResult<T> {
         val msg = parsed?.error ?: parsed?.message ?: "Request failed ($code)"
         ApiResult.Error(msg, code)
     } catch (e: IOException) {
-        ApiResult.Error(e.message ?: "Network error")
+        // NOT e.message. OkHttp's transport text is written for whoever is reading
+        // a stack trace, and it reached students verbatim: killing the server
+        // mid-submission put "unexpected end of stream on http://…:5000/..." in the
+        // attendance-code dialog, under a heading asking them to type 8 digits.
+        // Every cause here is the same thing from their side — the request never
+        // got an answer — and the only useful advice is to try again, so say that
+        // once and keep the detail in the log.
+        Log.w(TAG, "network failure", e)
+        ApiResult.Error(NETWORK_MESSAGE)
     } catch (e: Exception) {
-        ApiResult.Error(e.message ?: "Unexpected error")
+        Log.w(TAG, "unexpected failure", e)
+        ApiResult.Error(UNEXPECTED_MESSAGE)
     }
 }
+
+private const val TAG = "ApiCall"
+
+/** Shown whenever the request never reached the server or never got an answer. */
+const val NETWORK_MESSAGE =
+    "Couldn't reach the server. Check your connection and try again."
+
+/** Shown for a client-side failure that is not a transport problem. */
+const val UNEXPECTED_MESSAGE = "Something went wrong. Please try again."
+

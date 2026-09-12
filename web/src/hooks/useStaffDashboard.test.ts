@@ -193,3 +193,83 @@ describe('session card stages', () => {
     expect(bleEnabled(stateWith({}, { bleEnabled: false }))).toBe(false);
   });
 });
+
+describe('shared config freshness', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.adminCourses.mockResolvedValue(ok(emptyPage));
+    api.allSessions.mockResolvedValue(ok(emptyPage));
+    api.runningSessions.mockResolvedValue(ok([]));
+    api.settings.mockResolvedValue(ok({ bleEnabled: true }));
+    api.geofences.mockResolvedValue(ok(emptyPage));
+  });
+
+  // Loaded once on mount, settings were stale for the life of the page: an admin
+  // switching Bluetooth off changed nothing on a lecturer's already-open
+  // dashboard, and a building added minutes ago never appeared in the session
+  // form. Mirrors the same fix in the Android StaffViewModel.
+  it('re-reads settings and geofences on every refresh, not just on mount', async () => {
+    const view = await mountSettled();
+    expect(api.settings).toHaveBeenCalledTimes(1);
+    expect(api.geofences).toHaveBeenCalledTimes(1);
+
+    api.settings.mockResolvedValue(ok({ bleEnabled: false }));
+    await act(async () => {
+      await view.result.current.refresh();
+    });
+
+    expect(api.settings).toHaveBeenCalledTimes(2);
+    expect(api.geofences).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(bleEnabled(view.result.current.state)).toBe(false));
+  });
+
+  // An idle dashboard is the case refresh() alone cannot cover: nothing is being
+  // mutated, so nothing triggers a re-read.
+  it('re-reads settings from the poll, so an idle dashboard cannot stay stale', async () => {
+    vi.useFakeTimers();
+    try {
+      const view = renderHook(() => useStaffDashboard());
+      await vi.advanceTimersByTimeAsync(0);
+      const afterMount = api.settings.mock.calls.length;
+
+      api.settings.mockResolvedValue(ok({ bleEnabled: false }));
+      // Six poll ticks at 10 s.
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(api.settings.mock.calls.length).toBeGreaterThan(afterMount);
+      expect(bleEnabled(view.result.current.state)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('picks up a newly added building without a page reload', async () => {
+    const view = await mountSettled();
+    expect(view.result.current.state.geofences).toHaveLength(0);
+
+    api.geofences.mockResolvedValue(ok({ items: [{ _id: 'g1', name: 'New Hall' }], hasMore: false }));
+    await act(async () => {
+      await view.result.current.refresh();
+    });
+
+    await waitFor(() => expect(view.result.current.state.geofences).toHaveLength(1));
+  });
+
+  // `loading` was set and never read, so the first paint asserted "No courses /
+  // Add a course above to get started" before the request had come back.
+  it('reports loading while the first list request is still in flight', async () => {
+    let release: (v: unknown) => void = () => {};
+    api.adminCourses.mockImplementation(
+      () => new Promise((resolve) => { release = resolve as (v: unknown) => void; }),
+    );
+    const view = renderHook(() => useStaffDashboard());
+    await waitFor(() => expect(view.result.current.state.loading).toBe(true));
+    expect(view.result.current.state.courses).toHaveLength(0);
+
+    await act(async () => {
+      release(ok(emptyPage));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.result.current.state.loading).toBe(false));
+  });
+});

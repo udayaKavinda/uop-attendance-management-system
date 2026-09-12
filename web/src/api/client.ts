@@ -63,7 +63,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<ApiResu
       },
     });
   } catch {
-    return { ok: false, message: 'Network error', status: null };
+    // The reader is a student or a lecturer mid-lecture, and every cause of a
+    // thrown fetch is the same from their side: the request never got an answer.
+    // Say that, and say what to do about it.
+    return {
+      ok: false,
+      message: "Couldn't reach the server. Check your connection and try again.",
+      status: null,
+    };
   }
 
   if (res.status === 401) onUnauthorized();

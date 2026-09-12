@@ -315,6 +315,37 @@ fun EmptyState(icon: String, title: String, text: String, modifier: Modifier = M
     }
 }
 
+/**
+ * Shown in place of an empty state while the first load is still in flight.
+ *
+ * The distinction matters: an empty list and a list that has not arrived yet look
+ * identical, and the empty copy is not neutral — it tells a lecturer "Add a course
+ * above to get started" or "No sessions", which reads as a statement of fact about
+ * their account. On a slow connection that is the first thing they see after
+ * signing in, and it is wrong.
+ */
+@Composable
+fun LoadingState(text: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier.fillMaxWidth().padding(vertical = 28.dp, horizontal = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(28.dp),
+            strokeWidth = 3.dp,
+            color = Palette.Accent,
+        )
+        Text(
+            text,
+            color = Palette.Muted,
+            fontSize = 14.sp,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
 /** "Live" / "Paused" badge on session cards (.session-live-badge). */
 @Composable
 fun StatusBadge(text: String, tone: PillTone) {
