@@ -13,7 +13,9 @@ const courseSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 courseSchema.index({ code: 1, batch: 1 }, { unique: true });
-courseSchema.index({ code: 1 });
+// No standalone { code: 1 }: it is a strict prefix of the unique index above,
+// which already serves every code-only lookup. A prefix index earns nothing and
+// still costs a write on every course mutation.
 courseSchema.index({ lecturers: 1 });
 
 // Active courses must always keep at least 1 owner; an archived course may be

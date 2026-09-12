@@ -55,7 +55,6 @@ const attendanceAttemptSchema = new mongoose.Schema({
       _id: false,
       lat: { type: Number },
       lng: { type: Number },
-      bestAccuracy: { type: Number },
       fixCount: { type: Number },
     },
     default: null,

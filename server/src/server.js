@@ -5,12 +5,17 @@ require('./config/env');
 
 const app = require('./app');
 const { port } = require('./config/env');
-const { connectDatabase, syncAllIndexes, closeDatabase } = require('./config/database');
+const {
+  connectDatabase, assertNoRetiredCollections, syncAllIndexes, closeDatabase,
+} = require('./config/database');
 const { ensureBootstrapAdmin } = require('./services/bootstrap.service');
 const { startNonRecurringExpiryJob } = require('./services/sessionExpiry.service');
 
 async function start() {
   await connectDatabase();
+  // Before the indexes, not after: there is no point bringing a stale database's
+  // indexes up to date when the server is about to refuse to serve from it.
+  await assertNoRetiredCollections();
   await syncAllIndexes();
   try {
     await ensureBootstrapAdmin();

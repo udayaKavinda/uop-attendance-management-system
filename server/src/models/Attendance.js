@@ -7,7 +7,6 @@ const attendanceSchema = new mongoose.Schema({
   courseCode: { type: String, required: true },
   lectureCode: { type: String, required: true },
   attendanceDate: { type: String, required: true },
-  timestamp: { type: Date, default: Date.now },
   /**
    * The only field the lecturer sees besides presence itself. `flagged` is a
    * `far`/`unknown` verdict — never a queue awaiting a decision, just a record
@@ -38,7 +37,11 @@ const attendanceSchema = new mongoose.Schema({
   },
   /** `flagged` only: human-readable reason shown as the export cell's comment. */
   reason: { type: String, default: null },
-});
+  // `createdAt` is when the student was actually marked, which an integrity
+  // record needs and `attendanceDate` (a YYYY-MM-DD day) cannot give. It
+  // replaces a hand-rolled `timestamp: { default: Date.now }` that nothing ever
+  // read, and matches every other model here.
+}, { timestamps: true });
 
 attendanceSchema.index({ student: 1, session: 1, attendanceDate: 1 }, { unique: true });
 /**

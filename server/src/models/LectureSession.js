@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const lectureSessionSchema = new mongoose.Schema({
-  course: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true, index: true },
+  course: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true },
   lectureDay: {
     type: String,
     enum: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'],
@@ -49,6 +49,9 @@ const lectureSessionSchema = new mongoose.Schema({
   deleted: { type: Boolean, default: false, index: true },
 }, { timestamps: true });
 
+// Serves both course-scoped lookups and the clash check. `course` deliberately
+// carries no index of its own — it is this index's prefix, so a standalone one
+// would be maintained on every write to answer queries this already answers.
 lectureSessionSchema.index({ course: 1, lectureDay: 1, startTime: 1, endTime: 1 });
 
 module.exports = mongoose.model('LectureSession', lectureSessionSchema);

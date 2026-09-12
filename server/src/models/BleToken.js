@@ -8,7 +8,7 @@ const mongoose = require('mongoose');
  * bluetoothCode.service.verifyToken.
  */
 const bleTokenSchema = new mongoose.Schema({
-  sessionId: { type: String, required: true, index: true },
+  sessionId: { type: String, required: true },
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'Person', default: null },
   role: { type: String, enum: ['primary', 'seed'], default: 'primary' },
   token: { type: String, required: true },
@@ -31,6 +31,9 @@ const bleTokenSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
+// `sessionId` carries no index of its own: it is the prefix of both compounds
+// below, which between them serve every query this collection has — including
+// verifyToken's read of the whole pool for one session.
 bleTokenSchema.index({ sessionId: 1, owner: 1, role: 1 }, { unique: true });
 // The cap itself. Partial so the primary row (slot: null) is not covered.
 bleTokenSchema.index(

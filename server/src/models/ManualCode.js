@@ -7,7 +7,7 @@ const mongoose = require('mongoose');
  * controlled value per session, same shape BleToken already has today.
  */
 const manualCodeSchema = new mongoose.Schema({
-  session: { type: String, required: true, unique: true, index: true },
+  session: { type: String, required: true, unique: true },
   code: { type: String, required: true },
   /** Grace-window value. Left null after a forced regenerate/resume so the old
    *  code stops working immediately instead of a few seconds later. */

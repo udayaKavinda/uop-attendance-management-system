@@ -15,8 +15,12 @@ const geofenceSchema = new mongoose.Schema({
       message: 'polygon must have at least 3 [lng, lat] vertices',
     },
   },
-  active: { type: Boolean, default: true, index: true },
-  deleted: { type: Boolean, default: false, index: true },
+  active: { type: Boolean, default: true },
+  deleted: { type: Boolean, default: false },
+  // Deliberately unindexed. Every query here filters on `active`/`deleted`, but
+  // buildings are drawn by hand and number in the tens — at that size a scan
+  // beats an index lookup plus fetch, and two booleans make poor index keys
+  // anyway. They would still be maintained on every write.
 }, { timestamps: true });
 
 module.exports = mongoose.model('Geofence', geofenceSchema);

@@ -32,7 +32,10 @@ const auditLogSchema = new mongoose.Schema({
 
 // The two questions this collection exists to answer: "what happened to X?" and
 // "what has this person been doing?" — both newest-first.
-auditLogSchema.index({ at: -1 });
+//
+// No standalone { at: -1 }: a single-field index is traversable in both
+// directions, so the ascending TTL index below already serves a newest-first
+// scan. Keeping both meant two indexes on one field, maintained on every write.
 auditLogSchema.index({ target: 1, at: -1 });
 auditLogSchema.index({ actor: 1, at: -1 });
 
