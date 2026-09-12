@@ -21,11 +21,13 @@ Bluetooth is the hard limit for students and the reason the check-in flow is a s
 iOS browser can read a BLE beacon, at all, behind any flag. So a check-in here runs GPS
 alone for its window.
 
-Peer seeding is not a gap this client has to fill. The server only ever selects
-students who passed via a *primary* Bluetooth token as seeders
-(`peerSeeding.service.js`), so a GPS-verified student — on any platform, native app
-included — is never given a seeding window. This client sends `canAdvertise: false` and
-correctly receives no seeding role at all.
+Peer seeding is not a gap this client has to fill. Seeding is offered only to students
+whose radio actually heard the room — the lecturer's beacon or another student's relay,
+either will do (`peerSeeding.service.js`) — and never to a GPS-verified one, on any
+platform, native app included: they may be up to the near buffer from the building having
+heard nothing at all. A check-in here is GPS-only by construction, so this client is
+outside that set whatever it asks for; it sends `canAdvertise: false` as well and
+correctly receives no seeding role.
 
 Everything else is deliberately identical to the native app: the same 90-second window,
 the same states, the same wording, and the same rule that the lecturer's code appears

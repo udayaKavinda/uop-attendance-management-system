@@ -169,13 +169,18 @@ record.
 
 ## Peer seeding
 
-Only students who heard the **lecturer's own primary token** are eligible to seed. A
-GPS-passed student can be up to the near buffer away from the building, so
-re-broadcasting the classroom token from their phone would push it well outside the room
-and undermine the "BLE proves you are in the room" premise the top of the decision table
-rests on. A student who heard a *seeder* rather than the lecturer is excluded for the
-same reason, one hop further out — which is why `verifyToken` reports which pool row
-matched.
+Any student whose radio actually heard the room may seed — the lecturer's own primary
+token or another student's relay, both count. The mesh grows hop by hop on purpose: a
+single hop did not reach the far end of a large hall, which is the problem seeding exists
+to solve.
+
+A **GPS-passed student is still excluded**, and that exclusion is the one carrying the
+weight. They can be up to the near buffer away from the building having heard no beacon
+at all, so re-broadcasting the classroom token from their phone would put it somewhere no
+radio ever reached and undermine the "BLE proves you are in the room" premise the top of
+the decision table rests on. `verifyToken` still reports which pool row matched, but that
+now records provenance (`seedRelayed` on the attendance row) rather than gating
+eligibility.
 
 Among eligible students, real seeders and decoys get identical window durations and
 identical UI, so nobody can tell which they were given. A GPS-passed student getting no
@@ -274,8 +279,13 @@ checked against it.
   canteen who has the code from a group chat passes silently. Mitigations in place are
   the audit fields and code rotation; there is deliberately no per-student guess cap or
   lockout on the code endpoint (removed — see below).
-- BLE range is extended deliberately by seeding, so "BLE == in the room" is approximate.
-  Restricting seeding to primary-verified students bounds the chain to one hop.
+- BLE range is extended deliberately by seeding, so "BLE == in the room" is approximate,
+  and since seeding became multi-hop it is approximate without a fixed bound. `seedRate`
+  caps how many seeders are live at once, not how far the chain reaches: each expiring
+  lease can go to someone further out than the last holder. A BLE token passes outright
+  as `inside` without consulting GPS, so nothing re-checks that drift against a geofence.
+  This is a deliberate trade for coverage in large halls, and the reason seeding ships
+  disabled (`seedRate: 0`) rather than on.
 - The OAuth exchange-code and sign-in nonce stores are still in-memory, and are what now
   blocks horizontal scaling. Attempt state no longer does: it moved to MongoDB, where two
   instances share one buffer instead of each holding a partial one that never reaches the

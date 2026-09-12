@@ -2,30 +2,48 @@ const bluetoothCode = require('./bluetoothCode.service');
 const settingsService = require('./settings.service');
 
 /**
+ * BLE roles that may re-broadcast: anyone whose radio actually heard the room,
+ * whether that was the lecturer's own beacon or another student's relay.
+ *
+ * `seed` is included deliberately, so the mesh extends hop by hop — that
+ * outward growth is the point of seeding in a large hall, not a side effect to
+ * be contained. Seeding used to be `primary` only, which bounded the chain to a
+ * single hop; the range that bought was not worth the rooms it failed to cover.
+ *
+ * What is NOT in this set matters just as much. A GPS-passed student has
+ * `bleRole` null: they can sit up to the near buffer from the building, having
+ * heard nothing at all, so re-broadcasting from their phone would put the
+ * classroom token somewhere no radio ever reached and break the one thing BLE
+ * is trusted for. The set, rather than a `!== 'primary'` test, is what keeps
+ * that distinction explicit now that two roles pass it.
+ */
+const SEEDING_ELIGIBLE_BLE_ROLES = new Set(['primary', 'seed']);
+
+/**
  * Server-driven seeder selection, run once a student has been accepted.
  *
- *   if BLE is globally off:                   role = none
- *   else if not accepted via a PRIMARY token: role = none
+ *   if not accepted via a BLE token:          role = none
+ *   else if BLE is globally off:              role = none
  *   else if seeding is switched off:          role = none
  *   else if not student.canAdvertise:         role = decoy
  *   else if a seeder slot can be claimed:     role = seeder
  *   else:                                     role = decoy
  *
- * Only primary-BLE-verified students are eligible. A GPS-passed student can sit
- * up to the near buffer away from the building, so re-broadcasting the classroom
- * token from their phone would push it well outside the room and undermine the
- * "BLE proves you are in the room" premise the whole model rests on. A student
- * who heard a seeder rather than the lecturer is excluded for the same reason,
- * one hop further out.
+ * The chain is unbounded in hops but not in width: `claimSeedSlot` caps live
+ * seeders at `Settings.seedRate` for the whole session, so a further hop changes
+ * *who* holds a slot, never how many exist. Note what that does and does not
+ * bound — the count is fixed, the reach is not, because each expiring lease can
+ * be claimed by someone further out than the last holder. Seeding is off by
+ * default (`seedRate: 0`); an admin turning it on is choosing that trade.
  *
  * Decoys get the identical `durationMs` as real seeders so the two are
  * indistinguishable. That concealment still holds where it matters: among the
- * eligible (primary-verified) students, nobody can tell who was picked. A
+ * eligible (BLE-verified) students, nobody can tell who was picked. A
  * GPS-passed student getting no window at all reveals nothing they didn't
  * already know — their own device knows it never heard a token.
  */
 async function selectSeedingRole(sessionItem, studentId, canAdvertise, bleRole = null) {
-  if (bleRole !== 'primary') {
+  if (!SEEDING_ELIGIBLE_BLE_ROLES.has(bleRole)) {
     return { role: 'none' };
   }
 

@@ -1117,7 +1117,8 @@ private fun SettingsTab(state: StaffState, vm: StaffViewModel) {
                 icon = Icons.Outlined.Groups,
                 title = "Peer seeding",
                 subtitle = "0 disables seeding. Extends Bluetooth range by having a few students who " +
-                    "heard the lecturer directly re-broadcast the token; they never know if they were picked.",
+                    "heard the signal re-broadcast it, spreading outward from there; they never " +
+                    "know if they were picked.",
             ) {
                 SeedingFields(
                     seedRate = settings.seedRate ?: 0,

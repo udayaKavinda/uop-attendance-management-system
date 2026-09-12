@@ -13,8 +13,8 @@ succeed marks the student present. If neither does, they can ask the lecturer fo
 or records a `flagged` row instead. A student who never passes and never submits the code
 leaves no record at all.
 
-Two supporting mechanisms: **peer seeding**, where a few students who heard the lecturer
-directly rebroadcast the token to extend range, and admin-tunable **distance bands** with
+Two supporting mechanisms: **peer seeding**, where a few students who heard the beacon —
+from the lecturer or from another student — rebroadcast it to extend range hop by hop, and admin-tunable **distance bands** with
 a selectable geofence strategy per band.
 
 The Android app closes itself rather than submitting a GPS fix the platform reports as
@@ -72,7 +72,7 @@ cd Android
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-Server tests: 574 across 38 suites (486 run without a database; the three live-DB suites
+Server tests: 575 across 38 suites (486 run without a database; the three live-DB suites
 skip themselves when none is reachable, and each uses its own database so they can run in
 parallel). `server/README.md` has the breakdown.
 

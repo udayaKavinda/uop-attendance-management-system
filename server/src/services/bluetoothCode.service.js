@@ -66,10 +66,12 @@ async function getToken(sessionId) {
  * (the primary broadcast plus any active peer seeders) — a match on ANY row's
  * current or (within GRACE_MS) previous token is accepted.
  *
- * Reports WHICH row matched, because that decides seeding eligibility: only a
- * student who heard the lecturer's own primary token is provably in the room and
- * may seed. Re-seeding from a student who themselves heard a seeder would grow
- * the effective radius hop by hop.
+ * Reports WHICH row matched. Both roles may seed — the mesh is meant to grow hop
+ * by hop — so this no longer gates eligibility; it records provenance. The
+ * accepted attendance row stores it as `seedRelayed`, which is the only way to
+ * tell afterwards whether a student heard the lecturer or a relay, and the
+ * distinction still matters to anyone reading the data even though it no longer
+ * changes what the student is offered.
  *
  * @returns {Promise<{ ok: boolean, role: 'primary'|'seed'|null }>}
  */

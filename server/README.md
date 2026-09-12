@@ -128,9 +128,21 @@ depends on it.
   the configured window.
 - Seeder selection uses capability reported by Android. Seeder leases are checked during
   token verification, not only by the cleanup sweep.
-- **Only students who heard the lecturer's own primary token may seed.** A GPS-passed
-  student can be up to `nearBufferM` from the building, and a student who heard a seeder
-  is already one hop out; letting either re-broadcast would grow the effective radius.
+- **Any BLE-verified student may seed — including one who heard another seeder.** The
+  mesh is meant to grow hop by hop; that outward reach is the point of seeding in a large
+  hall, not a side effect to be contained. Seeding was once `primary` only, which bounded
+  the chain to a single hop, and the range that bought did not cover the rooms it needed
+  to. **A GPS-passed student still never seeds**: their radio heard nothing at all and
+  they can sit up to `nearBufferM` from the building, so re-broadcasting from their phone
+  would put the classroom token somewhere no beacon ever reached.
+- The chain is unbounded in **hops** but not in **width**. `claimSeedSlot` caps live
+  seeders at `Settings.seedRate` for the whole session, so a further hop changes *who*
+  holds a slot, never how many exist. Be clear about what that does and does not bound:
+  the count is fixed, the reach is not — each expiring lease (`seedWindowMs`) can be
+  claimed by someone further out than the last holder, so over a two-hour lecture the
+  live set can drift outward. Seeding is off by default (`seedRate: 0`); an admin turning
+  it on is choosing that trade. Because a BLE token passes outright as `inside` without
+  consulting GPS at all, the drift is not checked against any geofence.
 - Ending/deactivating/deleting a session removes its BLE token pool.
 - **Multiple staff devices may broadcast the same session simultaneously** (the "Join"
   client action) — the primary token is per-session, not per-device, so every broadcasting
@@ -655,7 +667,7 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-574 tests across 38 suites. 486 of those run with every Mongoose model mocked and need
+575 tests across 38 suites. 486 of those run with every Mongoose model mocked and need
 no database. Three suites talk to a real MongoDB, because what they assert is behaviour of
 the database rather than of our code:
 
@@ -781,5 +793,13 @@ Two things this could not reach. **Legacy BLE permissions** (API ≤ 30, where s
 needs `ACCESS_FINE_LOCATION` and the system Location toggle rather than
 `BLUETOOTH_SCAN`) have no device to run on — the three available are API 31, 34 and 36.
 And **a student hearing only a seeder**, as opposed to the lecturer, needs the two phones
-far enough apart to separate the beacons; the seed branch is covered end to end in
-`bandMatrixLive.test.js` instead, which is where the token provenance is actually decided.
+far enough apart to separate the beacons — on one desk a scanner hears both and which one
+wins is not something a test can control. It matters more now that seeding is multi-hop,
+since that student goes on to seed in turn. The radio half is nonetheless proven: the
+tablet advertised, the phone decoded it, and the accepted student claimed a seeder slot
+and began transmitting. The provenance half — a seed row producing `seedRelayed: true`
+and a second-hop slot with its own distinct token — is covered end to end in
+`bandMatrixLive.test.js`. What has not been observed in one run is the composite, and the
+air does not distinguish the two cases: a token is 16 hex characters packed into a
+service UUID by the same code either way, and which pool row it came from is a server-side
+lookup, not a radio difference.

@@ -415,7 +415,7 @@ describeDb('live MongoDB — verification contract end to end', () => {
       expect(row.seedRelayed).toBe(true);
     });
 
-    test('a student who heard only a seeder is never made a seeder', async () => {
+    test('a student who heard a seeder seeds in turn, extending the mesh a hop further', async () => {
       await startBroadcast();
       await settingsService.updateSettings({ seedRate: 3 });
       const claim = await bluetoothCode.claimSeedSlot(
@@ -424,10 +424,25 @@ describeDb('live MongoDB — verification contract end to end', () => {
 
       const res = await post(student, { token: claim.token, canAdvertise: true });
 
-      // Re-broadcasting from one hop out would grow the effective radius the
-      // whole "BLE proves you are in the room" premise rests on.
-      expect(res.body.seeding).toEqual({ role: 'none' });
-      expect(await BleToken.countDocuments({ sessionId: String(session._id), role: 'seed' })).toBe(1);
+      // Growth hop by hop is the point of seeding in a large hall. The relaying
+      // student gets a slot of their own with a distinct token — a second hop,
+      // not a re-broadcast of the one they heard.
+      expect(res.body.seeding.role).toBe('seed');
+      expect(res.body.seeding.token).not.toBe(claim.token);
+      expect(await BleToken.countDocuments({ sessionId: String(session._id), role: 'seed' })).toBe(2);
+    });
+
+    test('a GPS pass still never seeds, however far the mesh has grown', async () => {
+      await settingsService.updateSettings({ seedRate: 3 });
+
+      // The one case the eligibility set still excludes: this student's radio
+      // heard nothing, so re-broadcasting from them would put the classroom
+      // token somewhere no beacon ever reached.
+      const res = await streamFixes(student, NEAR);
+
+      expect(res.body.status).toBe('accepted');
+      expect(res.body.seeding).toBeUndefined();
+      expect(await BleToken.countDocuments({ role: 'seed' })).toBe(0);
     });
 
     test('a student who heard the lecturer is offered a real seeder slot', async () => {

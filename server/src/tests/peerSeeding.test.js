@@ -26,11 +26,17 @@ describe('peerSeeding.selectSeedingRole', () => {
     expect(mockClaimSeedSlot).not.toHaveBeenCalled();
   });
 
-  it('returns role "none" for a student who only heard another seeder, not the lecturer', async () => {
+  // The mesh is meant to extend hop by hop: a student who heard a relay heard
+  // the room just as much as one who heard the lecturer, and seeding exists to
+  // reach the parts of a large hall the lecturer's own radio does not.
+  it('lets a student who heard another seeder seed in turn', async () => {
     mockGetSettings.mockResolvedValue({ bleEnabled: true, seedRate: 5, seedWindowMs: 60000 });
+    mockClaimSeedSlot.mockResolvedValue({ token: 'relayed-token', leaseUntil: 1, slot: 2 });
+
     const result = await peerSeeding.selectSeedingRole(session(), 'student1', true, 'seed');
-    expect(result).toEqual({ role: 'none' });
-    expect(mockClaimSeedSlot).not.toHaveBeenCalled();
+
+    expect(result).toMatchObject({ role: 'seed', token: 'relayed-token' });
+    expect(mockClaimSeedSlot).toHaveBeenCalled();
   });
 
   it('returns role "none" when Bluetooth is globally killed', async () => {
