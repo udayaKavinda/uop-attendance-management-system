@@ -19,7 +19,15 @@ type Result<T> = { ok: true; data: T } | { ok: false; message: string; status: n
 const ok = <T,>(data: T): Result<T> => ({ ok: true, data });
 const fail = (message: string, status = 400): Result<never> => ({ ok: false, message, status });
 
-const emptyPage = { items: [], hasMore: false };
+/**
+ * `items` is deliberately `unknown[]`. An empty array literal infers `never[]`,
+ * which pins every mock built from this constant to "a page that can never hold
+ * anything" — and the moment a test resolves one of them with a real row, it
+ * stops type-checking. `vitest run` does not typecheck, so that failure surfaces
+ * only in `tsc -b`, which is what CI builds the client with.
+ */
+type MockPage = { items: unknown[]; hasMore: boolean };
+const emptyPage: MockPage = { items: [], hasMore: false };
 
 // Every method the hook can reach. Defaults are the boring success case; each
 // test overrides only the call it cares about.
