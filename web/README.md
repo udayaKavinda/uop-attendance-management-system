@@ -44,6 +44,14 @@ auto-formatter, the same searchable building multi-select. It authenticates over
 session cookie and hits the same `requireStaff`-gated endpoints the native app does — **no
 backend change was needed to add it.**
 
+What the dashboard shows is kept honest in three ways the native app matches. While the
+first list request is still in flight, the Courses and Sessions tabs show a loading state
+instead of their empty-state copy, which would otherwise assert "No courses" before the
+answer had arrived. Global settings and the building list are re-read on every refresh and
+once a minute from the running-sessions poll, so an admin's change reaches a dashboard
+nobody is touching. And a request that never got an answer reads "Couldn't reach the
+server. Check your connection and try again." rather than the browser's own error text.
+
 One thing is permanently different, on purpose: **this client never calls either
 broadcast endpoint**
 
@@ -79,7 +87,7 @@ Compose sources, and each block names where it came from:
 | colour tokens | `ui/theme/Color.kt` |
 | radii (`--r-card` 22, `--r-panel` 16, `--r-input` 14, …) | `ui/theme/Shape.kt` |
 | font sizes and weights | `ui/theme/Type.kt` |
-| `Card`, `PrimaryButton`, `TextField`, `ErrorBanner`, `EmptyState`, `LoadingGate` | `ui/components/Components.kt` |
+| `Card`, `PrimaryButton`, `TextField`, `ErrorBanner`, `EmptyState`, `ListLoading`, `LoadingGate` | `ui/components/Components.kt` |
 | screen structure, panels, outcome cards, copy | `ui/student/LectureEntryScreen.kt` |
 
 Compose `dp`/`sp` map 1:1 to CSS pixels here. The background photograph is the same
@@ -194,7 +202,7 @@ need updating.
 ## Tests
 
 ```bash
-npm test -- --run      # vitest, 46 tests across 3 files
+npm test -- --run      # vitest, 50 tests across 3 files
 ```
 
 - `geo/watchFixes.test.ts` — the fix stream: the 3 s throttle, `accuracy: 0`
@@ -206,7 +214,9 @@ npm test -- --run      # vitest, 46 tests across 3 files
   70 good seconds left in them.
 - `hooks/useCheckIn.test.ts` — the 90-second window: wall-clock (not tick-counted)
   expiry, the course poll, help-code validation and outcomes, and teardown on unmount.
-- `hooks/useStaffDashboard.test.ts` — the lecturer state machine.
+- `hooks/useStaffDashboard.test.ts` — the lecturer state machine, including that shared
+  settings and buildings are re-read on every refresh and once a minute on an idle page,
+  and that `loading` is reported while the first list request is still in flight.
 
 Verified once by hand against the running client, since no unit test can: a permission
 denial ends the attempt immediately with the reason on screen rather than running out a

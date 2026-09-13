@@ -80,8 +80,8 @@ android {
         // an upload whose targetSdk is above the latest stable platform. This was
         // 37 against compileSdk 36.
         targetSdk = 36
-        versionCode = 11
-        versionName = "2.1.0"
+        versionCode = 12
+        versionName = "2.2.0"
 
         // Fixed production server. Must match the server's APP_BASE_URL so the
         // native OAuth return is allowed.

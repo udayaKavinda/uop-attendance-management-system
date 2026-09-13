@@ -44,6 +44,16 @@ Default listen address: `PORT=5000`. Schedule dates use `TZ`, defaulting safely 
 The server supports only the schema documented here. It does not migrate or repair older
 database shapes; recreate or explicitly transform an existing database before upgrading.
 
+Two things enforce that at boot, in this order. `assertNoRetiredCollections()` refuses to
+start in production while the database still holds a collection from an earlier schema
+(`gpsfixbuffers` and `attemptverdicts`, folded into `attendanceattempts`), and names the
+drop that fixes it — one `listCollections` call, so it cannot slow boot as data grows. Then
+`syncAllIndexes()` runs `syncIndexes()` on every model, which creates the declared indexes
+**and drops the ones a schema no longer declares**. `autoIndex` only ever creates, so without
+this a retired index would be rebuilt on every write forever, and a retired *unique* index
+would keep rejecting writes the code considers legal. A failed sync is fatal in production.
+Both are pinned against a real MongoDB by `schemaDrift.test.js`.
+
 ## Verification contract
 
 Every session verifies the same way — there is no per-session policy. A student's 90
@@ -408,7 +418,9 @@ again.
 
 Student/course/session references, `courseCode` and `lectureCode` (stable
 human-readable labels for the course and the lecture occurrence, so a row stays readable
-after either is renamed), `attendanceDate` (local `YYYY-MM-DD`), `timestamp`, and:
+after either is renamed), `attendanceDate` (local `YYYY-MM-DD`), `createdAt`/`updatedAt`
+(when the student was actually marked, which a day-granular `attendanceDate` cannot give),
+and:
 
 ```text
 status = present | flagged                     ← both render as "P" everywhere; see below
@@ -728,6 +740,11 @@ Streaming GPS fixes can no longer consume the code budget.
 - Short active-session cache invalidated on relevant staff mutations, and re-checked
   against the schedule window on every hit — the entry is an admission decision, so
   age alone must not keep it valid past `endTime`.
+- The settings singleton is cached for 5 s, and reading it is a real read: it upserts only
+  when the document is genuinely missing. It used to be a bare `findOneAndUpdate` with
+  `$setOnInsert`, which is an update however read-only it looks, and Mongoose stamps
+  `updatedAt` on every update — so a lecture in progress rewrote the singleton every 5 s,
+  and `updatedAt` meant "last read" rather than "last changed by an admin".
 - GPS attempt fixes and attempt verdicts are in MongoDB (`attendanceattempts`), so they
   survive a restart and are visible to every instance — two app processes accumulate into
   the same buffer rather than each holding a partial one that never reaches the selected
@@ -741,8 +758,8 @@ Streaming GPS fixes can no longer consume the code budget.
 npm test -- --runInBand
 ```
 
-621 tests across 39 suites. 526 of those run with every Mongoose model mocked and need
-no database. Three suites talk to a real MongoDB, because what they assert is behaviour of
+654 tests across 40 suites. 532 of those run with every Mongoose model mocked and need
+no database. Four suites talk to a real MongoDB, because what they assert is behaviour of
 the database rather than of our code:
 
 - `dbIntegration.test.js` — schema defaults, validators, `populate` and unique indexes
@@ -758,20 +775,25 @@ the database rather than of our code:
   whole purpose is a *second* row on the same session. The seed branch of `verifyToken`,
   which decides `seedRelayed` and which must refuse to let a seeded student seed again,
   had no end-to-end coverage on either side of that gap.
+- `schemaDrift.test.js` — that the server refuses a database still holding retired
+  collections; that index sync drops what a schema no longer declares, a retired unique
+  index included; that no redundant prefix index creeps back; that each `(code, batch)`
+  pair is the course key; and that reading settings never writes them.
 
 None needs setup: `jest.globalSetup.js` probes `mongodb://127.0.0.1:27017` before the
 run and, if a mongod answers, points them at the **`uop_attendance_test`** base database.
-With no local mongod all three skip themselves and the other 36 suites run as normal, so a
+With no local mongod all four skip themselves and the other 36 suites run as normal, so a
 machine or CI runner without a database still goes green. Set `MONGO_TEST_URI` to override the
-target, or to `off` to skip the probe entirely — which is what CI does, because the
-deploy runner *is* the production host and a test process must never open a connection
-there. That has teeth now: production moved off Atlas onto that host's own `mongod`, so
-`127.0.0.1:27017` — the address this probe reaches for by default — is the live server.
-`off` is the only value that suppresses the probe; leaving the variable unset or empty
-both mean "go looking".
+target, or to `off` to skip the probe entirely. CI names a scratch database explicitly
+(`mongodb://127.0.0.1:27017/uop_attendance_test`) rather than relying on the probe, because
+the deploy runner *is* the production host: `127.0.0.1:27017` there is the live server, and
+only the database name — enforced by the guard below — keeps these suites off `attendance`.
+[README_ENV.md](../README_ENV.md) explains why that is judged safe and when to set `off`
+instead. `off` is the only value that suppresses the probe; leaving the variable unset or
+empty both mean "go looking".
 
 **Each live suite gets its own database**, named by suffixing that base — `…_schema`,
-`…_gpsstate`, `…_bands` — from `tests/helpers/liveDb.js`, which also holds the guard
+`…_gpsstate`, `…_bands`, `…_drift` — from `tests/helpers/liveDb.js`, which also holds the guard
 below. This is not tidiness. Jest runs suites in parallel workers unless told otherwise,
 and `npm test` does not tell it otherwise — only the documented `npm test -- --runInBand`
 does. While all three shared one database, `dbIntegration`'s `dropDatabase()` ran in its

@@ -39,6 +39,13 @@ attendance code, and open attendance reports (with the Excel export). Neither da
 header shows a "University of Peradeniya" subtitle — that branding lives only on the sign-in
 screen.
 
+The dashboard shows a loading state, not its empty-state copy, while the first course and
+session lists are still arriving. Global settings and the building list are re-read on
+every refresh and on every sixth running-sessions poll (about once a minute), so an admin
+switching Bluetooth off or adding a building reaches an open dashboard without a restart.
+Validation and server errors appear in the banner pinned above the tab content, so they
+stay visible when raised from a control far down a long tab.
+
 ### Administrator
 
 Tabs: **Courses**, **Create session**, **Sessions**, **Lecturers**, **Geofences**, and
@@ -356,3 +363,9 @@ for a Kotlin class and throws instead of parsing; the throw lands inside the sur
 `runCatching`, so every server explanation is discarded and every failure reaches the user
 as a bare `Request failed (400)`. `ApiErrorMessageTest` pins this, and pins that the
 status-only fallback is still used when the body genuinely explains nothing.
+
+It also pins that a transport failure never reaches the UI in OkHttp's own words: every
+`IOException` reads "Couldn't reach the server. Check your connection and try again.", any
+other client-side failure reads "Something went wrong. Please try again.", and the detail
+goes to `Log`. Unit tests run with `unitTests.isReturnDefaultValues = true`, without which
+no code path containing a `Log` call could be unit-tested at all.
