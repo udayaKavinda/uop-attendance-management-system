@@ -173,9 +173,12 @@ async function getRunningCoursesForStudent(now = new Date()) {
     });
   });
 
-  // Codes are unique, so the code alone is a total order.
-  return Array.from(runningCourses.values())
-    .sort((a, b) => String(a.code).localeCompare(String(b.code)));
+  // By code, then newest intake first: one code can run for more than one
+  // intake, and a later batch list sorts after an earlier one.
+  const label = (c) => (c.batches || []).join(',');
+  return Array.from(runningCourses.values()).sort((a, b) => (
+    String(a.code).localeCompare(String(b.code)) || label(b).localeCompare(label(a))
+  ));
 }
 
 /**

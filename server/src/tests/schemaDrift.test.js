@@ -125,12 +125,16 @@ describeDb('live MongoDB — schema drift is refused, not migrated', () => {
       await syncAllIndexes();
     });
 
-    // One course per code: the code is the whole key, and the per-batch
-    // compound it replaced must not survive a sync.
-    it('Course is unique on code alone, with no leftover { code, batch }', async () => {
-      const byCode = (await Course.collection.indexes()).find((i) => i.name === 'code_1');
-      expect(byCode && byCode.unique).toBe(true);
-      expect(await indexNamesOf(Course)).not.toContain('code_1_batch_1');
+    // The key is each (code, batch) pair: one code may be offered to many
+    // intakes, never to the same batch twice. Neither earlier key may survive a
+    // sync — the single-`batch` compound, or the code-only index that refused a
+    // course's second offering outright.
+    it('Course is unique per (code, batch), with neither earlier key left behind', async () => {
+      const pair = (await Course.collection.indexes()).find((i) => i.name === 'code_1_batches_1');
+      expect(pair && pair.unique).toBe(true);
+      const names = await indexNamesOf(Course);
+      expect(names).not.toContain('code_1_batch_1');
+      expect(names).not.toContain('code_1');
     });
 
     it('LectureSession has no standalone { course: 1 }', async () => {

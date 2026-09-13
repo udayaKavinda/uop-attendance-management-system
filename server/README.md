@@ -353,11 +353,13 @@ behaves as it always did, and `POST /api/attendance` does not consult it.
 
 `code` (capital letters and numbers only), `name`, `batches` (one or more, each `E`
 followed by two digits, e.g. `["E21", "E22"]`), one or more lecturer owners (no upper
-limit), and `active`. **Unique on `code`**: a course taken by several batches is *one*
-course carrying all of them, so those batches share its sessions and a single attendance
-matrix. The list is stored sorted and de-duplicated. Creating a course whose code already
-exists is refused, naming its owners, rather than silently extended — adding a batch to
-someone else's course is their call. There is no separate hard delete:
+limit), and `active`. A course taken by several batches is *one* course carrying all of
+them, so those batches share its sessions and a single attendance matrix; the list is
+stored sorted and de-duplicated. **A code can be offered again** — next year's intake gets a
+new course with the same code — but **no batch may take the same code twice**: a unique
+index over each `(code, batch)` pair refuses a new course repeating any batch that an
+earlier course of that code already has (every earlier offering, not only the latest), and
+the refusal names the overlapping batches and those courses' owners. There is no separate hard delete:
 `DELETE`-equivalent behavior is the same as disabling (`active: false`), which hides the
 course rather than destroying its data; disabled courses sort after active ones in listings.
 
@@ -564,7 +566,7 @@ Base path: `/api/admin/courses`.
 | Method/path | Access | Purpose |
 |---|---|---|
 | `GET /?page=&limit=&lecturerId=` | staff | owned courses; admins see all, or one lecturer's with `lecturerId`. Omitting `limit` returns everything; passing it pages (`{ items, total, page, limit, hasMore }`) |
-| `POST /` | staff | create one course carrying every batch in `batches: string[]`; responds `{ success, course }`. An existing code is refused (400) |
+| `POST /` | staff | create one course carrying every batch in `batches: string[]`; responds `{ success, course }`. The code may already exist; a batch already offered that code is refused (400) |
 | `PATCH /:courseId/assign-lecturer` | owner/admin | wholesale reassignment — set any number of owners (add or remove); a lecturer may only do this on a course they already own |
 | `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course — this is also what "delete" means; no destructive delete exists. `enable` is refused (400) while the course has no assigned lecturer |
 | `POST /:courseId/sessions` | owner/admin | atomically create schedule, buildings (≥1, required), and code rotation Responds `{ success, session, message }`, where `message` names the date the server derived (see One-time sessions) |
@@ -788,7 +790,7 @@ pointed at the database the application itself uses — an accidental
 `MONGO_TEST_URI=.../attendance` fails loudly instead of destroying local data.
 `dbIntegration`
 covers the persisted `active: false` on create, the one-time `occurrenceDate` required
-validator, the `buildings` minimum, one course per `code` and the `batches` validator, one-time
+validator, the `buildings` minimum, per-`(code, batch)` course uniqueness and the `batches` validator, one-time
 date resolution either side of `endTime`, overlap detection (including two one-time
 sessions a week apart, which must not collide), the staff list's hiding and
 lecturer scoping through real `populate`, both expiry sweeps, soft delete, student-facing

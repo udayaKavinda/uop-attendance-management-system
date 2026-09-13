@@ -153,12 +153,25 @@ describeDb('live MongoDB — courses and sessions', () => {
       })).rejects.toThrow(/at least one building/i);
     });
 
-    // A course taken by several batches is ONE course. A second document for
-    // the same code is refused whatever its batches — which is exactly what the
-    // old one-row-per-batch data would now be.
-    it('allows only one course per code, whatever the batches', async () => {
-      await makeCourse();
-      await expect(makeCourse({ batches: ['E24'] })).rejects.toThrow(/duplicate key|E11000/i);
+    // The same code offered again to a new intake is a new course.
+    it('allows a second course with the same code for different batches', async () => {
+      await makeCourse({ batches: ['E21', 'E22'] });
+      const nextYear = await makeCourse({ batches: ['E24'] });
+      expect(nextYear.batches).toEqual(['E24']);
+      expect(await Course.countDocuments({ code: 'CS101' })).toBe(2);
+    });
+
+    // ...but never to a batch that already has it. The unique multikey index
+    // enforces this itself, so it holds when the service check is bypassed or
+    // two creates race.
+    it('refuses a second course for the same code that repeats any batch', async () => {
+      await makeCourse({ batches: ['E21', 'E22'] });
+      await expect(makeCourse({ batches: ['E22', 'E23'] })).rejects.toThrow(/duplicate key|E11000/i);
+    });
+
+    it('lets different codes share a batch', async () => {
+      await makeCourse({ batches: ['E23'] });
+      await expect(makeCourse({ code: 'CS200', batches: ['E23'] })).resolves.toBeTruthy();
     });
 
     it('rejects a course with no batches', async () => {
@@ -194,19 +207,44 @@ describeDb('live MongoDB — courses and sessions', () => {
       expect(stored[0].batches).toEqual(['E21', 'E22', 'E23']);
     });
 
-    it('refuses an existing code, names its owners, and adds nothing', async () => {
-      await makeCourse();
+    it('offers an existing code again to a new intake', async () => {
+      await makeCourse({ batches: ['E21', 'E22', 'E23'] });
 
       const res = await courseService.createCourse(admin, {
-        name: 'Intro again', code: 'CS101', batches: ['E24'], lecturerIdsBody: [String(lecturer._id)],
+        name: 'Intro', code: 'CS101', batches: ['E24'], lecturerIdsBody: [String(lecturer._id)],
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.course.batches).toEqual(['E24']);
+      expect(await Course.countDocuments({ code: 'CS101' })).toBe(2);
+    });
+
+    it('refuses a batch an earlier offering already has, names it, and adds nothing', async () => {
+      await makeCourse({ batches: ['E21', 'E22'] });
+
+      const res = await courseService.createCourse(admin, {
+        name: 'Intro', code: 'CS101', batches: ['E22', 'E23'], lecturerIdsBody: [String(lecturer._id)],
       });
 
       expect(res.ok).toBe(false);
-      expect(res.error).toMatch(/^CS101 already exists/);
+      expect(res.error).toMatch(/^CS101 is already offered to E22 — ask/);
+      expect(res.error).not.toContain('E23');
       expect(res.error).toContain('Lecturer One');
-      const stored = await Course.find({ code: 'CS101' }).lean();
-      expect(stored).toHaveLength(1);
-      expect(stored[0].batches).toEqual(['E23']);
+      expect(await Course.countDocuments({ code: 'CS101' })).toBe(1);
+    });
+
+    // Every earlier offering counts, not only the most recent one.
+    it('checks every earlier offering of the code, not just the latest', async () => {
+      await makeCourse({ batches: ['E21'] });
+      await makeCourse({ batches: ['E24'] });
+
+      const res = await courseService.createCourse(admin, {
+        name: 'Intro', code: 'CS101', batches: ['E21', 'E25'], lecturerIdsBody: [String(lecturer._id)],
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error).toMatch(/already offered to E21 — ask/);
+      expect(await Course.countDocuments({ code: 'CS101' })).toBe(2);
     });
   });
 

@@ -78,13 +78,15 @@ function hasIncompleteBatch(fieldText: string): boolean {
     .some((s) => s.length > 0 && !BATCH_RE.test(s));
 }
 
-// Archived (disabled) courses fall to the bottom; active ones stay in code order,
-// which is a total order now that a code names exactly one course.
+// Archived (disabled) courses fall to the bottom; the rest go by code, then newest
+// intake first, since one code can be offered to several intakes.
 function sortedForDisplay(courses: Course[]): Course[] {
   return [...courses].sort((a, b) => {
     const archived = Number(a.active === false) - Number(b.active === false);
     if (archived !== 0) return archived;
-    return (a.code ?? '').localeCompare(b.code ?? '');
+    const code = (a.code ?? '').localeCompare(b.code ?? '');
+    if (code !== 0) return code;
+    return batchesLabel(b.batches).localeCompare(batchesLabel(a.batches));
   });
 }
 
@@ -152,7 +154,7 @@ export function CoursesTab({
         <>
           {visibleCourses.map((course) => (
             <CourseCard
-              key={course._id ?? course.code}
+              key={course._id ?? `${course.code}-${batchesLabel(course.batches)}`}
               course={course}
               onOpen={() => course._id && onOpenMatrix(course._id)}
               onOwners={() => setOwnersFor(course)}

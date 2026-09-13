@@ -28,9 +28,17 @@ const courseSchema = new mongoose.Schema({
   active: { type: Boolean, default: true, index: true },
 }, { timestamps: true });
 
-// One course per code. The code is the whole identity; the batches are a list
-// on the course, not a second half of its key.
-courseSchema.index({ code: 1 }, { unique: true });
+/**
+ * A code can be offered again — the same course runs for next year's intake —
+ * but no batch may take the same code twice. So the key is each (code, batch)
+ * pair rather than the code: a unique multikey index over the batches list
+ * refuses a new EE356 that repeats any batch an existing EE356 already has,
+ * while EE356 for a wholly new intake is simply another course. MongoDB applies
+ * a unique multikey constraint across documents and never within one, which is
+ * exactly this rule; the `batches` validator keeps a single course's own list
+ * free of repeats.
+ */
+courseSchema.index({ code: 1, batches: 1 }, { unique: true });
 courseSchema.index({ lecturers: 1 });
 
 // Active courses must always keep at least 1 owner; an archived course may be

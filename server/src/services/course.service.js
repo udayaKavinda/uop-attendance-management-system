@@ -21,7 +21,7 @@ async function listForStaff(auth, pagination, lecturerId) {
     : { lecturers: auth.person._id };
   const query = Course.find(filter)
     .populate('lecturers', 'name email phone')
-    .sort({ active: -1, code: 1 });
+    .sort({ active: -1, code: 1, batches: -1 });
   if (!pagination || !pagination.hasLimit) return query;
 
   const { page, limit } = pagination;
@@ -35,11 +35,14 @@ async function listForStaff(auth, pagination, lecturerId) {
 /**
  * Creates one course carrying every requested batch.
  *
- * The code is the course's identity, so an existing code is refused rather than
- * extended: adding batches to a course someone else owns is their decision, not
- * a side effect of typing the same code. The refusal names the owners so the
- * caller knows who to ask. The unique index still decides a race between two
- * concurrent creates — this check is for the message, not the guarantee.
+ * The same code may be created again — that is how a course is offered to a new
+ * intake — but never with a batch that an existing course of that code already
+ * has, because a batch takes a course once. Every earlier offering is checked,
+ * not only the latest, so a batch cannot be handed a course it sat years ago.
+ * The refusal names the overlapping batches and those courses' owners, so the
+ * caller knows exactly what collided and whom to ask. The unique (code, batch)
+ * index still decides a race between concurrent creates; this check is for the
+ * message, not the guarantee.
  */
 async function createCourse(auth, { name, code, batches, lecturerIdsBody }) {
   let lecturerIdsToAssign;
@@ -51,11 +54,19 @@ async function createCourse(auth, { name, code, batches, lecturerIdsBody }) {
     lecturerIdsToAssign = [String(auth.person._id)];
   }
 
-  const existing = await Course.findOne({ code }).populate('lecturers', 'name email');
-  if (existing) {
-    const owners = (existing.lecturers || []).map((l) => l.name || l.email).filter(Boolean);
+  const clashes = await Course.find({ code, batches: { $in: batches } })
+    .populate('lecturers', 'name email');
+  if (clashes.length > 0) {
+    const taken = batches.filter((b) => clashes.some((c) => c.batches.includes(b)));
+    const owners = [...new Set(clashes
+      .flatMap((c) => (c.lecturers || []).map((l) => l.name || l.email))
+      .filter(Boolean))];
     const ownerText = owners.length ? ` — ask ${owners.join(', ')} for access` : '';
-    return { ok: false, status: 400, error: `${code} already exists${ownerText}` };
+    return {
+      ok: false,
+      status: 400,
+      error: `${code} is already offered to ${taken.join(', ')}${ownerText}`,
+    };
   }
 
   const course = await Course.create({

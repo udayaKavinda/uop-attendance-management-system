@@ -454,10 +454,13 @@ private fun BatchInputField(
     }
 }
 
-// Sorted so archived (disabled) courses fall to the bottom; active ones stay in code
-// order, which is a total order now that a code names exactly one course.
+// Archived (disabled) courses fall to the bottom; the rest go by code, then newest
+// intake first, since one code can be offered to several intakes.
 private fun List<CourseDto>.sortedForDisplay(): List<CourseDto> =
-    sortedWith(compareBy({ it.active == false }, { it.code.orEmpty() }))
+    sortedWith(
+        compareBy<CourseDto>({ it.active == false }, { it.code.orEmpty() })
+            .thenByDescending { it.batches.batchesLabel() },
+    )
 
 @Composable
 private fun CourseCard(

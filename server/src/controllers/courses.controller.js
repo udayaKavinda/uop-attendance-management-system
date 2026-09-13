@@ -14,7 +14,7 @@ async function listRunning(req, res) {
 async function listCatalog(req, res) {
   const courses = await Course.find({ active: true })
     .select('code name batches')
-    .sort({ code: 1 });
+    .sort({ code: 1, batches: -1 });
   const items = courses.map((c) => ({
     _id: c._id, code: c.code, name: c.name, batches: c.batches,
   }));

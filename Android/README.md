@@ -83,8 +83,9 @@ with hundreds of courses, sessions, or lecturers doesn't load — or render — 
 once. A course code is auto-uppercased and stripped to letters/numbers as it's typed; a
 batch is forced into `E` + two digits (e.g. `E23`), and a course lists every batch that
 takes it — one course, one set of sessions, one attendance matrix, however many batches.
-Creating a course whose code already exists is rejected with the existing owner's
-name so the lecturer knows who to ask. "Delete" on a course or lecturer hides it (same as
+A code can be created again for a new intake, but a course repeating any batch that
+already has that code is rejected, naming the batch and the existing owner so the
+lecturer knows who to ask. "Delete" on a course or lecturer hides it (same as
 disabling a course) rather than destroying data, and hidden entries sort to the bottom of
 their list; the old separate hard-delete button no longer exists. Deleting a lecturer who
 is the last owner of an active course is refused rather than reassigning them elsewhere;

@@ -29,7 +29,7 @@ async function create(req, res) {
     // Only reachable by losing a race to a concurrent create of the same code:
     // createCourse's own check covers the ordinary case with a better message.
     if (err && err.code === 11000) {
-      return res.status(400).json({ error: 'A course with this code already exists' });
+      return res.status(400).json({ error: 'This course code is already offered to one of these batches' });
     }
     throw err;
   }
@@ -73,7 +73,9 @@ async function attendanceMatrix(req, res) {
 /** Downloadable Excel version — red/commented cells for flagged attempts. */
 async function attendanceMatrixXlsx(req, res) {
   const workbook = await attendanceExportService.buildAttendanceWorkbook(req.course);
-  const filename = `${req.course.code}_attendance.xlsx`;
+  // Batches in the name: one code can be offered to several intakes, and two
+  // downloads both called EE356_attendance.xlsx would overwrite each other.
+  const filename = `${[req.course.code, ...(req.course.batches || [])].join('_')}_attendance.xlsx`;
   res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.set('Content-Disposition', `attachment; filename="${filename}"`);
   await workbook.xlsx.write(res);
