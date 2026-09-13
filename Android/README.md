@@ -81,9 +81,9 @@ The Courses, Sessions, and Lecturers tabs load 50 rows at a time (`page`/`limit`
 underlying list endpoints) with a **Load more** control at the bottom, so an installation
 with hundreds of courses, sessions, or lecturers doesn't load — or render — everything at
 once. A course code is auto-uppercased and stripped to letters/numbers as it's typed; a
-batch is forced into `E` + two digits (e.g. `E23`), and a course can be created with
-multiple batches at once (one Course document per batch, sharing the same name/owners).
-Creating a course whose code+batch already exists is rejected with the existing owner's
+batch is forced into `E` + two digits (e.g. `E23`), and a course lists every batch that
+takes it — one course, one set of sessions, one attendance matrix, however many batches.
+Creating a course whose code already exists is rejected with the existing owner's
 name so the lecturer knows who to ask. "Delete" on a course or lecturer hides it (same as
 disabling a course) rather than destroying data, and hidden entries sort to the bottom of
 their list; the old separate hard-delete button no longer exists. Deleting a lecturer who

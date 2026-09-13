@@ -13,9 +13,11 @@ async function listRunning(req, res) {
  *  entirely: a student registers ahead of a lecture actually starting. */
 async function listCatalog(req, res) {
   const courses = await Course.find({ active: true })
-    .select('code name batch')
-    .sort({ code: 1, batch: 1 });
-  const items = courses.map((c) => ({ _id: c._id, code: c.code, name: c.name, batch: c.batch }));
+    .select('code name batches')
+    .sort({ code: 1 });
+  const items = courses.map((c) => ({
+    _id: c._id, code: c.code, name: c.name, batches: c.batches,
+  }));
   return res.json({ items });
 }
 

@@ -31,6 +31,8 @@ const Person = require('../models/Person');
 const Attendance = require('../models/Attendance');
 
 const lectureSessionService = require('../services/lectureSession.service');
+const courseService = require('../services/course.service');
+const { validateCreateCourseBody } = require('../validators/course.validator');
 const sessionExpiry = require('../services/sessionExpiry.service');
 const sessionService = require('../services/session.service');
 const { DAY_INDEX } = require('../utils/schedule');
@@ -93,7 +95,7 @@ describeDb('live MongoDB — courses and sessions', () => {
   });
 
   const makeCourse = (over = {}) => Course.create({
-    name: 'Intro', code: 'CS101', batch: 'E23', lecturers: [lecturer._id], ...over,
+    name: 'Intro', code: 'CS101', batches: ['E23'], lecturers: [lecturer._id], ...over,
   });
 
   const body = (over = {}) => ({
@@ -151,15 +153,60 @@ describeDb('live MongoDB — courses and sessions', () => {
       })).rejects.toThrow(/at least one building/i);
     });
 
-    it('enforces the unique (code, batch) index on courses', async () => {
+    // A course taken by several batches is ONE course. A second document for
+    // the same code is refused whatever its batches — which is exactly what the
+    // old one-row-per-batch data would now be.
+    it('allows only one course per code, whatever the batches', async () => {
       await makeCourse();
-      await expect(makeCourse()).rejects.toThrow(/duplicate key|E11000/i);
+      await expect(makeCourse({ batches: ['E24'] })).rejects.toThrow(/duplicate key|E11000/i);
     });
 
-    it('allows the same code in a different batch', async () => {
+    it('rejects a course with no batches', async () => {
+      await expect(makeCourse({ code: 'CS102', batches: [] })).rejects.toThrow(/batches/);
+    });
+
+    it('rejects a batch that is not E plus two digits', async () => {
+      await expect(makeCourse({ code: 'CS103', batches: ['2024'] })).rejects.toThrow(/batches/);
+    });
+
+    it('rejects the same batch listed twice', async () => {
+      await expect(makeCourse({ code: 'CS104', batches: ['E23', 'E23'] })).rejects.toThrow(/batches/);
+    });
+  });
+
+  describe('creating a course through the service', () => {
+    const admin = { isAdmin: true };
+
+    it('makes one course carrying every batch, sorted and de-duplicated', async () => {
+      const validated = validateCreateCourseBody({
+        name: 'Electronic Product Design',
+        code: 'ee356',
+        batches: ['e23', 'E21', 'E22', 'E21'],
+        lecturerIds: [String(lecturer._id)],
+      });
+      expect(validated.ok).toBe(true);
+
+      const res = await courseService.createCourse(admin, validated);
+
+      expect(res.ok).toBe(true);
+      const stored = await Course.find({ code: 'EE356' }).lean();
+      expect(stored).toHaveLength(1);
+      expect(stored[0].batches).toEqual(['E21', 'E22', 'E23']);
+    });
+
+    it('refuses an existing code, names its owners, and adds nothing', async () => {
       await makeCourse();
-      const other = await makeCourse({ batch: 'E24' });
-      expect(other.batch).toBe('E24');
+
+      const res = await courseService.createCourse(admin, {
+        name: 'Intro again', code: 'CS101', batches: ['E24'], lecturerIdsBody: [String(lecturer._id)],
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error).toMatch(/^CS101 already exists/);
+      expect(res.error).toContain('Lecturer One');
+      const stored = await Course.find({ code: 'CS101' }).lean();
+      expect(stored).toHaveLength(1);
+      expect(stored[0].batches).toEqual(['E23']);
     });
   });
 
@@ -276,7 +323,7 @@ describeDb('live MongoDB — courses and sessions', () => {
         email: 'other@eng.pdn.ac.lk', studentId: 'lect-2', role: 'lecturer', name: 'Other',
       });
       const theirs = await Course.create({
-        name: 'Other', code: 'CS999', batch: 'E23', lecturers: [otherLecturer._id],
+        name: 'Other', code: 'CS999', batches: ['E23'], lecturers: [otherLecturer._id],
       });
       await lectureSessionService.createSession(mine, body());
       await lectureSessionService.createSession(theirs, body({ startTime: '14:00', endTime: '15:00' }));

@@ -3,7 +3,23 @@ const mongoose = require('mongoose');
 const courseSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   code: { type: String, required: true, trim: true, uppercase: true },
-  batch: { type: String, required: true, trim: true },
+  /**
+   * Every batch that takes this course, e.g. ["E21", "E22", "E23"].
+   *
+   * One course is one row however many batches sit it. The batches share the
+   * code, the name, the owners and — the part that matters — the sessions and
+   * the attendance matrix, so a row per batch only duplicated all of that and
+   * split one lecture's roll across several documents. Kept sorted and
+   * de-duplicated by the validator that feeds it.
+   */
+  batches: {
+    type: [{ type: String, trim: true, uppercase: true, match: /^E\d{2}$/ }],
+    required: true,
+    validate: {
+      validator: (v) => Array.isArray(v) && v.length > 0 && new Set(v).size === v.length,
+      message: 'batches must list at least one batch, each only once',
+    },
+  },
   lecturers: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Person',
@@ -12,10 +28,9 @@ const courseSchema = new mongoose.Schema({
   active: { type: Boolean, default: true, index: true },
 }, { timestamps: true });
 
-courseSchema.index({ code: 1, batch: 1 }, { unique: true });
-// No standalone { code: 1 }: it is a strict prefix of the unique index above,
-// which already serves every code-only lookup. A prefix index earns nothing and
-// still costs a write on every course mutation.
+// One course per code. The code is the whole identity; the batches are a list
+// on the course, not a second half of its key.
+courseSchema.index({ code: 1 }, { unique: true });
 courseSchema.index({ lecturers: 1 });
 
 // Active courses must always keep at least 1 owner; an archived course may be

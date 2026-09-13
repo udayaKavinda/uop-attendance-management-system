@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import type { CourseSummary } from '../api/types';
 import { Card, ErrorBanner, LoadingGate, Screen, TextField } from '../components/Chrome';
+import { batchesLabel } from '../components/courseLabel';
 
 /**
  * Optional: picking courses ahead of time so they pin to the top of the
@@ -48,7 +49,7 @@ export function CourseRegistrationScreen({ onBack }: { onBack: () => void }) {
   const trimmed = query.trim();
   const visible = trimmed
     ? courses.filter((c) =>
-        `${c.code} ${c.name} ${c.batch}`.toLowerCase().includes(trimmed.toLowerCase()),
+        `${c.code} ${c.name} ${batchesLabel(c.batches)}`.toLowerCase().includes(trimmed.toLowerCase()),
       )
     : courses.filter((c) => registeredIds.has(c._id));
 
@@ -154,7 +155,7 @@ function CourseToggleRow({
         <br />
         <span className="course__meta">{course.name}</span>
         <br />
-        <span className="course__meta course__meta--batch">{course.batch}</span>
+        <span className="course__meta course__meta--batch">{batchesLabel(course.batches)}</span>
       </span>
       <span className="course__tick" aria-hidden="true">
         {pending ? '…' : registered ? '✓' : ''}

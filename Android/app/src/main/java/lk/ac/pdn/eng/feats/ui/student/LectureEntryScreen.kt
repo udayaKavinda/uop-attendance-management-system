@@ -71,6 +71,7 @@ import lk.ac.pdn.eng.feats.ui.components.ErrorBanner
 import lk.ac.pdn.eng.feats.ui.components.PrimaryButton
 import lk.ac.pdn.eng.feats.ui.theme.AppShapes
 import lk.ac.pdn.eng.feats.ui.theme.Palette
+import lk.ac.pdn.eng.feats.data.net.batchesLabel
 
 /**
  * One screen, one job: get this student marked present.
@@ -545,7 +546,7 @@ private fun CourseSearchDropdown(
             }
         }
     } else {
-        val matches = courses.filter { "${it.code} ${it.name} ${it.batch}".contains(query, ignoreCase = true) }
+        val matches = courses.filter { "${it.code} ${it.name} ${it.batches.batchesLabel()}".contains(query, ignoreCase = true) }
         Spacer(Modifier.height(8.dp))
         if (matches.isEmpty()) {
             Text(
@@ -620,7 +621,7 @@ private fun CourseRow(
                 }
             }
             Text(course.name, color = Palette.Muted, fontSize = 12.sp)
-            Text(course.batch, color = Palette.Muted, fontSize = 11.sp)
+            Text(course.batches.batchesLabel(), color = Palette.Muted, fontSize = 11.sp)
         }
         Box(
             Modifier

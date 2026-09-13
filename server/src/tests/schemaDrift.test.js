@@ -125,10 +125,12 @@ describeDb('live MongoDB — schema drift is refused, not migrated', () => {
       await syncAllIndexes();
     });
 
-    it('Course has no standalone { code: 1 } beside the unique { code, batch }', async () => {
-      const names = await indexNamesOf(Course);
-      expect(names).toContain('code_1_batch_1');
-      expect(names).not.toContain('code_1');
+    // One course per code: the code is the whole key, and the per-batch
+    // compound it replaced must not survive a sync.
+    it('Course is unique on code alone, with no leftover { code, batch }', async () => {
+      const byCode = (await Course.collection.indexes()).find((i) => i.name === 'code_1');
+      expect(byCode && byCode.unique).toBe(true);
+      expect(await indexNamesOf(Course)).not.toContain('code_1_batch_1');
     });
 
     it('LectureSession has no standalone { course: 1 }', async () => {

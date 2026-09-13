@@ -389,7 +389,7 @@ async function getAttendanceMatrix(course) {
   });
   return {
     course: {
-      _id: course._id, code: course.code, batch: course.batch, name: course.name,
+      _id: course._id, code: course.code, batches: course.batches, name: course.name,
     },
     sessions: occurrences.map((o) => ({
       _id: o.key,

@@ -30,7 +30,7 @@ export interface RunningCourse {
   _id: string;
   code: string;
   name: string;
-  batch: string;
+  batches: string[];
 }
 
 export interface RunningCoursesRes {
@@ -46,7 +46,7 @@ export interface CourseSummary {
   _id: string;
   code: string;
   name: string;
-  batch: string;
+  batches: string[];
 }
 
 export interface CourseCatalogRes {
@@ -134,7 +134,7 @@ export interface Course {
   _id?: string;
   code?: string;
   name?: string;
-  batch?: string;
+  batches?: string[];
   active?: boolean;
   lecturers?: Lecturer[];
 }
@@ -153,11 +153,6 @@ export interface CreateCourseReq {
   lecturerIds?: string[];
 }
 
-export interface CreateCourseRes {
-  success?: boolean;
-  courses?: Course[];
-}
-
 export interface CourseRes {
   success?: boolean;
   course?: Course;
@@ -168,7 +163,7 @@ export interface CourseRef {
   _id?: string;
   code?: string;
   name?: string;
-  batch?: string;
+  batches?: string[];
   active?: boolean;
 }
 

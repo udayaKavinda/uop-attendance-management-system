@@ -135,6 +135,7 @@ import lk.ac.pdn.eng.feats.ui.components.PrimaryButton
 import lk.ac.pdn.eng.feats.ui.components.StatusBadge
 import lk.ac.pdn.eng.feats.ui.theme.AppShapes
 import lk.ac.pdn.eng.feats.ui.theme.Palette
+import lk.ac.pdn.eng.feats.data.net.batchesLabel
 
 private val DAYS = listOf("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 
@@ -432,7 +433,7 @@ private fun BatchInputField(
     placeholder: String,
 ) {
     Column {
-        Text("Batch", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 6.dp))
+        Text("Batches", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 6.dp))
         OutlinedTextField(
             value = value,
             onValueChange = { new ->
@@ -453,9 +454,10 @@ private fun BatchInputField(
     }
 }
 
-// Sorted so archived (disabled) courses fall to the bottom, active ones stay code/batch ordered.
+// Sorted so archived (disabled) courses fall to the bottom; active ones stay in code
+// order, which is a total order now that a code names exactly one course.
 private fun List<CourseDto>.sortedForDisplay(): List<CourseDto> =
-    sortedWith(compareBy({ it.active == false }, { it.code.orEmpty() }, { it.batch.orEmpty() }))
+    sortedWith(compareBy({ it.active == false }, { it.code.orEmpty() }))
 
 @Composable
 private fun CourseCard(
@@ -479,7 +481,7 @@ private fun CourseCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "${course.code ?: ""}  ·  ${course.batch ?: ""}",
+                        "${course.code ?: ""}  ·  ${course.batches.batchesLabel()}",
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 15.sp,
                         modifier = Modifier.weight(1f),
@@ -571,9 +573,9 @@ private fun CreateSessionTab(state: StaffState, vm: StaffViewModel) {
                 LabeledDropdown(
                     label = "Course",
                     selectedText = activeCourses.firstOrNull { it.id == courseId }
-                        ?.let { "${it.code} · ${it.batch} — ${it.name}" } ?: "",
+                        ?.let { "${it.code} · ${it.batches.batchesLabel()} — ${it.name}" } ?: "",
                     placeholder = "Choose a course",
-                    options = activeCourses.map { (it.id ?: "") to "${it.code} · ${it.batch} — ${it.name}" },
+                    options = activeCourses.map { (it.id ?: "") to "${it.code} · ${it.batches.batchesLabel()} — ${it.name}" },
                     onSelect = { courseId = it },
                 )
                 Spacer(Modifier.height(8.dp))
@@ -1503,7 +1505,8 @@ private fun SessionCard(
                         fontSize = 18.sp,
                     )
                     Text(
-                        listOfNotNull(session.course?.name, session.course?.batch).joinToString(" · ")
+                        listOfNotNull(session.course?.name, session.course?.batches.batchesLabel().ifBlank { null })
+                            .joinToString(" · ")
                             .ifBlank { "Course session" },
                         color = Palette.Muted,
                         fontSize = 12.sp,

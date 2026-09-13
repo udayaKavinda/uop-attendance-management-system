@@ -1,7 +1,7 @@
 const { isProd } = require('../config/env');
 
 /**
- * Keeps only plain schema paths (`code`, `course.batch`) out of whatever the
+ * Keeps only plain schema paths (`code`, `course.lecturers`) out of whatever the
  * driver handed us, so nothing unexpected can be reflected back to a caller.
  */
 function fieldNames(paths) {

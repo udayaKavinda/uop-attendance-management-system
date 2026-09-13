@@ -3,6 +3,7 @@ import { api } from '../../api/client';
 import type { AttendanceMatrixRes } from '../../api/types';
 import { Card, EmptyState, ErrorBanner, LoadingGate, Screen } from '../../components/Chrome';
 import { SectionHeader } from '../../components/StaffChrome';
+import { batchesLabel } from '../../components/courseLabel';
 
 /**
  * Mirrors ui/staff/AttendanceMatrixScreen.kt.
@@ -49,7 +50,7 @@ export function AttendanceMatrixScreen({
             <div className="topbar__title">Course report</div>
             <div className="topbar__subtitle">
               {course
-                ? `${course.code}${course.batch ? ` · ${course.batch}` : ''} · ${course.name}`
+                ? `${course.code}${course.batches?.length ? ` · ${batchesLabel(course.batches)}` : ''} · ${course.name}`
                 : ''}
             </div>
           </div>

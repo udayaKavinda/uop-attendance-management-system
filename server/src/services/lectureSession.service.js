@@ -212,7 +212,7 @@ function sessionSortRank(sessionItem, now = new Date()) {
 async function listAllForStaff(auth, pagination) {
   const scope = await staffSessionMatch(auth.person, auth.isAdmin);
   const sessions = await LectureSession.find({ deleted: false, ...scope })
-    .populate('course', 'code name active batch lecturers');
+    .populate('course', 'code name active batches lecturers');
   const now = new Date();
 
   // Archiving a course makes every one of its sessions inert: disableCourse()

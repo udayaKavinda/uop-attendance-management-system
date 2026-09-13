@@ -10,7 +10,9 @@ const FLAG_FILL = {
 const FLAG_FONT = { color: { argb: 'FF842029' }, bold: true };
 
 function sheetNameFor(course) {
-  const raw = [course.code, course.batch].filter(Boolean).join(' ') || 'Attendance';
+  // The code alone. A course carries every batch that takes it now, and a list
+  // such as "E21 E22 E23" would spend most of Excel's 31-character limit.
+  const raw = course.code || 'Attendance';
   return raw.replace(/[:\\/?*[\]]/g, '').slice(0, 31);
 }
 

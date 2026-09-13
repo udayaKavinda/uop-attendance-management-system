@@ -16,6 +16,7 @@ import {
   type SessionStage,
   type StaffApi,
 } from '../../hooks/useStaffDashboard';
+import { batchesLabel } from '../../components/courseLabel';
 
 export function SessionsTab({ staff }: { staff: StaffApi }) {
   const { state } = staff;
@@ -162,7 +163,7 @@ function SessionCard({
         <div className="session-card__titles">
           <div className="session-card__code">{session.course?.code ?? 'Untitled course'}</div>
           <div className="session-card__meta">
-            {[session.course?.name, session.course?.batch].filter(Boolean).join(' · ') ||
+            {[session.course?.name, batchesLabel(session.course?.batches)].filter(Boolean).join(' · ') ||
               'Course session'}
           </div>
         </div>

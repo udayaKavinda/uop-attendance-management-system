@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { RunningCourse } from '../api/types';
 import { TextField } from './Chrome';
+import { batchesLabel } from './courseLabel';
 
 /** CourseRow in LectureEntryScreen.kt. */
 function CourseRow({
@@ -30,7 +31,7 @@ function CourseRow({
         <br />
         <span className="course__meta">{course.name}</span>
         <br />
-        <span className="course__meta course__meta--batch">{course.batch}</span>
+        <span className="course__meta course__meta--batch">{batchesLabel(course.batches)}</span>
       </span>
       <span className="course__tick" aria-hidden="true">
         {selected ? '✓' : ''}
@@ -83,7 +84,7 @@ export function CoursePicker({
   const pinned = trimmed ? [] : courses.filter((c) => registeredIds.has(c._id));
   const matches = trimmed
     ? courses.filter((c) =>
-        `${c.code} ${c.name} ${c.batch}`.toLowerCase().includes(trimmed.toLowerCase()),
+        `${c.code} ${c.name} ${batchesLabel(c.batches)}`.toLowerCase().includes(trimmed.toLowerCase()),
       )
     : [];
 

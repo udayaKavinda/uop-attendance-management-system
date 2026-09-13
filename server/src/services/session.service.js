@@ -156,7 +156,7 @@ async function getRunningCoursesForStudent(now = new Date()) {
     active: true,
     deleted: false,
     lectureDay: day,
-  }).populate('course', 'code name active batch');
+  }).populate('course', 'code name active batches');
 
   const runningCourses = new Map();
   sessions.forEach((s) => {
@@ -168,16 +168,14 @@ async function getRunningCoursesForStudent(now = new Date()) {
     runningCourses.set(String(s.course._id), {
       _id: s.course._id,
       code: s.course.code,
-      batch: s.course.batch,
+      batches: s.course.batches,
       name: s.course.name,
     });
   });
 
-  return Array.from(runningCourses.values()).sort((a, b) => {
-    const c = String(a.code).localeCompare(String(b.code));
-    if (c !== 0) return c;
-    return String(a.batch || '').localeCompare(String(b.batch || ''));
-  });
+  // Codes are unique, so the code alone is a total order.
+  return Array.from(runningCourses.values())
+    .sort((a, b) => String(a.code).localeCompare(String(b.code)));
 }
 
 /**

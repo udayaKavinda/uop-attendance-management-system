@@ -34,7 +34,7 @@ function chainableFind(docs) {
 
 describe('attendance matrix / export — recurring session run across multiple weeks', () => {
   const course = {
-    _id: 'course-1', code: 'CS101', batch: 'E23', name: 'Intro to CS', active: true,
+    _id: 'course-1', code: 'CS101', batches: ['E23'], name: 'Intro to CS', active: true,
   };
   const sessionId = 'sess-recurring-1';
   const session = {

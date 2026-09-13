@@ -56,7 +56,7 @@ async function withFixedNow(fixed, fn) {
 function makeSession(overrides = {}) {
   return {
     _id: overrides._id || 'sess-1',
-    course: { _id: 'course-1', code: 'CS101', name: 'Intro', active: true, batch: 'E23' },
+    course: { _id: 'course-1', code: 'CS101', name: 'Intro', active: true, batches: ['E23'] },
     lectureDay: 'THU',
     startTime: '09:00',
     endTime: '11:00',

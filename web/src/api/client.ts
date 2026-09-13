@@ -5,7 +5,6 @@ import type {
   CourseRes,
   CoursesRes,
   CreateCourseReq,
-  CreateCourseRes,
   CreateSessionReq,
   GeofencesRes,
   LecturersRes,
@@ -169,7 +168,7 @@ export const api = {
     ),
 
   createCourse: (body: CreateCourseReq) =>
-    request<CreateCourseRes>('/api/admin/courses', {
+    request<CourseRes>('/api/admin/courses', {
       method: 'POST',
       body: JSON.stringify(body),
     }),

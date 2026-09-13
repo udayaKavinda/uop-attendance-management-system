@@ -23,13 +23,13 @@ async function create(req, res) {
   if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
   try {
     const result = await courseService.createCourse(req.auth, validated);
-    if (!result.ok) {
-      return res.status(result.status).json({ error: result.error, courses: result.created });
-    }
-    return res.json({ success: true, courses: result.courses });
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    return res.json({ success: true, course: result.course });
   } catch (err) {
+    // Only reachable by losing a race to a concurrent create of the same code:
+    // createCourse's own check covers the ordinary case with a better message.
     if (err && err.code === 11000) {
-      return res.status(400).json({ error: 'A course with this code and batch already exists' });
+      return res.status(400).json({ error: 'A course with this code already exists' });
     }
     throw err;
   }
@@ -73,7 +73,7 @@ async function attendanceMatrix(req, res) {
 /** Downloadable Excel version — red/commented cells for flagged attempts. */
 async function attendanceMatrixXlsx(req, res) {
   const workbook = await attendanceExportService.buildAttendanceWorkbook(req.course);
-  const filename = `${req.course.code}${req.course.batch ? `_${req.course.batch}` : ''}_attendance.xlsx`;
+  const filename = `${req.course.code}_attendance.xlsx`;
   res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.set('Content-Disposition', `attachment; filename="${filename}"`);
   await workbook.xlsx.write(res);

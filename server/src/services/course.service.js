@@ -21,7 +21,7 @@ async function listForStaff(auth, pagination, lecturerId) {
     : { lecturers: auth.person._id };
   const query = Course.find(filter)
     .populate('lecturers', 'name email phone')
-    .sort({ active: -1, code: 1, batch: 1 });
+    .sort({ active: -1, code: 1 });
   if (!pagination || !pagination.hasLimit) return query;
 
   const { page, limit } = pagination;
@@ -33,11 +33,13 @@ async function listForStaff(auth, pagination, lecturerId) {
 }
 
 /**
- * Creates one Course document per requested batch (all sharing code/name/owners).
- * Stops at the first batch that already exists — code+batch is unique — and
- * reports who owns it so the caller can be told who to ask for access. Any
- * batches already created before the collision are left in place (each batch is
- * an independent course row, so a partial create is a valid end state).
+ * Creates one course carrying every requested batch.
+ *
+ * The code is the course's identity, so an existing code is refused rather than
+ * extended: adding batches to a course someone else owns is their decision, not
+ * a side effect of typing the same code. The refusal names the owners so the
+ * caller knows who to ask. The unique index still decides a race between two
+ * concurrent creates — this check is for the message, not the guarantee.
  */
 async function createCourse(auth, { name, code, batches, lecturerIdsBody }) {
   let lecturerIdsToAssign;
@@ -49,30 +51,22 @@ async function createCourse(auth, { name, code, batches, lecturerIdsBody }) {
     lecturerIdsToAssign = [String(auth.person._id)];
   }
 
-  const created = [];
-  for (const batch of batches) {
-    const existing = await Course.findOne({ code, batch }).populate('lecturers', 'name email');
-    if (existing) {
-      const owners = (existing.lecturers || []).map((l) => l.name || l.email).filter(Boolean);
-      const ownerText = owners.length ? ` — ask ${owners.join(', ')} for access` : '';
-      return {
-        ok: false,
-        status: 400,
-        error: `${code} (${batch}) already exists${ownerText}`,
-        created,
-      };
-    }
-    const course = await Course.create({
-      name,
-      code,
-      batch,
-      active: true,
-      lecturers: lecturerIdsToAssign,
-    });
-    await course.populate('lecturers', 'name email phone');
-    created.push(course);
+  const existing = await Course.findOne({ code }).populate('lecturers', 'name email');
+  if (existing) {
+    const owners = (existing.lecturers || []).map((l) => l.name || l.email).filter(Boolean);
+    const ownerText = owners.length ? ` — ask ${owners.join(', ')} for access` : '';
+    return { ok: false, status: 400, error: `${code} already exists${ownerText}` };
   }
-  return { ok: true, courses: created };
+
+  const course = await Course.create({
+    name,
+    code,
+    batches,
+    active: true,
+    lecturers: lecturerIdsToAssign,
+  });
+  await course.populate('lecturers', 'name email phone');
+  return { ok: true, course };
 }
 
 /** Hides the course (and everything under it) rather than destroying data. */

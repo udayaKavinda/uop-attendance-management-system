@@ -84,8 +84,8 @@ class AppRepository(private val api: ApiService) {
             Page(res.items ?: emptyList(), res.hasMore ?: false)
         }
 
-    suspend fun createCourse(req: CreateCourseReq): ApiResult<List<CourseDto>> =
-        apiCall { api.createCourse(req).courses ?: emptyList() }
+    suspend fun createCourse(req: CreateCourseReq): ApiResult<CourseDto?> =
+        apiCall { api.createCourse(req).course }
 
     /** Owner or admin — wholesale add/remove. */
     suspend fun assignLecturer(courseId: String, lecturerIds: List<String>): ApiResult<CourseDto?> =

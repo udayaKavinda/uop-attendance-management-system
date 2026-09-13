@@ -351,10 +351,13 @@ behaves as it always did, and `POST /api/attendance` does not consult it.
 
 ### Course
 
-`code` (capital letters and numbers only), `name`, `batch` (`E` followed by two digits,
-e.g. `E23`), one or more lecturer owners (no upper limit), and `active`. Unique on
-`{ code, batch }` — creating a course accepts multiple `batches` at once and makes one
-Course document per batch, all sharing the same owners. There is no separate hard delete:
+`code` (capital letters and numbers only), `name`, `batches` (one or more, each `E`
+followed by two digits, e.g. `["E21", "E22"]`), one or more lecturer owners (no upper
+limit), and `active`. **Unique on `code`**: a course taken by several batches is *one*
+course carrying all of them, so those batches share its sessions and a single attendance
+matrix. The list is stored sorted and de-duplicated. Creating a course whose code already
+exists is refused, naming its owners, rather than silently extended — adding a batch to
+someone else's course is their call. There is no separate hard delete:
 `DELETE`-equivalent behavior is the same as disabling (`active: false`), which hides the
 course rather than destroying its data; disabled courses sort after active ones in listings.
 
@@ -561,7 +564,7 @@ Base path: `/api/admin/courses`.
 | Method/path | Access | Purpose |
 |---|---|---|
 | `GET /?page=&limit=&lecturerId=` | staff | owned courses; admins see all, or one lecturer's with `lecturerId`. Omitting `limit` returns everything; passing it pages (`{ items, total, page, limit, hasMore }`) |
-| `POST /` | staff | create a course — `batches: string[]` creates one Course document per batch |
+| `POST /` | staff | create one course carrying every batch in `batches: string[]`; responds `{ success, course }`. An existing code is refused (400) |
 | `PATCH /:courseId/assign-lecturer` | owner/admin | wholesale reassignment — set any number of owners (add or remove); a lecturer may only do this on a course they already own |
 | `PATCH /:courseId/disable` / `enable` | owner/admin | toggle course — this is also what "delete" means; no destructive delete exists. `enable` is refused (400) while the course has no assigned lecturer |
 | `POST /:courseId/sessions` | owner/admin | atomically create schedule, buildings (≥1, required), and code rotation Responds `{ success, session, message }`, where `message` names the date the server derived (see One-time sessions) |
@@ -785,7 +788,7 @@ pointed at the database the application itself uses — an accidental
 `MONGO_TEST_URI=.../attendance` fails loudly instead of destroying local data.
 `dbIntegration`
 covers the persisted `active: false` on create, the one-time `occurrenceDate` required
-validator, the `buildings` minimum, the unique `(code, batch)` course index, one-time
+validator, the `buildings` minimum, one course per `code` and the `batches` validator, one-time
 date resolution either side of `endTime`, overlap detection (including two one-time
 sessions a week apart, which must not collide), the staff list's hiding and
 lecturer scoping through real `populate`, both expiry sweeps, soft delete, student-facing
@@ -832,7 +835,7 @@ refusing to serve an admission whose window has closed, and the create response'
 and the malformed-date fallback). Keep Android and
 server contract tests aligned whenever a response changes.
 
-Not yet covered by a dedicated test: multi-batch course creation, the lecturer-owner path
+Not yet covered by a dedicated test: the lecturer-owner path
 through `assign-lecturer` (as opposed to the admin path), pagination on the three admin
 list endpoints, the lecturer directory's staff-wide (not admin-only) access, and
 `isScheduledNow`/`getRunningSessionsForStaff`'s active-independent window check specifically

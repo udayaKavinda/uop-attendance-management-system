@@ -43,6 +43,7 @@ import lk.ac.pdn.eng.feats.ui.components.AppTextField
 import lk.ac.pdn.eng.feats.ui.components.ErrorBanner
 import lk.ac.pdn.eng.feats.ui.theme.AppShapes
 import lk.ac.pdn.eng.feats.ui.theme.Palette
+import lk.ac.pdn.eng.feats.data.net.batchesLabel
 
 /**
  * Optional: picking courses ahead of time so they pin to the top of the
@@ -112,7 +113,7 @@ fun CourseRegistrationScreen(
                         state.courses.filter { state.registeredIds.contains(it.id) }
                     } else {
                         state.courses.filter {
-                            "${it.code} ${it.name} ${it.batch}".contains(trimmed, ignoreCase = true)
+                            "${it.code} ${it.name} ${it.batches.batchesLabel()}".contains(trimmed, ignoreCase = true)
                         }
                     }
 
@@ -170,7 +171,7 @@ private fun CourseToggleRow(
         Column(Modifier.weight(1f)) {
             Text(course.code, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = Palette.Ink)
             Text(course.name, color = Palette.Muted, fontSize = 12.sp)
-            Text(course.batch, color = Palette.Muted, fontSize = 11.sp)
+            Text(course.batches.batchesLabel(), color = Palette.Muted, fontSize = 11.sp)
         }
         Box(
             Modifier

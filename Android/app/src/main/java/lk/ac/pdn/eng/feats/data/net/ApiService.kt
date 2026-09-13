@@ -86,7 +86,7 @@ interface ApiService {
     ): CoursesRes
 
     @POST("api/admin/courses")
-    suspend fun createCourse(@Body body: CreateCourseReq): CreateCourseRes
+    suspend fun createCourse(@Body body: CreateCourseReq): CourseRes
 
     /** Owner or admin — wholesale add/remove. */
     @PATCH("api/admin/courses/{courseId}/assign-lecturer")

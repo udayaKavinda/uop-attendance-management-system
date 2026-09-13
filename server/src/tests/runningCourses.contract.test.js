@@ -12,7 +12,7 @@ function runningSession(now, overrides = {}) {
   return {
     _id: 'session-1',
     course: {
-      _id: 'course-1', code: 'CO321', batch: '2024', name: 'Networks', active: true,
+      _id: 'course-1', code: 'CO321', batches: ['E24'], name: 'Networks', active: true,
     },
     lectureDay: DAY_INDEX[now.getDay()],
     startTime: '08:00',
@@ -32,7 +32,7 @@ describe('GET /courses/running service contract', () => {
     const result = await getRunningCoursesForStudent(now);
 
     expect(result).toEqual([{
-      _id: 'course-1', code: 'CO321', batch: '2024', name: 'Networks',
+      _id: 'course-1', code: 'CO321', batches: ['E24'], name: 'Networks',
     }]);
   });
 

@@ -81,21 +81,21 @@ describe('respondError names the field, never the value', () => {
   test('a ValidationError lists the invalid fields', () => {
     const out = capture(Object.assign(new Error('v'), {
       name: 'ValidationError',
-      errors: { code: {}, batch: {} },
+      errors: { code: {}, batches: {} },
     }));
     expect(out.code).toBe(400);
     expect(out.error).toContain('code');
-    expect(out.error).toContain('batch');
+    expect(out.error).toContain('batches');
   });
 
   test('a duplicate-key error names the fields but not their values', () => {
     const out = capture(Object.assign(new Error('dup'), {
       code: 11000,
-      keyValue: { code: 'CS101', batch: 'E23' },
+      keyValue: { code: 'CS101', batches: 'E23' },
     }));
     expect(out.code).toBe(409);
     expect(out.error).toContain('code');
-    expect(out.error).toContain('batch');
+    expect(out.error).toContain('batches');
     expect(out.error).not.toContain('CS101');
     expect(out.error).not.toContain('E23');
   });

@@ -8,6 +8,7 @@ import {
   StatusBadge,
 } from '../../components/StaffChrome';
 import type { StaffApi } from '../../hooks/useStaffDashboard';
+import { batchesLabel } from '../../components/courseLabel';
 
 /** Course code: capital letters and numbers only, typed lowercase becomes capital. */
 function sanitizeCourseCode(input: string): string {
@@ -77,14 +78,13 @@ function hasIncompleteBatch(fieldText: string): boolean {
     .some((s) => s.length > 0 && !BATCH_RE.test(s));
 }
 
-// Archived (disabled) courses fall to the bottom, active ones stay code/batch ordered.
+// Archived (disabled) courses fall to the bottom; active ones stay in code order,
+// which is a total order now that a code names exactly one course.
 function sortedForDisplay(courses: Course[]): Course[] {
   return [...courses].sort((a, b) => {
     const archived = Number(a.active === false) - Number(b.active === false);
     if (archived !== 0) return archived;
-    const code = (a.code ?? '').localeCompare(b.code ?? '');
-    if (code !== 0) return code;
-    return (a.batch ?? '').localeCompare(b.batch ?? '');
+    return (a.code ?? '').localeCompare(b.code ?? '');
   });
 }
 
@@ -116,7 +116,7 @@ export function CoursesTab({
           placeholder="CS101"
         />
         <TextField
-          label="Batch"
+          label="Batches"
           value={batchText}
           onChange={(v) => setBatchText(formatBatchStream(v))}
           placeholder="E23 , E24"
@@ -152,7 +152,7 @@ export function CoursesTab({
         <>
           {visibleCourses.map((course) => (
             <CourseCard
-              key={course._id ?? `${course.code}-${course.batch}`}
+              key={course._id ?? course.code}
               course={course}
               onOpen={() => course._id && onOpenMatrix(course._id)}
               onOwners={() => setOwnersFor(course)}
@@ -206,7 +206,7 @@ function CourseCard({
       <button type="button" className="course-card__head" onClick={onOpen}>
         <div className="course-card__title-row">
           <span className="course-card__title">
-            {course.code ?? ''} &nbsp;·&nbsp; {course.batch ?? ''}
+            {course.code ?? ''} &nbsp;·&nbsp; {batchesLabel(course.batches)}
           </span>
           {archived && <StatusBadge text="Archived" tone="warning" />}
         </div>
@@ -260,7 +260,7 @@ function OwnersDialog({
       >
         <div className="dialog__title">Owners</div>
         <p className="dialog__body">
-          {course.code} · {course.batch}
+          {course.code} · {batchesLabel(course.batches)}
         </p>
 
         <div className="owner-list">

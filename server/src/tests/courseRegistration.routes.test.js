@@ -60,8 +60,8 @@ describe('GET /api/courses/catalog', () => {
 
   test('returns only active courses, sorted', async () => {
     const courses = [
-      { _id: makeId(), code: 'CO321', name: 'Networks', batch: '2024' },
-      { _id: makeId(), code: 'CO101', name: 'Intro', batch: '2024' },
+      { _id: makeId(), code: 'CO321', name: 'Networks', batches: ['E24'] },
+      { _id: makeId(), code: 'CO101', name: 'Intro', batches: ['E24'] },
     ];
     Course.find.mockReturnValue({
       select: jest.fn().mockReturnThis(),

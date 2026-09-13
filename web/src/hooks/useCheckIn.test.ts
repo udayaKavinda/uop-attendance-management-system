@@ -16,7 +16,7 @@ type Result<T> = { ok: true; data: T } | { ok: false; message: string; status: n
 const ok = <T,>(data: T): Result<T> => ({ ok: true, data });
 const fail = (message: string, status = 400): Result<never> => ({ ok: false, message, status });
 
-const COURSE = { _id: 'course-1', code: 'CO1010', name: 'Signals', batch: 'E21' };
+const COURSE = { _id: 'course-1', code: 'CO1010', name: 'Signals', batches: ['E21'] };
 
 const api = {
   runningCourses: vi.fn(async () => ok({ items: [COURSE] })),

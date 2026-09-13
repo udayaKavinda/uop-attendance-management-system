@@ -7,10 +7,8 @@ const BATCH_RE = /^E\d{2}$/;
 function validateCreateCourseBody(body) {
   const name = String(body.name || '').trim();
   const code = String(body.code || '').trim().toUpperCase();
-  const rawBatches = Array.isArray(body.batches)
-    ? body.batches
-    : (body.batch !== undefined ? [body.batch] : []);
-  const batches = [...new Set(rawBatches.map((b) => String(b ?? '').trim().toUpperCase()))];
+  const rawBatches = Array.isArray(body.batches) ? body.batches : [];
+  const batches = [...new Set(rawBatches.map((b) => String(b ?? '').trim().toUpperCase()))].sort();
   const lecturerIdsBody = normalizeLecturerIds(body.lecturerIds);
 
   if (!code || !name) return { ok: false, status: 400, error: 'name and code are required' };

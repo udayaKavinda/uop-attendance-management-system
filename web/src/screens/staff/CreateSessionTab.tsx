@@ -4,6 +4,7 @@ import { Card, ErrorBanner, PrimaryButton } from '../../components/Chrome';
 import { MapDialog } from '../../components/MapDialog';
 import { LabeledSelect, SectionHeader } from '../../components/StaffChrome';
 import type { StaffApi } from '../../hooks/useStaffDashboard';
+import { batchesLabel } from '../../components/courseLabel';
 
 const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 
@@ -186,7 +187,7 @@ export function CreateSessionTab({ staff }: { staff: StaffApi }) {
           placeholder="Choose a course"
           options={activeCourses.map((c) => ({
             id: c._id ?? '',
-            label: `${c.code} · ${c.batch} — ${c.name}`,
+            label: `${c.code} · ${batchesLabel(c.batches)} — ${c.name}`,
           }))}
           onSelect={setCourseId}
         />

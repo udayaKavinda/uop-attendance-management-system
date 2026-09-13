@@ -39,6 +39,7 @@ import lk.ac.pdn.eng.feats.ui.components.PillButton
 import lk.ac.pdn.eng.feats.ui.components.PillTone
 import lk.ac.pdn.eng.feats.ui.theme.AppShapes
 import lk.ac.pdn.eng.feats.ui.theme.Palette
+import lk.ac.pdn.eng.feats.data.net.batchesLabel
 
 @Composable
 fun AttendanceMatrixScreen(
@@ -64,7 +65,7 @@ fun AttendanceMatrixScreen(
             Text("Attendance table", style = MaterialTheme.typography.titleLarge)
             Text(
                 course?.let {
-                    "${it.code}${if (!it.batch.isNullOrBlank()) " · ${it.batch}" else ""} · ${it.name}"
+                    "${it.code}${if (!it.batches.isNullOrEmpty()) " · ${it.batches.batchesLabel()}" else ""} · ${it.name}"
                 } ?: "Course report",
                 color = Palette.Muted, fontSize = 13.sp,
             )

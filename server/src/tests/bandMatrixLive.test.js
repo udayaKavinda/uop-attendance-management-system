@@ -165,7 +165,7 @@ describeDb('live MongoDB — verification contract end to end', () => {
       email: 'admin@eng.pdn.ac.lk', studentId: 'admin-1', role: 'admin', name: 'Admin',
     });
     course = await Course.create({
-      code: 'CS101', name: 'Live Bands', batch: 'E19', lecturers: [lecturer._id], active: true,
+      code: 'CS101', name: 'Live Bands', batches: ['E19'], lecturers: [lecturer._id], active: true,
     });
     geofence = await Geofence.create({ name: 'Drawing Office', polygon: SQUARE });
     session = await LectureSession.create({

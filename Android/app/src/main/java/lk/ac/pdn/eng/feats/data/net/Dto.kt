@@ -56,11 +56,18 @@ data class CreateLecturerReq(val name: String, val email: String, val phone: Str
 
 // ── Courses ───────────────────────────────────────────────────────────────────
 
+/**
+ * How a course's batches read wherever the course is named: "E21, E22, E23".
+ * One course carries every batch that takes it, so every screen joins the list
+ * the same way instead of each choosing its own separator.
+ */
+fun List<String>?.batchesLabel(): String = orEmpty().joinToString(", ")
+
 data class CourseDto(
     @param:Json(name = "_id") val id: String? = null,
     val code: String? = null,
     val name: String? = null,
-    val batch: String? = null,
+    val batches: List<String>? = null,
     val active: Boolean? = null,
     val lecturers: List<LecturerDto>? = null,
 )
@@ -74,7 +81,7 @@ data class RunningCourseDto(
     @param:Json(name = "_id") val id: String,
     val code: String,
     val name: String,
-    val batch: String,
+    val batches: List<String>,
 )
 
 /** Compact course reference embedded in other payloads. */
@@ -82,7 +89,7 @@ data class CourseRefDto(
     @param:Json(name = "_id") val id: String? = null,
     val code: String? = null,
     val name: String? = null,
-    val batch: String? = null,
+    val batches: List<String>? = null,
     val active: Boolean? = null,
 )
 
@@ -107,9 +114,6 @@ data class CourseCatalogRes(val items: List<RunningCourseDto>)
 data class RegisteredCoursesRes(val items: List<String>)
 
 data class CourseRes(val success: Boolean? = null, val course: CourseDto? = null)
-
-/** One Course document is created per batch; `courses` is present on both success and the partial-failure case. */
-data class CreateCourseRes(val success: Boolean? = null, val courses: List<CourseDto>? = null)
 
 data class CreateCourseReq(
     val name: String,

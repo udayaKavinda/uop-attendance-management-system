@@ -25,7 +25,7 @@ function occurrence(sessionId, attendanceDate, overrides = {}) {
 describe('buildAttendanceWorkbook', () => {
   test('present and flagged cells both show P; flagged additionally gets a red fill and the reason as a note', async () => {
     const course = {
-      _id: 'course-1', code: 'CS101', batch: 'E23', name: 'Intro to CS',
+      _id: 'course-1', code: 'CS101', batches: ['E23'], name: 'Intro to CS',
     };
     const sessionId = 'sess-1';
     const occKey = `${sessionId}|2026-01-05`;
@@ -68,7 +68,7 @@ describe('buildAttendanceWorkbook', () => {
   });
 
   test('a student with no record for an occurrence gets "-", not "P"', async () => {
-    const course = { _id: 'course-1', code: 'CS101', batch: null };
+    const course = { _id: 'course-1', code: 'CS101', batches: [] };
     const sessionId = 'sess-1';
     const occKey = `${sessionId}|2026-01-05`;
     attendanceService.getAttendanceMatrixRaw.mockResolvedValue({
@@ -95,7 +95,7 @@ describe('buildAttendanceWorkbook', () => {
     'a recurring session run in two different weeks gets two columns, one per week — '
     + 'neither week overwrites the other',
     async () => {
-      const course = { _id: 'course-1', code: 'CS101', batch: 'E23' };
+      const course = { _id: 'course-1', code: 'CS101', batches: ['E23'] };
       const sessionId = 'sess-recurring';
       const student = { _id: 'stu-1', email: 'a@eng.pdn.ac.lk', studentId: 'E20/1' };
       attendanceService.getAttendanceMatrixRaw.mockResolvedValue({
