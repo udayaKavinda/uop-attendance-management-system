@@ -278,7 +278,7 @@ Requirements: Android Studio/JDK 17 and an Android SDK with compile SDK 36.
 ```
 
 App configuration: application id `lk.ac.pdn.eng.feats`, min SDK 24, compile and target
-SDK 36, version `2.0.0` (`versionCode 10`). The server's `minSupportedVersionCode` setting
+SDK 36, version `2.2.0` (`versionCode 12`). The server's `minSupportedVersionCode` setting
 is compared against this `versionCode` on every launch. `targetSdk` must never exceed
 `compileSdk`: targeting an API level the app was not compiled against opts into that
 level's behaviour changes without the SDK that defines them, and Play rejects the upload.

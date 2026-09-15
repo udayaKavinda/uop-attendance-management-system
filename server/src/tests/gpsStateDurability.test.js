@@ -75,7 +75,7 @@ describeDb('live MongoDB — durable attempt state', () => {
 
   afterAll(async () => {
     if (mongoose.connection.readyState === 1) {
-      await AttendanceAttempt.deleteMany({});
+      await mongoose.connection.dropDatabase();
       await mongoose.disconnect();
     }
   });
